@@ -598,6 +598,59 @@ export class FarmerController {
     }
   }
 
+  // ─── All attachments of a farmer in one call ─────────────────────────────
+  // Returns every document slot (7/12, ID proof, farmer photo, farm photo)
+  // with its stored URL and a JWT-gated download link via /files/download.
+
+  @httpGet('/:id/attachments')
+  public async getFarmerAttachments(
+    @requestParam('id') id: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const farmer = await this.farmerService.getFarmerAttachments(id);
+      if (!farmer) {
+        ControllerLogger.logNotFound('Farmer', id, req, res);
+        return next(new AppError(404, 'Farmer not found'));
+      }
+
+      const slots = [
+        { key: 'sevenTwelveCopy', label: '7/12 Copy', url: farmer.sevenTwelveCopy },
+        { key: 'idProofCopy', label: 'ID Proof Copy', url: farmer.idProofCopy },
+        { key: 'farmerPhoto', label: 'Farmer Photo', url: farmer.farmerPhoto },
+        { key: 'farmPhoto', label: 'Farm Photo', url: farmer.farmPhoto },
+      ];
+
+      const attachments = slots.map((slot) => ({
+        key: slot.key,
+        label: slot.label,
+        available: !!slot.url,
+        url: slot.url || null,
+        fileName: slot.url ? decodeURIComponent(slot.url.split('/').pop() || '') : null,
+        downloadUrl: slot.url ? `/files/download?url=${encodeURIComponent(slot.url)}` : null,
+      }));
+
+      ControllerLogger.logView('Farmer attachments', id, req, res);
+      res.status(200).json({
+        status: 'success',
+        data: {
+          farmerId: farmer.id,
+          farmerCode: farmer.farmerCode,
+          farmerName: [farmer.farmerfName, farmer.farmermName, farmer.farmerlName]
+            .filter(Boolean)
+            .join(' '),
+          totalAttachments: attachments.filter((a) => a.available).length,
+          attachments,
+        },
+      });
+    } catch (err) {
+      ControllerLogger.logError('Get Farmer Attachments', err, req, res);
+      next(err);
+    }
+  }
+
   // ─── Per-farmer file download endpoints ──────────────────────────────────
   // Frontend hits these to download a specific document for a given farmer.
   // The raw S3 URL is fetched from the DB and proxied through /files/download

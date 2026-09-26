@@ -766,6 +766,25 @@ export class FarmerService {
     return farmer;
   }
 
+  // Loads only the columns needed for the attachments view (no joins).
+  async getFarmerAttachments(id: string): Promise<Farmer | null> {
+    return this.farmerRepository
+      .createQueryBuilder('farmer')
+      .select([
+        'farmer.id',
+        'farmer.farmerCode',
+        'farmer.farmerfName',
+        'farmer.farmermName',
+        'farmer.farmerlName',
+        'farmer.sevenTwelveCopy',
+        'farmer.idProofCopy',
+        'farmer.farmerPhoto',
+        'farmer.farmPhoto',
+      ])
+      .where('farmer.id = :id', { id })
+      .getOne();
+  }
+
 
   public async createFarmer(farmerData: CreateFarmerDto): Promise<Farmer> {
 

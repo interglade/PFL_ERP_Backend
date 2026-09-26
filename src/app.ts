@@ -53,6 +53,7 @@ const allowedOrigins = [
   "http://192.168.1.34:4000",
   "http://192.168.1.34:4000/",
   "http://192.168.1.48:4000",
+  "http://192.168.1.33:5173"
 ];
 
 const normalizeOrigin = (origin: string): string =>
