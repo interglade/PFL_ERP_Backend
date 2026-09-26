@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Delivery Challan</title>
+  <style>
+    body {
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      padding: 20px;
+      font-size: 12px;
+      background-color: white;
+      color: black;
+    }
+
+    .text-xs {
+      font-size: 12px;
+    }
+
+    .text-sm {
+      font-size: 14px;
+    }
+
+    .text-md {
+      font-size: 20px;
+    }
+
+    .text-lg {
+      font-size: 25px;
+    }
+
+    .text-bold {
+      font-weight: 700;
+    }
+
+    .full-width {
+      width: 100%;
+    }
+
+    .half-width {
+      width: 50%;
+    }
+
+    .flex-block {
+      display: flex;
+    }
+
+    .bottom-border {
+      border-bottom: 1px solid #000000;
+    }
+
+    .right-border {
+      border-right: 1px solid #000000;
+    }
+
+    .all-border {
+      border: 1px solid #000000;
+    }
+
+    .challan-container {
+      border: 1px solid black;
+      padding: 15px;
+      max-width: 800px;
+      margin: 0 auto;
+      background-color: white;
+    }
+
+    .header {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .company-details {
+      width: 75%;
+    }
+
+    .logo {
+      width: 20%;
+      height: 100px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px;
+      margin-left: auto;
+    }
+
+    .logo img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+
+
+    .office {
+      margin: 5px 0px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .office span {
+      display: block;
+    }
+
+    .office-title {
+      width: 15%;
+    }
+
+    .office-address {
+      width: 85%;
+    }
+
+    .customer-section {
+      display: flex;
+      justify-content: space-between;
+      margin: 15px 0;
+    }
+
+    .customer-box {
+      width: 48%;
+      border: 1px solid black;
+      padding: 10px;
+    }
+
+    .customer-details {
+      margin-bottom: 10px;
+    }
+
+    .challan-info {
+      width: 48%;
+      border: 1px solid black;
+      padding: 10px;
+    }
+
+    .info-row {
+      margin-bottom: 8px;
+    }
+
+    .table-container {
+      margin: 15px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      border: 1px solid black;
+      padding: 10px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f2f2f2;
+      font-weight: 600;
+    }
+
+    .text-right {
+      text-align: right;
+    }
+
+    .text-center {
+      text-align: center;
+    }
+
+    .gst-info {
+      display: flex;
+      justify-content: space-between;
+      padding: 5px 5px;
+    }
+
+    .gst-info span {
+      display: block;
+    }
+
+    .driver-info {
+      padding: 5px 5px;
+    }
+
+    .driver-name {
+      width: 100%;
+      display: flex;
+      margin: 10px 5px;
+    }
+
+    .driver-other-details {
+      width: 100%;
+      display: flex;
+      margin: 10px 5px;
+    }
+
+    .driver-info-title {
+      width: 25%;
+    }
+
+    .driver-info-value {
+      width: 75%;
+    }
+
+    .driver-info span {
+      display: block;
+    }
+
+    .terms-condition-block {
+      width: 100%;
+      display: flex;
+    }
+
+    .terms-block {
+      width: 50%;
+      padding: 5px 5px;
+    }
+
+    .terms-block span {
+      display: block;
+      margin: 5px 0px;
+    }
+
+    .auth-sign-block {
+      width: 50%;
+      padding: 5px 5px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      text-align: center;
+    }
+
+    .auth-sign-block span {
+      width: 100%;
+      display: block;
+    }
+
+    .receiver-block {
+      width: 100%;
+      padding: 7px 0px;
+      display: flex;
+    }
+
+    .receiver-block span {
+      display: block;
+      margin-left: 5px;
+    }
+
+    .signature-container {
+      display: flex;
+      width: 100%;
+    }
+
+    .signature-block {
+      flex: 1;
+      height: 120px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      align-items: center;
+      padding-bottom: 10px;
+      box-sizing: border-box;
+    }
+
+    .signature-block span {
+      display: block;
+      text-align: center;
+      margin-bottom: 5px;
+    }
+
+    @media print {
+      body {
+        padding: 0;
+      }
+
+      .challan-container {
+        border: 1px solid black;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="challan-container">
+    <header class="header">
+      <div class="company-details">
+        <div class="full-width">
+          <span class="text-md text-bold">DELIVERY CHALLAN</span>
+        </div>
+        <div class="full-width">
+          <span class="text-lg text-bold">
+            <%= deliveryChallan.companyName.name %>
+          </span>
+        </div>
+        <div class="full-width office">
+          <div class="office-title">
+            <span class="text-xs">Head Office:</span>
+          </div>
+          <div class="office-address">
+            <span class="text-xs">
+              <%= deliveryChallan.offices.address.address1 %>,
+                <%= deliveryChallan.offices.address.address2 %>,
+                  <%= deliveryChallan.offices.address.location %>,
+                    <%= deliveryChallan.offices.address.city %>,
+                      <%= deliveryChallan.offices.address.state %> - <%= deliveryChallan.offices.address.pincode %>
+            </span>
+            <span class="text-xs">
+              Ph.: +91-<%= deliveryChallan.offices.contactNumber %>,
+                Email: <%= deliveryChallan.offices.officeEmail %>
+            </span>
+          </div>
+        </div>
+      </div>
+      <!-- Logo div as a sibling to company-details -->
+      <div class="logo">
+        <img src="<%= deliveryChallan.companyName.logo %>" alt="Logo" />
+      </div>
+    </header>
+    <section>
+      <div class="customer-section">
+        <div class="customer-box">
+          <div class="customer-details">
+            <span class="text-sm text-bold">Customer Name:</span>
+            <span class="text-sm">
+              <%= deliveryChallan.customer.organisationName %>
+            </span>
+          </div>
+          <div class="customer-details">
+            <span class="text-sm text-bold">Customer Address:</span>
+            <span class="text-sm">
+              <%= deliveryChallan.customer?.deliveryDetails?.deliveryAddress?.address1|| '' %>,
+              <%= deliveryChallan.customer?.deliveryDetails?.deliveryAddress?.address2 || '' %>,
+              <%= deliveryChallan.customer?.deliveryDetails?.deliveryAddress?.location || '' %>,
+              <%= deliveryChallan.customer?.deliveryDetails?.deliveryAddress?.city || '' %>,
+              <%= deliveryChallan.customer?.deliveryDetails?.deliveryAddress?.state || '' %>.
+            </span>
+          </div>
+        </div>
+        <div class="challan-info">
+          <div class="info-row">
+            <span class="text-sm text-bold">Challan No: </span>
+            <span class="text-sm">
+              <%= deliveryChallan.challanNo %>
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="text-sm text-bold">Date: </span>
+            <span class="text-sm">
+              <%=deliveryChallan.createdDate%>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th class="text-center">No.</th>
+              <th>PARTICULARS</th>
+              <th>UOM</th>
+              <th class="text-right">QTY</th>
+              <th class="text-right">RATE</th>
+              <th class="text-right">Amount (Rs)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% deliveryChallan.deliveryChallanProducts.forEach((item, index)=> { %>
+              <tr>
+                <td class="text-center">
+                  <%= index + 1 %>
+                </td>
+                <td>
+                  <%= item.productName?.name || 'N/A' %>
+                    <% if (item.count) { %>
+                      (<%= item.count %> Piece)
+                        <% } %>
+                </td>
+                <td>
+                  <%= item.saleUoM?.unit || 'N/A' %>
+                </td>
+                <td class="text-right">
+                  <%= item.quantity %>
+                </td>
+                <td class="text-right">
+                  <%= item.unitPrice %>
+                </td>
+                <td class="text-right">
+                  <%= item.amount %>
+                </td>
+              </tr>
+              <% }) %>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="all-border">
+        <div class="gst-info bottom-border">
+          <span class="text-xs text-bold">GST No.:</span>
+          <span class="text-xs">
+            <%= deliveryChallan.companyName.gstNo %>
+          </span>
+          <span class="text-xs">|</span>
+          <span class="text-xs text-bold">FSSI No.:</span>
+          <span class="text-xs">
+            <%=deliveryChallan.companyName.fassaiNo %>
+          </span>
+          <span class="text-xs">|</span>
+          <span class="text-xs text-bold">CIN:</span>
+          <span class="text-xs">0000000000000</span>
+        </div>
+        <div class="driver-info bottom-border">
+          <div class="driver-name">
+            <span class="driver-info-title text-bold text-sm">Driver Name: </span>
+            <span class="driver-info-value text-sm bottom-border">Sdbjew</span>
+          </div>
+          <div class="driver-other-details">
+            <div class="half-width flex-block">
+              <span class="driver-info-title text-bold text-sm">Contact No: </span>
+              <span class="driver-info-value text-sm bottom-border">9090909090 </span>
+            </div>
+            <div class="half-width flex-block">
+              <span class="driver-info-title text-bold text-sm">Vehicle No: </span>
+              <span class="driver-info-value text-sm bottom-border">ZZ99YY0000</span>
+            </div>
+          </div>
+        </div>
+        <div class="terms-condition-block bottom-border">
+          <div class="terms-block right-border">
+            <span class="text-bold text-sm">Terms & Condition:</span>
+            <span class="text-xs">1) Goods once sold / delivered will not be taken back or refunded.</span>
+            <span class="text-xs">2) We are not responsible for any transit damage, loss or leakage.</span>
+            <span class="text-xs">3) Subject to city Jurisdiction.</span>
+            <span class="text-xs">4) 18% P.A. interest will be charged for overdue payment.</span>
+          </div>
+          <div class="auth-sign-block">
+            <span class="text-sm text-bold">For, Company Name</span>
+            <span class="text-xs">(Authorised Signatory)</span>
+          </div>
+        </div>
+        <div class="receiver-block bottom-border">
+          <span class="text-sm text-bold">Receiver's Signature:</span>
+          <span class="text-sm"></span>
+        </div>
+        <div class="signature-container">
+          <div class="signature-block right-border">
+            <span class="text-xs">Prepared By</span>
+            <span class="text-sm">(Employee Name)</span>
+          </div>
+          <div class="signature-block right-border">
+            <span class="text-xs">Passed By</span>
+            <span class="text-sm">(Employee Name)</span>
+          </div>
+          <div class="signature-block">
+            <span class="text-xs">Approved By</span>
+            <span class="text-sm">(Employee Name)</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+
+</html>

@@ -1,0 +1,637 @@
+
+
+================================================================================
+ BASE
+================================================================================
+
+  Base URL      : http://localhost:4000   (port from PORT env, default 4000)
+  Route prefix  : /stock-correction
+                  NOTE: there is NO /api or /v1 prefix. InversifyExpressServer
+                  is built without a root path.
+  Auth          : Required on every endpoint (deserializeUser, requireUser)
+  Content-Type  : application/json
+
+
+--------------------------------------------------------------------------------
+ AUTH HEADER
+--------------------------------------------------------------------------------
+
+  Authorization: Bearer <access_token>
+
+  The access_token cookie is also accepted as a fallback.
+
+  IMPORTANT: The logged-in user is taken from the token, NOT from the body.
+    - createdBy  (on submit)          -> set from res.locals.user.id
+    - approvedBy (on approve/reject)  -> set from res.locals.user.id
+
+
+--------------------------------------------------------------------------------
+ STANDARD RESPONSE ENVELOPE
+--------------------------------------------------------------------------------
+
+  Success:
+      { "status": "success", "data": { ... } }
+
+  Success with a message (approve / reject only):
+      { "status": "success", "message": "Correction approved", "data": { ... } }
+
+  Error (from the global handler in src/app.ts):
+      4xx ->  { "status": "fail",  "message": "Correction already processed" }
+      5xx ->  { "status": "error", "message": "Internal Server Error" }
+
+
+--------------------------------------------------------------------------------
+ ENUMS
+--------------------------------------------------------------------------------
+
+  CorrectionType    = "physical_count" | "damage_write_off" | "system_error"
+                      | "other"
+
+  CorrectionStatus  = "pending" | "approved" | "rejected"
+
+  DumpReason        = "damage" | "expiry" | "pest" | "fire" | "other"
+
+
+--------------------------------------------------------------------------------
+ NOTE ON NUMBERS
+--------------------------------------------------------------------------------
+
+  All money/quantity columns are Postgres "decimal", so they come back as
+  STRINGS ("100.00"), not numbers.
+
+  The only exception is GET /stock-correction/stock/:inventoryStockId, where
+  "currentStock" is explicitly passed through Number() by the service.
+
+
+================================================================================
+ ENDPOINT SUMMARY
+================================================================================
+
+  #  METHOD  ENDPOINT                                     PURPOSE
+  -  ------  -------------------------------------------  ------------------------
+  1  POST    /stock-correction                            Submit new correction
+                                                          (status = pending)
+  2  GET     /stock-correction/pending                    List all pending
+  3  GET     /stock-correction/:id                        Get one correction
+  4  GET     /stock-correction/stock/:inventoryStockId    Current stock + history
+  5  PATCH   /stock-correction/:id/approve                Approve - THIS updates
+                                                          inventory_stock
+  6  PATCH   /stock-correction/:id/reject                 Reject - no stock change
+
+
+================================================================================
+ 1. SUBMIT A CORRECTION
+================================================================================
+
+  METHOD    : POST
+  ENDPOINT  : /stock-correction
+  SUCCESS   : 201 Created
+
+
+--------------------------------------------------------------------------------
+ REQUEST BODY
+--------------------------------------------------------------------------------
+
+  FIELD               TYPE            REQUIRED   NOTES
+  ------------------  --------------  ---------  --------------------------------
+  inventoryStockId    string (uuid)   YES        The inventory_stock row being
+                                                 corrected
+  correctionType      CorrectionType  YES        See enum above
+  physicalQty         number          YES (*)    Actual counted quantity
+  correctionAmt       number          no         Adjustment to inwardAmt.
+                                                 Default 0
+  reason              string          no         Free text
+  correctionDate      string (date)   no         Parsed via new Date()
+
+  dumpQty             number          YES (**)   Must be > 0
+  dumpAmt             number          no         Value of write-off. Default 0
+  dumpReason          DumpReason      no
+  dumpRemarks         string          no
+  dumpDate            string (date)   no
+
+   (*) See the two calculation paths below - ignored for damage_write_off.
+  (**) Required only when correctionType = "damage_write_off".
+
+
+--------------------------------------------------------------------------------
+ !! TWO DIFFERENT CALCULATION PATHS !!
+--------------------------------------------------------------------------------
+
+  CASE A -- correctionType = "damage_write_off"
+
+      physicalQty     = stock.inwardQty - dumpQty     <- computed by the SERVER
+      correctionDelta = -dumpQty                      <- always negative
+
+      The physicalQty sent in the body is IGNORED for this type; the server
+      overwrites it. dumpQty must be > 0 or the request fails with 400.
+
+
+  CASE B -- every other type (physical_count, system_error, other)
+
+      physicalQty     = body.physicalQty              <- taken as-is
+      correctionDelta = physicalQty - stock.inwardQty <- may be + or -
+
+
+--------------------------------------------------------------------------------
+ EXAMPLE A - PHYSICAL COUNT (system says 500, actually counted 480)
+--------------------------------------------------------------------------------
+
+  {
+    "inventoryStockId": "3f9a1c2e-77b4-4d55-9a11-0c6f2b8e4d10",
+    "correctionType": "physical_count",
+    "physicalQty": 480,
+    "correctionAmt": -1200,
+    "reason": "Monthly physical verification - 20 kg short",
+    "correctionDate": "2026-08-19"
+  }
+
+
+--------------------------------------------------------------------------------
+ EXAMPLE B - DAMAGE WRITE-OFF (200 units spoiled)
+--------------------------------------------------------------------------------
+
+  {
+    "inventoryStockId": "3f9a1c2e-77b4-4d55-9a11-0c6f2b8e4d10",
+    "correctionType": "damage_write_off",
+    "physicalQty": 0,
+    "dumpQty": 200,
+    "dumpAmt": 5000,
+    "dumpReason": "expiry",
+    "dumpRemarks": "Cold storage failure on 18-08",
+    "dumpDate": "2026-08-18",
+    "reason": "Stock expired in cold storage"
+  }
+
+
+--------------------------------------------------------------------------------
+ RESPONSE 201
+--------------------------------------------------------------------------------
+
+  {
+    "status": "success",
+    "data": {
+      "id": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "inventoryStock": { "id": "3f9a1c2e-77b4-4d55-9a11-0c6f2b8e4d10" },
+      "company":  { "id": "c1000000-...", "name": "Prime Fresh Limited" },
+      "location": { "id": "b1000000-...", "name": "Nashik CC" },
+      "product":  { "id": "p1000000-...", "name": "Alphonso Mango" },
+      "variant":  { "id": "v1000000-...", "variantName": "Box-5kg" },
+
+      "systemQty": "500.00",
+      "physicalQty": "480.00",
+      "correctionDelta": "-20.00",
+      "correctionAmt": "-1200.00",
+
+      "dumpQty": "0.00",
+      "dumpAmt": "0.00",
+      "dumpReason": null,
+      "dumpRemarks": null,
+      "dumpDate": null,
+
+      "correctionType": "physical_count",
+      "status": "pending",
+      "reason": "Monthly physical verification - 20 kg short",
+      "remarks": null,
+
+      "createdBy": { "id": "u1000000-..." },
+      "approvedBy": null,
+      "approvedAt": null,
+      "correctionDate": "2026-08-19",
+
+      "createdAt": "19-08-2026 02:31 PM",
+      "updatedAt": "19-08-2026 02:31 PM",
+      "isDeleted": false,
+      "deletedAt": null
+    }
+  }
+
+  NOTE: company, location, product and variant are copied from the inventory
+        stock row and returned as FULL OBJECTS. inventoryStock and createdBy
+        are returned as { id } only, because that is how the service assigns
+        them.
+
+
+--------------------------------------------------------------------------------
+ ERRORS
+--------------------------------------------------------------------------------
+
+  CODE   MESSAGE                                    WHEN
+  -----  -----------------------------------------  --------------------------
+  400    Inventory stock not found                  inventoryStockId missing
+                                                    from DB
+  400    dumpQty must be > 0 for DAMAGE_WRITE_OFF   type is damage_write_off
+                                                    and dumpQty <= 0 / absent
+  401    (auth error)                               Missing / invalid token
+
+
+================================================================================
+ 2. LIST PENDING CORRECTIONS
+================================================================================
+
+  METHOD    : GET
+  ENDPOINT  : /stock-correction/pending
+  SUCCESS   : 200 OK
+  REQUEST   : No body. No query params. No pagination.
+
+  Returns ALL pending rows, newest first (createdAt DESC).
+
+  Relations loaded:
+      inventoryStock, product, variant, location, company, createdBy
+
+
+--------------------------------------------------------------------------------
+ RESPONSE 200
+--------------------------------------------------------------------------------
+
+  {
+    "status": "success",
+    "data": [
+      {
+        "id": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+        "systemQty": "500.00",
+        "physicalQty": "480.00",
+        "correctionDelta": "-20.00",
+        "correctionAmt": "-1200.00",
+        "dumpQty": "0.00",
+        "dumpAmt": "0.00",
+        "correctionType": "physical_count",
+        "status": "pending",
+        "reason": "Monthly physical verification - 20 kg short",
+        "inventoryStock": {
+          "id": "3f9a1c2e-77b4-4d55-9a11-0c6f2b8e4d10",
+          "inwardQty": "500.00"
+        },
+        "company":  { "id": "c1000000-...", "name": "Prime Fresh Limited" },
+        "location": { "id": "b1000000-...", "name": "Nashik CC" },
+        "product":  { "id": "p1000000-...", "name": "Alphonso Mango" },
+        "variant":  { "id": "v1000000-...", "variantName": "Box-5kg" },
+        "createdBy": {
+          "id": "u1000000-...",
+          "firstName": "Madhuri",
+          "lastName": "P"
+        },
+        "createdAt": "19-08-2026 02:31 PM"
+      }
+    ]
+  }
+
+  Empty state:
+      { "status": "success", "data": [] }
+
+
+================================================================================
+ 3. GET ONE CORRECTION
+================================================================================
+
+  METHOD    : GET
+  ENDPOINT  : /stock-correction/:id
+  SUCCESS   : 200 OK
+  REQUEST   : No body.
+
+  PATH PARAM    TYPE            NOTES
+  ------------  --------------  ------------------------------------------------
+  id            string (uuid)   The stock_correction id
+
+  Relations loaded:
+      inventoryStock, product, variant, location, company, createdBy, approvedBy
+
+
+--------------------------------------------------------------------------------
+ RESPONSE 200
+--------------------------------------------------------------------------------
+
+  {
+    "status": "success",
+    "data": {
+      "id": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "systemQty": "500.00",
+      "physicalQty": "480.00",
+      "correctionDelta": "-20.00",
+      "correctionAmt": "-1200.00",
+      "dumpQty": "0.00",
+      "dumpAmt": "0.00",
+      "dumpReason": null,
+      "dumpRemarks": null,
+      "dumpDate": null,
+      "correctionType": "physical_count",
+      "status": "approved",
+      "reason": "Monthly physical verification - 20 kg short",
+      "remarks": "Verified against weighbridge slip",
+      "inventoryStock": {
+        "id": "3f9a1c2e-77b4-4d55-9a11-0c6f2b8e4d10",
+        "inwardQty": "480.00"
+      },
+      "company":  { "id": "c1000000-...", "name": "Prime Fresh Limited" },
+      "location": { "id": "b1000000-...", "name": "Nashik CC" },
+      "product":  { "id": "p1000000-...", "name": "Alphonso Mango" },
+      "variant":  { "id": "v1000000-...", "variantName": "Box-5kg" },
+      "createdBy":  { "id": "u1000000-...", "firstName": "Madhuri" },
+      "approvedBy": { "id": "u2000000-...", "firstName": "Aniket" },
+      "approvedAt": "19-08-2026 04:10 PM",
+      "correctionDate": "2026-08-19",
+      "createdAt": "19-08-2026 02:31 PM"
+    }
+  }
+
+
+--------------------------------------------------------------------------------
+ ERRORS
+--------------------------------------------------------------------------------
+
+  CODE   MESSAGE
+  -----  ------------------------
+  404    Correction not found
+
+
+================================================================================
+ 4. CORRECTIONS FOR ONE INVENTORY STOCK ROW
+================================================================================
+
+  METHOD    : GET
+  ENDPOINT  : /stock-correction/stock/:inventoryStockId
+  SUCCESS   : 200 OK
+  REQUEST   : No body.
+
+  Returns the LIVE stock figures plus the full correction history for that row.
+
+  PATH PARAM          TYPE            NOTES
+  ------------------  --------------  ------------------------------------------
+  inventoryStockId    string (uuid)   The inventory_stock id
+                                      (NOT the correction id)
+
+
+--------------------------------------------------------------------------------
+ RESPONSE 200
+--------------------------------------------------------------------------------
+
+  {
+    "status": "success",
+    "data": {
+      "currentStock": {
+        "id": "3f9a1c2e-77b4-4d55-9a11-0c6f2b8e4d10",
+        "inwardQty": 480,
+        "inwardAmt": 28800,
+        "dumpQty": 200,
+        "dumpAmt": 5000,
+        "product": "Alphonso Mango",
+        "variant": "Box-5kg",
+        "location": "Nashik CC",
+        "company": "Prime Fresh Limited"
+      },
+      "corrections": [
+        {
+          "id": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+          "systemQty": "500.00",
+          "physicalQty": "480.00",
+          "correctionDelta": "-20.00",
+          "correctionAmt": "-1200.00",
+          "correctionType": "physical_count",
+          "status": "approved",
+          "reason": "Monthly physical verification - 20 kg short",
+          "remarks": "Verified against weighbridge slip",
+          "createdBy":  { "id": "u1000000-...", "firstName": "Madhuri" },
+          "approvedBy": { "id": "u2000000-...", "firstName": "Aniket" },
+          "approvedAt": "19-08-2026 04:10 PM",
+          "createdAt": "19-08-2026 02:31 PM"
+        }
+      ],
+      "pendingCorrections": []
+    }
+  }
+
+
+--------------------------------------------------------------------------------
+ SHAPE NOTES
+--------------------------------------------------------------------------------
+
+  currentStock
+      Flattened and NUMERIC. product, variant, location and company are plain
+      NAME STRINGS, not objects. Any of them can be null.
+
+  corrections
+      Every correction for this stock row, newest first.
+      Relations: createdBy, approvedBy only.
+
+  pendingCorrections
+      The subset of "corrections" where status === "pending". It is a FILTERED
+      COPY, not a separate query - so rows appear in BOTH arrays.
+
+
+--------------------------------------------------------------------------------
+ ERRORS
+--------------------------------------------------------------------------------
+
+  CODE   MESSAGE
+  -----  ---------------------------
+  404    Inventory stock not found
+
+
+================================================================================
+ 5. APPROVE A CORRECTION
+================================================================================
+
+  METHOD    : PATCH
+  ENDPOINT  : /stock-correction/:id/approve
+  SUCCESS   : 200 OK
+
+  This is the ONLY endpoint that writes to inventory_stock. It runs inside a
+  TypeORM transaction and is guarded by a status check, so a correction can be
+  applied only once.
+
+  PATH PARAM    TYPE            NOTES
+  ------------  --------------  ------------------------------------------------
+  id            string (uuid)   The correction id
+
+
+--------------------------------------------------------------------------------
+ REQUEST BODY
+--------------------------------------------------------------------------------
+
+  FIELD      TYPE      REQUIRED   NOTES
+  ---------  --------  ---------  -----------------------------------------------
+  remarks    string    no         Approver's note. Body may be {} or omitted
+
+  {
+    "remarks": "Verified against weighbridge slip"
+  }
+
+
+--------------------------------------------------------------------------------
+ WHAT IT CHANGES ON inventory_stock
+--------------------------------------------------------------------------------
+
+      inwardQty += correctionDelta          // ALWAYS
+      inwardAmt += correctionAmt            // only when correctionAmt !== 0
+
+      // additionally, ONLY when correctionType === "damage_write_off":
+      dumpQty   += correction.dumpQty
+      dumpAmt   += correction.dumpAmt
+
+  Then on the correction itself:
+      status      -> "approved"
+      approvedBy  -> <token user>
+      approvedAt  -> now
+      remarks     -> if supplied
+
+  The stock update and the status flip commit TOGETHER. If either fails, both
+  roll back.
+
+
+--------------------------------------------------------------------------------
+ RESPONSE 200
+--------------------------------------------------------------------------------
+
+  {
+    "status": "success",
+    "message": "Correction approved",
+    "data": {
+      "id": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "status": "approved",
+      "systemQty": "500.00",
+      "physicalQty": "480.00",
+      "correctionDelta": "-20.00",
+      "correctionAmt": "-1200.00",
+      "correctionType": "physical_count",
+      "remarks": "Verified against weighbridge slip",
+      "approvedBy": { "id": "u2000000-..." },
+      "approvedAt": "19-08-2026 04:10 PM",
+      "inventoryStock": {
+        "id": "3f9a1c2e-77b4-4d55-9a11-0c6f2b8e4d10",
+        "inwardQty": "480.00",
+        "inwardAmt": "28800.00",
+        "dumpQty": "0.00",
+        "dumpAmt": "0.00"
+      }
+    }
+  }
+
+  NOTE: The returned "data" is the CORRECTION object. approvedBy is { id } only.
+        inventoryStock reflects the ALREADY-UPDATED figures.
+
+
+--------------------------------------------------------------------------------
+ ERRORS
+--------------------------------------------------------------------------------
+
+  CODE   MESSAGE                        WHEN
+  -----  -----------------------------  ---------------------------------------
+  400    Correction not found           Bad id
+  400    Correction already processed   status is not "pending"
+                                        (this is the double-apply guard)
+
+
+================================================================================
+ 6. REJECT A CORRECTION
+================================================================================
+
+  METHOD    : PATCH
+  ENDPOINT  : /stock-correction/:id/reject
+  SUCCESS   : 200 OK
+
+  NO STOCK CHANGE OF ANY KIND. Only the correction row is updated.
+
+  PATH PARAM    TYPE            NOTES
+  ------------  --------------  ------------------------------------------------
+  id            string (uuid)   The correction id
+
+
+--------------------------------------------------------------------------------
+ REQUEST BODY
+--------------------------------------------------------------------------------
+
+  Same as approve - remarks is optional.
+
+  {
+    "remarks": "Recount requested - figures do not match the gate register"
+  }
+
+  Sets:
+      status      -> "rejected"
+      approvedBy  -> <token user>
+      approvedAt  -> now
+      remarks     -> if supplied
+
+  NOTE: The approvedBy / approvedAt columns are REUSED for rejection. There are
+        no separate rejectedBy / rejectedAt columns.
+
+
+--------------------------------------------------------------------------------
+ RESPONSE 200
+--------------------------------------------------------------------------------
+
+  {
+    "status": "success",
+    "message": "Correction rejected",
+    "data": {
+      "id": "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "status": "rejected",
+      "remarks": "Recount requested - figures do not match the gate register",
+      "approvedBy": { "id": "u2000000-..." },
+      "approvedAt": "19-08-2026 04:15 PM"
+    }
+  }
+
+
+--------------------------------------------------------------------------------
+ ERRORS
+--------------------------------------------------------------------------------
+
+  CODE   MESSAGE
+  -----  -----------------------------
+  400    Correction not found
+  400    Correction already processed
+
+
+================================================================================
+ TYPICAL FLOW
+================================================================================
+
+     POST /stock-correction
+         |                                    status = pending
+         v
+     GET /stock-correction/pending
+         |                                    approver sees it in the queue
+         v
+     PATCH /stock-correction/:id/approve  --> inventory_stock updated
+         |                                    status = approved
+         |   OR
+         |
+     PATCH /stock-correction/:id/reject   --> nothing touched
+         |                                    status = rejected
+         v
+     GET /stock-correction/stock/:inventoryStockId
+                                              verify new figures + history
+
+
+================================================================================
+ THINGS TO BE AWARE OF
+================================================================================
+
+  1. NO ROLE RESTRICTION ON APPROVE / REJECT
+     Both endpoints only require a logged-in user (requireUser). Any
+     authenticated user can approve their own correction. There is no
+     approval-flow / documents integration on this module, unlike the other
+     inventory documents.
+
+  2. GET /pending IS UNPAGINATED
+     It returns every pending row with 6 relations eagerly joined. It will get
+     slow as the table grows.
+
+  3. DECIMALS ARRIVE AS STRINGS
+     Use Number(...) on the frontend before doing arithmetic.
+     Example:  "480.00" + 20   gives   "480.0020"
+
+  4. physicalQty IS REQUIRED BY THE DTO EVEN FOR damage_write_off
+     ...where the server ignores it. Send 0.
+
+  5. NO UPDATE OR DELETE ENDPOINT
+     A correction cannot be edited or removed once submitted - only approved
+     or rejected.
+
+  6. correctionAmt IS NOT AUTO-DERIVED
+     If you do not send it, inwardAmt is left untouched even when inwardQty
+     changes, so quantity and value can drift apart. The caller must compute it.
+
+================================================================================
+                              END OF DOCUMENT
+================================================================================

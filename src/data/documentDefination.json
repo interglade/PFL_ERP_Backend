@@ -1,0 +1,106 @@
+[
+    {
+      "uniqueKey": "rfpa",
+      "documentType": "Procurement",
+      "name": "Request For Purchase Approval"
+    },
+    {
+      "uniqueKey": "deal-slip",
+      "documentType": "Procurement",
+      "name": "Deal Slip"
+    },
+    {
+      "uniqueKey": "grn",
+      "documentType": "Procurement",
+      "name": "Good Received Note"
+    },
+    {
+      "uniqueKey": "deliveryChallan-Customer",
+      "documentType": "DC_TYPE_CUSTOMER",
+      "name": "Customer Delivery Challan"
+    },
+     {
+      "uniqueKey": "deliveryChallan-Stock-Transfer",
+      "documentType": "DC_TYPE_STOCK_TRANSFER",
+      "name": "Stock Transfer Delivery Challan"
+    },
+     {
+      "uniqueKey": "deliveryChallan-Other",
+      "documentType": "Sale",
+      "name": "Other Delivery Challan"
+    },
+
+    {
+      "uniqueKey": "inward-register",
+      "documentType": "Operation",
+      "name": "Inward Register"
+    },
+    {
+      "uniqueKey": "aqr",
+      "documentType": "Operation",
+      "name": "Arrival Quality Report"
+    },
+    {
+      "uniqueKey": "dump-register",
+      "documentType": "Operation",
+      "name": "Dump Register"
+    },
+    {
+      "uniqueKey": "vehicle-dispatch-register",
+      "documentType": "Operation",
+      "name": "Vehicle Dispatch Register"
+    },
+    {
+      "uniqueKey": "return-by-customer",
+      "documentType": "Operation",
+      "name": "Return By Customer"
+    },
+
+    {
+      "uniqueKey": "return-by-vendor",
+      "documentType": "Operation",
+      "name": "Return To Vendor"
+    },
+    {
+      "uniqueKey": "second-sale",
+      "documentType": "Sale",
+      "name": "Second Sale"
+    },
+    {
+      "uniqueKey": "eod-report",
+      "documentType": "Operation",
+      "name": "End Of The Day Report"
+    },
+    {
+      "uniqueKey": "Inventory",
+      "documentType": "Operation",
+      "name": "Inventory"
+    },
+    {
+      "uniqueKey": "final-invoice",
+      "documentType": "Sale",
+      "name": "Final Invoice"
+    },
+  
+    {
+      "uniqueKey": "multi-cash-voucher",
+      "documentType": "Procurement",
+      "name": "Multi Cash Voucher"
+    },
+    {
+      "uniqueKey": "labor-payment-voucher",
+      "documentType": "Procurement",
+      "name": "Labor Payment Voucher"
+    },
+    {
+      "uniqueKey": "transport-payment-voucher",
+      "documentType": "Procurement",
+      "name": "Transport Payment Voucher"
+    },
+    {
+      "uniqueKey": "packaging-material-voucher",
+      "documentType": "Procurement",
+      "name": "Packaging Material Voucher"
+    }
+  ]
+  

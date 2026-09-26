@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multi Cash Voucher Template</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+
+        .printAreaContainer {
+            padding: 20px;
+        }
+
+        .mainContainer {
+            border: 1px solid #000;
+        }
+
+        .header {
+            width: 100%;
+            text-align: center;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #000;
+        }
+
+        .companyDetails {
+            width: 80%;
+            border-right: 1px solid #000;
+        }
+
+        .logo {
+            width: 20%;
+            font-weight: bold;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+
+        .companyName {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .address,
+        .contact {
+            margin-bottom: 5px;
+        }
+
+        .title {
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;
+            /* gap: 3px; */
+            margin-bottom: 5px;
+        }
+
+        .grid-item {
+            padding: 2px;
+        }
+
+        .span-2 {
+            grid-column: span 2;
+        }
+
+        .span-3 {
+            grid-column: span 3;
+        }
+
+        .span-4 {
+            grid-column: span 4;
+        }
+
+        .span-6 {
+            grid-column: span 6;
+        }
+
+        .span-12 {
+            grid-column: span 12;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+            border: 1px solid #000;
+        }
+
+        table thead tr th {
+            padding: 10px 0px;
+            border: 1px solid #000;
+            text-align: center;
+            background-color: #f2f2f2;
+        }
+
+        table tbody tr td {
+            padding: 10px 0px;
+            border: 1px solid #000;
+        }
+
+        .sr-no-col {
+            width: 10%;
+        }
+
+        .materials-col {
+            width: 70%;
+        }
+
+        .amount-col {
+            width: 20%;
+        }
+
+        .signatureContainer {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 50px;
+        }
+
+        .signatureBox {
+            width: 25%;
+            height: 100px;
+            padding-top: 5px;
+            border: 1px solid #000;
+            display: flex;
+            align-items: end;
+        }
+
+        .signatureLabel {
+            display: block;
+            width: 100%;
+            text-align: center;
+        }
+
+        .textXS {
+            font-size: 10px;
+        }
+
+        .textSM {
+            font-size: 14px;
+        }
+
+        .textMD {
+            font-size: 20px;
+        }
+
+        .textLG {
+            font-size: 25px;
+        }
+
+        .textBold {
+            font-weight: bold;
+        }
+
+        .textAlignCenter {
+            text-align: center;
+        }
+
+        .label-mr {
+            margin-right: 5px;
+        }
+
+        .label-mb {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="printAreaContainer">
+        <div class="mainContainer">
+            <header class="header">
+                <div class="companyDetails">
+                    <div class="title textMD">MULTIPLE CASH VOUCHER</div>
+                    <div class="companyName textLG">
+                        <%= data.voucher.companyName %>
+
+                    </div>
+                    <div class="address textXS">
+                        Address: 102, Sanskar-ll, Nr. Ketav Petrol Pump, Polytechnic Road, Ambawadi,
+                        Ahmedabad-380015.
+                    </div>
+
+                    <div class="contact textXS">
+                        Ph.:+919090909090, Email: primefresh.employee@example.com, Web: website:
+                        primefreshlimited.com
+                    </div>
+                </div>
+                <div class="logo">LOGO</div>
+            </header>
+            <div class="grid-container" style="padding: 0% 10%">
+                <div class="grid-item span-6">
+                    <span class="textSM textBold label-mr"> Debit / Credit to: </span>
+                    <span class="textSM">
+                        <%= data.voucher.debitCreditTo %>
+                    </span>
+                </div>
+                <div class="grid-item span-6">
+                    <span class="textSM textBold label-mr"> Location: </span>
+                    <span class="textSM">
+                        <%= data.voucher.location %>
+                    </span>
+                </div>
+                <div class="grid-item span-6">
+                    <span class="textSM textBold label-mr"> Pay to / Received from: </span>
+                    <span class="textSM">
+                        <%= data.voucher.payReceivedFrom %>
+                    </span>
+                </div>
+                <div class="grid-item span-6">
+                    <span class="textSM textBold label-mr"> Date: </span>
+                    <span class="textSM">
+                        <%= data.voucher.createdDate %>
+                    </span>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th class="sr-no-col textSM textBold">Sr. No.</th>
+                        <th class="materials-col textSM textBold">Particulars</th>
+                        <th class="amount-col textSM textBold">Amount (Rs)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% if (data.voucher.particulars && Array.isArray(data.voucher.particulars)) { %>
+                        <% data.voucher.particulars.forEach((item, index)=> { %>
+                            <tr>
+                                <td class="textAlignCenter">
+                                    <%= index + 1 %>
+                                </td>
+                                <td>
+                                    <%= item.description %>
+                                </td>
+                                <td class="textAlignCenter">
+                                    <%= item.amt %>
+                                </td>
+                            </tr>
+                            <% }) %>
+                                <% } %>
+
+                </tbody>
+            </table>
+            <div class="grid-container" style="padding: 0px 10px">
+                <div class="grid-item span-6">
+                    <span class="textSM textBold label-mr"> Payment Mode: </span>
+                    <span class="textSM">
+                        <%= data.voucher.paymentMode %>
+                    </span>
+                </div>
+                <div class="grid-item span-6">
+                    <span class="textSM textBold label-mr"> Total Amount: </span>
+                    <span class="textSM">Rs.<%= data.voucher.totalAmt %></span>
+                </div>
+                <div class="grid-item span-6">
+                    <span class="textSM textBold label-mr"> Amount In Words: </span>
+                    <span class="textSM">
+                        <%= data.voucher.amtWords %>
+                    </span>
+                </div>
+            </div>
+            <div class="signatureContainer">
+                <div class="signatureBox">
+                    <span class="signatureLabel textSM textBold">Receiver Sign</span>
+                </div>
+                <div class="signatureBox">
+                    <span class="signatureLabel textSM textBold">Prepared By</span>
+                </div>
+                <div class="signatureBox">
+                    <span class="signatureLabel textSM textBold">Passed By</span>
+                </div>
+                <div class="signatureBox">
+                    <span class="signatureLabel textSM textBold">Approved By</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,84 @@
+[
+    {
+      "name": "Prime Fresh Limited",
+      "officeAddress": "102, Sanskar – 2, Polytechnic Road, Nr. Ketav Petrol Pump, Ambawadi, Ahmedabad – 380015",
+      "gstNo": "27AAECP2124P1Z7(MH)",
+      "fassaiNo": "11521017000526",
+      "bankDetails": [
+        {
+          "accountNo": "917030023672792",
+          "bankName": "Axis Bank",
+           "branch": "Corporate Banking C G Road Ahmedabad",
+          "ifscCode": "UTIB0001530"
+        }
+        
+      ]
+    },
+  {
+      "name": "Florens Farming Private Limited",
+      "officeAddress": "102, Sanskar – 2, Polytechnic Road, Nr. Ketav Petrol Pump, Ambawadi, Ahmedabad – 380015",
+      "gstNo": "27AACCF9839K1Z1",
+      "fassaiNo": "20240725106272200",
+      "bankDetails": [
+        {
+          "accountNo": "2405022577", 
+          "bankName": "ICICI Bank",
+          "branch": "Parimal Ahmedabad",
+          "ifscCode": "ICIC0000024"
+        }
+        
+      ]
+    },
+  
+  
+  {
+      "name": "Florens Fresh Supply Solutions Pvt. Ltd",
+      "officeAddress": "102, Sanskar – 2, Polytechnic Road, Nr. Ketav Petrol Pump, Ambawadi, Ahmedabad – 380015",
+      "gstNo": "",
+      "fassaiNo": "11521998000443",
+      "bankDetails": [
+        {
+          "accountNo": "918020069423358", 
+          "bankName": "Axis Bank",
+           "branch": "Corporate Banking C G Road Ahmedabad",
+          "ifscCode": "UTIB0001530"
+        }
+        
+      ]
+    },
+  {
+      "name": "Prime Fresh Retail (I) Pvt Ltd",
+      "officeAddress": "102, Sanskar – 2, Polytechnic Road, Nr. Ketav Petrol Pump, Ambawadi, Ahmedabad – 380015",
+      "gstNo": "",
+      "fassaiNo": "",
+      "bankDetails": [
+        {
+          "accountNo": "924020022458141", 
+          "bankName": "Axis Bank",
+           "branch": "Maninagar Ahmedabad",
+          "ifscCode": "UTIB0000080"
+        }
+        
+      ]
+    },
+  {
+      "name": "Vyanktesh Prime Fresh Farmer Producer Company Limited",
+      "officeAddress": "H.No.548 Old Post Lane, Pimpalenr, Dhule, Sakri, Maharashtra, India, 424306",
+      "gstNo": "27AAJCV9056H1ZS",
+      "fassaiNo": "20241029106615900",
+      "bankDetails": [
+        {
+          "accountNo": "20519977488", 
+          "bankName": "SBI Bank",
+          "branch": "Pimpalner",
+          "ifscCode": "SBIN0011154"
+        }
+        
+      ]
+    }
+  
+  
+  
+  
+  ]
+  

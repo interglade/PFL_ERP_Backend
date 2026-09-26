@@ -1,0 +1,36 @@
+# Source control
+.git
+.gitignore
+
+# IDE / editor
+.vscode
+.idea
+
+# Node modules — installed fresh inside Docker
+node_modules
+
+# TypeScript compiled output (rebuilt in Docker)
+build
+
+# Local environment secrets — injected at runtime via env vars or docker-compose
+.env
+
+# Log files
+logs
+*.log
+
+# Uploaded/exported files — mounted as volumes at runtime
+uploads
+multiuploads
+exports
+reports
+
+# Nginx config — not part of the app image
+nginx
+
+# Postgres / Redis local config
+postgres
+redis
+
+# Dev tooling
+load-test-login.js
