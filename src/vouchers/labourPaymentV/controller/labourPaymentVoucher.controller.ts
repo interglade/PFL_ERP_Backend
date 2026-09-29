@@ -4,6 +4,8 @@ import { inject } from "inversify";
 import { controller, httpGet, httpPost, httpDelete, request, response, next, httpPatch } from "inversify-express-utils";
 import { TYPES } from "../../../types";
 import { captureUser, deserializeUser, requireUser } from "../../../middleware/deserializeUser";
+import { isAdminUser } from "../../../utils/isAdminUser";
+import { createdMessage } from "../../../utils/approvalMessage";
 
 import logger from "../../../utils/logger";
 
@@ -51,7 +53,7 @@ export class LabourPaymentVoucherController {
       entityName: 'Labour Payment Voucher',
       definition: LABOUR_PAYMENT_VOUCHER_EXPORT,
       list: { documentType: FilterDocumentType.LABOR_PAYMENT_VOUCHER, searchFields: ['"voucher.voucherNo",'] },
-      fetchList: (queryOptions, userId) => this.lpVoucherService.getLPVouchers(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.lpVoucherService.getLPVouchers(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -76,7 +78,7 @@ export class LabourPaymentVoucherController {
       };
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.LABOR_PAYMENT_VOUCHER);
-      const vouchers: LPVoucherListResponseDto = await this.lpVoucherService.getLPVouchers(queryOptions, userId);
+      const vouchers: LPVoucherListResponseDto = await this.lpVoucherService.getLPVouchers(queryOptions, userId, isAdminUser(res));
       logger.info(`Fetched ${vouchers.meta.total} vouchers successfully`);
       ControllerLogger.logList('Labour Payment Voucher', req, res);
 
@@ -187,7 +189,7 @@ export class LabourPaymentVoucherController {
     });
       voucherData.requestedBy = res.locals.user.id;
       voucherData.requestingDepartment = res.locals.user.selectDepartment; // Assuming the user id is available in res.locals
-      const newVoucher = await this.lpVoucherService.createLPVoucher(voucherData);
+      const { record: newVoucher, sentTo } = await this.lpVoucherService.createLPVoucher(voucherData);
       logger.info("Labour Payment Voucher created successfully");
       ControllerLogger.logSuccess('Labour Payment Voucher created', Array.isArray(newVoucher) ? newVoucher[0]?.id : newVoucher?.id, req, res);
 
@@ -220,7 +222,7 @@ export class LabourPaymentVoucherController {
 
       res.status(201).json({
         status: "success",
-        message: 'Labour Payment Voucher created successfully',
+        message: createdMessage('Labour Payment Voucher', 'VoucherNo', newVoucher.voucherNo, sentTo),
         //data: newVoucher,
       });
     } catch (err) {

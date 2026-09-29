@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 import { TYPES } from '../../../types';
 import { StockTransferDeliveryChallanRepository } from '../repository/stockTransferDeliveryChallan.repository';
 import logger from '../../../utils/logger';
@@ -95,7 +96,7 @@ export class StockTransferDeliveryChallanService {
     }
   }
 
- async create(data: CreateSTDeliveryChallanDto & Record<string, any>, requestedBy: string): Promise<StockTransferDeliveryChallan> {
+ async create(data: CreateSTDeliveryChallanDto & Record<string, any>, requestedBy: string): Promise<CreatedWithApproval<StockTransferDeliveryChallan>> {
   // Check if approval flow exists for the user
   await this.checkApprovalFlowExists(requestedBy, DocDefEnum.OPERATION);
 
@@ -148,10 +149,10 @@ export class StockTransferDeliveryChallanService {
     await queryRunner.commitTransaction();
 
     // Start approval flow after commit so challan is visible to other DB connections
-    await this.documentbService.startApprovalFlow(document.id);
+    const assignment = await this.documentbService.startApprovalFlow(document.id);
 
     await this.invalidateCache();
-    return savedChallan;
+    return withApproval(savedChallan, assignment);
   } catch (error) {
     // Rollback transaction - undo all changes
     await queryRunner.rollbackTransaction();
@@ -413,8 +414,8 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
     }
   }
 
-  async getAll(queryOptions: PaginationOptions, userId: string): Promise<STDeliveryChallanListResponseDto> {
-    const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${JSON.stringify(queryOptions)}`;
+  async getAll(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<STDeliveryChallanListResponseDto> {
+    const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -422,6 +423,8 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
       userId,
       DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER,
       queryOptions,
+      false,
+      isAdmin,
     );
 
     const typedDocuments = data as DocumentWithRelatedData[];

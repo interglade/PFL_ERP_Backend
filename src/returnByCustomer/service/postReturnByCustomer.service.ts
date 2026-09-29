@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 import { TYPES } from '../../types';
 
 import { DeliveryChallanRepository } from '../../deliveryChallans/deliverychllan/repository/deliveryChallan.repository';
@@ -176,7 +177,7 @@ export class PostReturnByCustomerService {
     }
   }
 
-  async createReturn(returnData: CreateRBCDto & Record<string, any>, requestedBy: string, clientIp?: string): Promise<PostReturnByCustomer> {
+  async createReturn(returnData: CreateRBCDto & Record<string, any>, requestedBy: string, clientIp?: string): Promise<CreatedWithApproval<PostReturnByCustomer>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(requestedBy, DocDefEnum.OPERATION);
 
@@ -316,7 +317,7 @@ export class PostReturnByCustomerService {
       await queryRunner.commitTransaction();
 
       // Start approval flow after commit so RBC is visible to other DB connections
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
       // This return rewrote the delivery challan's item quantities (returned /
       // rejected / accepted) and its isReturned flags, so the challan's own
       // caches are now stale — bust them alongside ours.
@@ -324,7 +325,7 @@ export class PostReturnByCustomerService {
         this.invalidateCache(),
         this.customerDeliveryChallanService.invalidateCDCCache(returnData.deliveryChallanNo),
       ]);
-      return savedReturnEntity;
+      return withApproval(savedReturnEntity, assignment);
 
     } catch (error: any) {
       await queryRunner.rollbackTransaction();
@@ -417,8 +418,9 @@ export class PostReturnByCustomerService {
   async getAllPostReturnByCustomer(
     queryOptions: PaginationOptions,
     userId: string,
+    isAdmin: boolean = false,
   ): Promise<RBCListResponseDto> {
-    const hash = createHash('md5').update(`${userId}:${JSON.stringify(queryOptions)}`).digest('hex');
+    const hash = createHash('md5').update(`${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`).digest('hex');
     const cacheKey = `${this.CACHE_PREFIX}:list:${hash}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
@@ -427,6 +429,8 @@ export class PostReturnByCustomerService {
       userId,
       DocumentTypeEnum.RETURN_BY_CUSTOMER,
       queryOptions,
+      false,
+      isAdmin,
     );
 
     const { search } = queryOptions;

@@ -19,13 +19,14 @@ import { TPVoucherService } from '../tranportPaymentV/service/transportPaymentV.
 import { PMPVoucherService } from '../paymentMaterialV/service/pmpvoucher.service';
 import { ALL_VOUCHERS_EXPORT } from '../excel/allVouchers.export';
 import { VOUCHER_KINDS, VOUCHER_TYPE_LABELS } from '../excel/voucherCommon.export';
+import { isAdminUser } from '../../utils/isAdminUser';
 
 /** A voucher list row (each type's own DTO) tagged with its voucher type. */
 type VoucherRow = Record<string, unknown> & { id?: string | null; documentId?: string | null; voucherType: string; voucherTypeLabel: string };
 type VoucherSource = {
   kind: string;
   documentType: string;
-  fetch: (options: PaginationOptions, userId: string) => Promise<{ data: object[] } | null | undefined>;
+  fetch: (options: PaginationOptions, userId: string, isAdmin: boolean) => Promise<{ data: object[] } | null | undefined>;
 };
 
 /**
@@ -51,10 +52,10 @@ export class VouchersController {
 
   private sources(): VoucherSource[] {
     return [
-      { kind: VOUCHER_KINDS.MULTI_CASH, documentType: DocumentTypeEnum.MULTI_CASH_VOUCHER, fetch: (o, u) => this.multiCashVoucherService.getAllVouchers(o, u) },
-      { kind: VOUCHER_KINDS.LABOUR_PAYMENT, documentType: DocumentTypeEnum.LABOR_PAYMENT_VOUCHER, fetch: (o, u) => this.labourPaymentVoucherService.getLPVouchers(o, u) },
-      { kind: VOUCHER_KINDS.TRANSPORT_PAYMENT, documentType: DocumentTypeEnum.TRANSPORT_PAYMENT_VOUCHER, fetch: (o, u) => this.tpVoucherService.getAllTPVouchers(o, u) },
-      { kind: VOUCHER_KINDS.PACKING_MATERIAL, documentType: DocumentTypeEnum.PACKAGING_MATERIAL_VOUCHER, fetch: (o, u) => this.pmpVoucherService.getAllVouchers(o, u) },
+      { kind: VOUCHER_KINDS.MULTI_CASH, documentType: DocumentTypeEnum.MULTI_CASH_VOUCHER, fetch: (o, u, a) => this.multiCashVoucherService.getAllVouchers(o, u, a) },
+      { kind: VOUCHER_KINDS.LABOUR_PAYMENT, documentType: DocumentTypeEnum.LABOR_PAYMENT_VOUCHER, fetch: (o, u, a) => this.labourPaymentVoucherService.getLPVouchers(o, u, a) },
+      { kind: VOUCHER_KINDS.TRANSPORT_PAYMENT, documentType: DocumentTypeEnum.TRANSPORT_PAYMENT_VOUCHER, fetch: (o, u, a) => this.tpVoucherService.getAllTPVouchers(o, u, a) },
+      { kind: VOUCHER_KINDS.PACKING_MATERIAL, documentType: DocumentTypeEnum.PACKAGING_MATERIAL_VOUCHER, fetch: (o, u, a) => this.pmpVoucherService.getAllVouchers(o, u, a) },
     ];
   }
 
@@ -79,7 +80,7 @@ export class VouchersController {
   }
 
   /** Every matching row across the selected voucher types, tagged with its type, in list order. */
-  private async loadRows(query: ParsedQs, userId: string): Promise<VoucherRow[]> {
+  private async loadRows(query: ParsedQs, userId: string, isAdmin: boolean): Promise<VoucherRow[]> {
     const sources = this.selectSources(query);
     const parts = await Promise.all(
       sources.map(async (source) => {
@@ -92,7 +93,7 @@ export class VouchersController {
           sort: typeof query.sort === 'string' ? query.sort : undefined,
         };
         applyDocumentListFilters(options, query, source.documentType);
-        const result = await source.fetch(options, userId);
+        const result = await source.fetch(options, userId, isAdmin);
         return (result?.data ?? []).map((row): VoucherRow => ({ ...row, voucherType: source.kind, voucherTypeLabel: VOUCHER_TYPE_LABELS[source.kind] }));
       }),
     );
@@ -137,7 +138,7 @@ export class VouchersController {
       const userId = res.locals.user?.id;
       if (!userId) throw new AppError(401, 'User not authenticated');
 
-      const rows = await this.loadRows(req.query, userId);
+      const rows = await this.loadRows(req.query, userId, isAdminUser(res));
 
       const page = Number(req.query.page) || 0;
       const limit = Number(req.query.limit) || 0;
@@ -168,7 +169,7 @@ export class VouchersController {
       entityName: 'All Vouchers',
       definition: ALL_VOUCHERS_EXPORT,
       fetchList: async (_options, userId) => {
-        const rows = await this.loadRows(req.query, userId);
+        const rows = await this.loadRows(req.query, userId, isAdminUser(res));
         return { data: rows.map((row) => ({ id: row.id, documentId: row.documentId, kind: row.voucherType })) };
       },
       // TEMP: testing only, revert after

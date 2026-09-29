@@ -1,6 +1,7 @@
 import {
   Column,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   OneToMany,
@@ -26,6 +27,9 @@ export enum DeliveryChallanType {
 }
 @Entity('delivery_challan_purchase')
 @TableInheritance({ column: { type: 'varchar', name: 'type', nullable: true } })
+// Dashboard / report filters
+@Index(['createdAt'])
+@Index(['companyName'])
 export class DeliveryChallanPurchase extends Model {
   @ManyToOne(() => Company, {
     cascade: true,

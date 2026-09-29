@@ -5,6 +5,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Department, Source } from "../../utils/status.enum";
+import { RFPA } from "../entity/rfpa.entity";
+
+/** Result of creating an RFPA. */
+export interface CreateRfpaResultDto {
+  rfpa: RFPA;
+  /** Names of the users the RFPA was sent to, e.g. "Ravi Patil and Neha Joshi"; empty if none. */
+  sentTo: string;
+}
 
 /** Payment info — used in create, update, view and update-form responses. */
 export interface RfpaPaymentInfoDto {

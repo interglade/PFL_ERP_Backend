@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 
 
 import { ILike, In, SelectQueryBuilder } from 'typeorm';
@@ -90,7 +91,7 @@ private async generateSerialNo(): Promise<string> {
     }
   }
 
-  async create(data: CreateVehicleDispatchDto): Promise<VehicleDispatch> {
+  async create(data: CreateVehicleDispatchDto): Promise<CreatedWithApproval<VehicleDispatch>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(data.requestedBy, DocumentTypeEnum.OPERATION);
 
@@ -122,10 +123,10 @@ const serialNo = await this.generateSerialNo();
       document_type_id: savedVehicalDispatch.id,
     });
 
-    await this.documentbService.startApprovalFlow(document.id);
-    
+    const assignment = await this.documentbService.startApprovalFlow(document.id);
+
     await this.invalidateCache();
-    return savedVehicalDispatch;
+    return withApproval(savedVehicalDispatch, assignment);
   }
 //TODO:Get All Recycle Bin Vehical Dispatch..By Vaishali
   public async getAllRecycleBinVehicalDispatch(queryOptions: PaginationOptions, userId: string): Promise<any> {
@@ -412,8 +413,8 @@ const serialNo = await this.generateSerialNo();
     return {No:dispatch.vehicleDispatchNo};
   }
 //Todo:Get All Vehical Dispatch..By Vaishali
-  public async getAllvehicalDispatch(queryOptions: PaginationOptions, userId: string): Promise<any> {
-    const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${JSON.stringify(queryOptions)}`;
+  public async getAllvehicalDispatch(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<any> {
+    const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -422,6 +423,7 @@ const serialNo = await this.generateSerialNo();
       DocumentTypeEnum.VEHICLE_DISPATCH_REGISTER,
       false,
       queryOptions,
+      isAdmin,
     );
     const { search } = queryOptions;
 
@@ -660,7 +662,7 @@ const serialNo = await this.generateSerialNo();
   //   }
 
     //TODO:Get Vehical Dispatch By Id For View..By Vaishali
-public async getVehicalDispatchByIdForView(docid: string, userId:string): Promise<any> {
+public async getVehicalDispatchByIdForView(docid: string, userId:string, isAdmin: boolean = false): Promise<any> {
     // Keyed by userId as well: access is checked per user (non creator/approver
     // gets null -> 403), so a shared key would serve the document to users who
     // are not allowed to see it.
@@ -668,7 +670,7 @@ public async getVehicalDispatchByIdForView(docid: string, userId:string): Promis
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
 
-    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid,userId)
+    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid, userId, isAdmin)
     if(!document)
     {
       return null;

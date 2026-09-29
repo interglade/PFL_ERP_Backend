@@ -1,5 +1,7 @@
 import { controller, httpDelete, httpGet, httpPatch, httpPost, next, request, requestParam, response } from "inversify-express-utils";
 import { captureUser, deserializeUser, requireUser } from "../../../middleware/deserializeUser";
+import { isAdminUser } from "../../../utils/isAdminUser";
+import { createdMessage } from "../../../utils/approvalMessage";
 import { inject } from "inversify";
 import { TYPES } from "../../../types";
 import { StockTransferDeliveryChallanService } from "../service/stockTransferDeliveryChallan.service";
@@ -50,7 +52,7 @@ export class StockTranferDeliveryChallanController {
       const requestedBy = res.locals.user.id;
       req.body.createdBy = requestedBy;
       req.body.transferType=req.body.stockTransferType;
-      const challan = await this.stockTransferDeliveryChallanService.create(
+      const { record: challan, sentTo } = await this.stockTransferDeliveryChallanService.create(
         req.body as CreateSTDeliveryChallanDto & Record<string, any>,
         requestedBy
       );
@@ -91,7 +93,7 @@ export class StockTranferDeliveryChallanController {
       
       res.status(201).json({
         status: 'success',
-        message: 'Stock transfer delivery challan created successfully',
+        message: createdMessage('Stock Transfer Delivery Challan', 'ChallanNo', challan.challanNo, sentTo),
         data: challan,
       });
     } catch (err) {
@@ -229,7 +231,7 @@ export class StockTranferDeliveryChallanController {
       entityName: 'Stock Transfer Delivery Challan',
       definition: STOCK_TRANSFER_DELIVERY_CHALLAN_EXPORT,
       list: { documentType: FilterDocumentType.DC_TYPE_STOCK_TRANSFER, searchFields: ['challanNo'] },
-      fetchList: (queryOptions, userId) => this.stockTransferDeliveryChallanService.getAll(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.stockTransferDeliveryChallanService.getAll(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -254,7 +256,7 @@ export class StockTranferDeliveryChallanController {
 
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.DC_TYPE_STOCK_TRANSFER);
-      const challans: STDeliveryChallanListResponseDto = await this.stockTransferDeliveryChallanService.getAll(queryOptions, userId);
+      const challans: STDeliveryChallanListResponseDto = await this.stockTransferDeliveryChallanService.getAll(queryOptions, userId, isAdminUser(res));
 
       ControllerLogger.logList('Stock Transfer Delivery Challan', req, res);
 

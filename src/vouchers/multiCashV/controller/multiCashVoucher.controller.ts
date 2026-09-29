@@ -4,6 +4,8 @@ import { TYPES } from "../../../types";
 
 import { NextFunction,Request,Response } from "express";
 import { captureUser, deserializeUser, requireUser } from "../../../middleware/deserializeUser";
+import { isAdminUser } from "../../../utils/isAdminUser";
+import { createdMessage } from "../../../utils/approvalMessage";
 
 import logger from "../../../utils/logger";
 import AppError from "../../../utils/appError";
@@ -59,7 +61,7 @@ export class  MultiCashVoucherController {
 
       voucherAny.requestedBy = res.locals.user.id;
       voucherAny.requestingDepartment = res.locals.user.selectDepartment;
-      const newVoucher = await this.multicashVoucherService.createVoucher(voucherData);
+      const { record: newVoucher, sentTo } = await this.multicashVoucherService.createVoucher(voucherData);
       logger.info("Multi Cash Voucher created successfully", { voucherId: newVoucher.id });
       ControllerLogger.logSuccess('Multi Cash Voucher created', newVoucher.id, req, res);
 
@@ -92,7 +94,7 @@ export class  MultiCashVoucherController {
 
       res.status(201).json({
         status: "success",
-        message: 'Multi Cash Payment Voucher created successfully',
+        message: createdMessage('Multi Cash Voucher', 'VoucherNo', newVoucher.voucherNo, sentTo),
        
       });
     } catch (err) {
@@ -156,7 +158,7 @@ export class  MultiCashVoucherController {
       entityName: 'Multi Cash Voucher',
       definition: MULTI_CASH_VOUCHER_EXPORT,
       list: { documentType: FilterDocumentType.MULTI_CASH_VOUCHER, searchFields: ['"voucher.voucherNo",'] },
-      fetchList: (queryOptions, userId) => this.multicashVoucherService.getAllVouchers(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.multicashVoucherService.getAllVouchers(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -182,7 +184,7 @@ export class  MultiCashVoucherController {
       };
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.MULTI_CASH_VOUCHER);
-      const vouchers = await this.multicashVoucherService.getAllVouchers(queryOptions, userId);
+      const vouchers = await this.multicashVoucherService.getAllVouchers(queryOptions, userId, isAdminUser(res));
       logger.info(`Found ${vouchers.data.length} vouchers`);
       ControllerLogger.logList('Multi Cash Voucher', req, res);
 

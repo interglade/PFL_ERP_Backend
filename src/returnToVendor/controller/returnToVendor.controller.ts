@@ -3,6 +3,8 @@ import { controller, httpPost, httpGet, httpPut, next, requestBody, request, res
 import { inject } from "inversify";
 import { TYPES } from "../../types";
 import { deserializeUser, requireUser } from "../../middleware/deserializeUser";
+import { isAdminUser } from "../../utils/isAdminUser";
+import { createdMessage } from "../../utils/approvalMessage";
 import { NextFunction, Request, Response } from "express";
 import { ControllerLogger } from "../../utils/controllerLogger";
 
@@ -40,7 +42,7 @@ export class ReturnToVendorController {
       const requestedBy = res.locals.user.id; // Pass full user object
       const clientIp = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 'Unknown';
 
-      const newPostReturn = await this.returnToVendorService.createReturn(postReturnData, requestedBy, clientIp);
+      const { record: newPostReturn, sentTo } = await this.returnToVendorService.createReturn(postReturnData, requestedBy, clientIp);
 
       ControllerLogger.logSuccess('Post Return By Vendor created', newPostReturn.id, req, res);
 
@@ -74,7 +76,7 @@ export class ReturnToVendorController {
       res.status(201).json({
         status: "success",
         data: newPostReturn.id,
-        message: "Return By Vendor created successfully",
+        message: createdMessage('Return to Vendor', 'RTVNo', newPostReturn.rtvNo, sentTo),
       });
     } catch (error) {
       ControllerLogger.logError('Post Return By Customer creation', error, req, res);
@@ -97,7 +99,7 @@ export class ReturnToVendorController {
       entityName: 'Return To Vendor',
       definition: RETURN_TO_VENDOR_EXPORT,
       list: { documentType: FilterDocumentType.RETURN_TO_VENDOR, sort: false },
-      fetchList: (queryOptions, userId) => this.returnToVendorService.getAll(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.returnToVendorService.getAll(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -115,7 +117,7 @@ export class ReturnToVendorController {
 
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.RETURN_TO_VENDOR);
-      const result = await this.returnToVendorService.getAll(queryOptions, userId);
+      const result = await this.returnToVendorService.getAll(queryOptions, userId, isAdminUser(res));
 
       ControllerLogger.logSuccess('Get all return to vendor records', '', req, res);
 

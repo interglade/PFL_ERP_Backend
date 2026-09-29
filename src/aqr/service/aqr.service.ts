@@ -1,5 +1,6 @@
 ﻿import { inject, injectable } from "inversify";
 import { TYPES } from "../../types";
+import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 
 import AppError from "../../utils/appError";
 import { buildQuery, PaginationOptions } from "../../utils/pagination";
@@ -104,7 +105,7 @@ export class AqrService {
     }
   }
 
-  public async createAqr(data: CreateAqrDto): Promise<Aqr> {
+  public async createAqr(data: CreateAqrDto): Promise<CreatedWithApproval<Aqr>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(data.requestedBy, DocDefEnum.OPERATION);
 
@@ -166,10 +167,10 @@ export class AqrService {
       });
 
       await queryRunner.commitTransaction();
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
       await this.invalidateAqrCache();
 
-      return savedAqr as Aqr;
+      return withApproval(savedAqr as Aqr, assignment);
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
@@ -274,15 +275,15 @@ export class AqrService {
 
   // ─── Get All AQRs (optimized: batch fetch instead of N+1) ─────────────────
 
-  public async getAllAqrs(queryOptions: PaginationOptions, userId: string): Promise<{
+  public async getAllAqrs(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<{
     data: AqrListItemDto[];
     meta: { total: number; page: number; pages: number };
   }> {
-    const key = this.cacheKey("list", userId, JSON.stringify(queryOptions));
+    const key = this.cacheKey("list", userId, isAdmin ? 'admin' : 'user', JSON.stringify(queryOptions));
     const cached = await this.cacheService.get<{ data: AqrListItemDto[]; meta: { total: number; page: number; pages: number } }>(key);
     if (cached) return cached;
 
-    const documents = await this.docSingalApproverService.getAllSingleApprovalDocumentsByUserId(userId, DocumentTypeEnum.AQR, false, queryOptions) as DocumentWithRelatedData[];
+    const documents = await this.docSingalApproverService.getAllSingleApprovalDocumentsByUserId(userId, DocumentTypeEnum.AQR, false, queryOptions, isAdmin) as DocumentWithRelatedData[];
     const activeDocs = documents
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
@@ -527,12 +528,12 @@ export class AqrService {
 
   // ─── Get AQR By ID For View (with document approval info) ─────────────────
 
-  public async getAQRByIdForView(docid: string, userId: string): Promise<GetAqrByIdForViewResponseDto | null> {
+  public async getAQRByIdForView(docid: string, userId: string, isAdmin: boolean = false): Promise<GetAqrByIdForViewResponseDto | null> {
     const key = this.cacheKey("view", docid, userId);
     const cached = await this.cacheService.get<GetAqrByIdForViewResponseDto>(key);
     if (cached) return cached;
 
-    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid, userId);
+    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid, userId, isAdmin);
     if (!document) return null;
 
     const id = document.documentTypeId;

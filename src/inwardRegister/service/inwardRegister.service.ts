@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 import { TYPES } from '../../types';
 import { InwardRepository } from '../repository/inwardRegister.repository';
 import { InwardRegister } from '../entity/inwardRegister.entity';
@@ -139,7 +140,7 @@ export class InwardRegisterService {
     }
   }
 
-public async createInwardRegister(data: CreateInwardRegisterInput): Promise<any> {
+public async createInwardRegister(data: CreateInwardRegisterInput): Promise<CreatedWithApproval<any>> {
   // Check if approval flow exists for the user
   await this.checkApprovalFlowExists(data.requestedBy, DocDefEnum.OPERATION);
 
@@ -282,10 +283,10 @@ const serialNo = await this.generateSerialNo();
     await queryRunner.commitTransaction();
 
     // Start approval flow after commit so inward register is visible to other DB connections
-    await this.documentbService.startApprovalFlow(document.id);
+    const assignment = await this.documentbService.startApprovalFlow(document.id);
     await this.invalidateCache();
 
-    return savedInward;
+    return withApproval(savedInward, assignment);
 
   } catch (error: any) {
     // Rollback transaction - undo all changes
@@ -855,8 +856,8 @@ console.log(transformedInwardRegister)
 //       }
 //     };
 //   }
-public async getAllInwardRegisters(queryOptions: PaginationOptions, userId: string): Promise<InwardRegisterListResultDto> {
-    const hash = createHash('md5').update(`${userId}:${JSON.stringify(queryOptions)}`).digest('hex');
+public async getAllInwardRegisters(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<InwardRegisterListResultDto> {
+    const hash = createHash('md5').update(`${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`).digest('hex');
     const cacheKey = `${this.CACHE_PREFIX}:all:${hash}`;
     const cached = await this.cacheService.get<InwardRegisterListResultDto>(cacheKey);
     if (cached) return cached;
@@ -866,6 +867,7 @@ public async getAllInwardRegisters(queryOptions: PaginationOptions, userId: stri
       DocumentTypeEnum.INWARD_REGISTER,
       false,
       queryOptions,
+      isAdmin,
     );
     const { search } = queryOptions;
     const typedDocuments = data as DocumentWithRelatedData[];
@@ -984,7 +986,7 @@ public async getAllInwardRegisters(queryOptions: PaginationOptions, userId: stri
 
 
   //TODO:Get Inward Register By Id For View..By Vaishali
-public async getInwardregisterByIdForView(docid: string, userId: string): Promise<InwardRegisterViewDto | null> {
+public async getInwardregisterByIdForView(docid: string, userId: string, isAdmin: boolean = false): Promise<InwardRegisterViewDto | null> {
     // Keyed by userId as well: access is checked per user (non creator/approver
     // gets null -> 403), so a shared key would serve the document to users who
     // are not allowed to see it.
@@ -992,7 +994,7 @@ public async getInwardregisterByIdForView(docid: string, userId: string): Promis
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
 
-    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid, userId);
+    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid, userId, isAdmin);
     if (!document) return null;
 
     const id = document.documentTypeId;

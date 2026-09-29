@@ -73,6 +73,55 @@ export class VendorController {
       next(error);
     }
   }
+  // All attachments of a vendor in one call (GSTN, PAN, MSME, cancelled cheque)
+  // with the stored URL and a JWT-gated download link via /files/download.
+  @httpGet("/attachments/:id")
+  public async getVendorAttachments(
+    @requestParam("id") id: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction
+  ) {
+    try {
+      const vendor = await this.vendorService.getVendorAttachments(id);
+      if (!vendor) {
+        ControllerLogger.logNotFound('Vendor', id, req, res);
+        return next(new AppError(404, "Vendor not found"));
+      }
+
+      const slots = [
+        { key: "gstnCopy", label: "GSTN Copy", url: vendor.gstnCopy },
+        { key: "panCardCopy", label: "PAN Card Copy", url: vendor.panCardCopy },
+        { key: "msmeCopy", label: "MSME Copy", url: vendor.msmeCopy },
+        { key: "cancelledChequeCopy", label: "Cancelled Cheque Copy", url: vendor.vendorBankDetails?.cancelledChequeCopy },
+      ];
+
+      const attachments = slots.map((slot) => ({
+        key: slot.key,
+        label: slot.label,
+        available: !!slot.url,
+        url: slot.url || null,
+        fileName: slot.url ? decodeURIComponent(slot.url.split("/").pop() || "") : null,
+        downloadUrl: slot.url ? `/files/download?url=${encodeURIComponent(slot.url)}` : null,
+      }));
+
+      ControllerLogger.logView('Vendor attachments', id, req, res);
+      res.status(200).json({
+        status: "success",
+        data: {
+          vendorId: vendor.id,
+          vendorCode: vendor.vendorCode,
+          companyName: vendor.companyName,
+          totalAttachments: attachments.filter((a) => a.available).length,
+          attachments,
+        },
+      });
+    } catch (error) {
+      ControllerLogger.logError('Get Vendor Attachments', error, req, res);
+      next(error);
+    }
+  }
+
   @httpGet("/view/:id")
   public async getVendorByIdforview(
     @requestParam("id") id: string,

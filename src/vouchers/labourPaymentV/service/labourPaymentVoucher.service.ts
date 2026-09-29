@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 import { LPVoucher } from '../entity/labourPaymentVoucher.entity';
 
 import { TYPES } from '../../../types';
@@ -74,7 +75,7 @@ export class LabourPaymentVoucherService {
     }
   }
 
-  async createLPVoucher(data: CreateLPVoucherDto & Record<string, any>): Promise<LPVoucher> {
+  async createLPVoucher(data: CreateLPVoucherDto & Record<string, any>): Promise<CreatedWithApproval<LPVoucher>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(data.requestedBy, DocDefEnum.PROCUREMENT);
 
@@ -103,10 +104,10 @@ export class LabourPaymentVoucherService {
               document_type_id: saveLPVoucher.id
             });
 
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
       await this.invalidateCache();
-            
-      return saveLPVoucher;
+
+      return withApproval(saveLPVoucher, assignment);
     } catch (error: any) {
       await queryRunner.rollbackTransaction();
       throw error;
@@ -122,8 +123,8 @@ export class LabourPaymentVoucherService {
 
     
 
-  public async getLPVouchers(queryOptions: PaginationOptions, userId: string): Promise<LPVoucherListResponseDto> {
-    const hash = createHash('md5').update(`${userId}:${JSON.stringify(queryOptions)}`).digest('hex');
+  public async getLPVouchers(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<LPVoucherListResponseDto> {
+    const hash = createHash('md5').update(`${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`).digest('hex');
     const cacheKey = `${this.CACHE_PREFIX}:list:${hash}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
@@ -132,6 +133,9 @@ export class LabourPaymentVoucherService {
       userId,
       DocumentTypeEnum.LABOR_PAYMENT_VOUCHER,
       queryOptions,
+      false,
+      false,
+      isAdmin,
     );
     const { search } = queryOptions;
     const activeDocuments = data as DocumentWithRelatedData[];

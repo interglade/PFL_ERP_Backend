@@ -10,6 +10,8 @@ import {
   requestParam,
 } from 'inversify-express-utils';
 import { deserializeUser, requireUser, captureUser } from '../../../middleware/deserializeUser';
+import { isAdminUser } from '../../../utils/isAdminUser';
+import { createdMessage } from '../../../utils/approvalMessage';
 import { TYPES } from '../../../types';
 import { OtherDeliveryChallanService } from '../service/otherDeliveryChallan.service';
 import { inject } from 'inversify';
@@ -102,7 +104,7 @@ export class OtherDeliveryChallanController {
       // Use helper function to handle file URL extraction
       setAttachmentUrls(otherDeliveryChallanData, req.files as any[]);
 
-      const otherDeliveryChallan =
+      const { record: otherDeliveryChallan, sentTo } =
         await this.otherDeliveryChallanService.create(otherDeliveryChallanData);
       if (!otherDeliveryChallan) {
         return next(new AppError(400, 'Other Delivery Challan could not be created'));
@@ -140,7 +142,7 @@ export class OtherDeliveryChallanController {
 
       res.status(201).json({
         status: 'success',
-        message: 'Other Delivery Challan created successfully',
+        message: createdMessage('Other Delivery Challan', 'ChallanNo', otherDeliveryChallan.challanNo, sentTo),
       });
     } catch (err) {
       ControllerLogger.logError('Other Delivery Challan creation', err, req, res);
@@ -163,7 +165,7 @@ export class OtherDeliveryChallanController {
       entityName: 'Other Delivery Challan',
       definition: OTHER_DELIVERY_CHALLAN_EXPORT,
       list: { documentType: FilterDocumentType.DC_TYPE_OTHER, searchFields: ['challan.id'] },
-      fetchList: (queryOptions, userId) => this.otherDeliveryChallanService.getAll(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.otherDeliveryChallanService.getAll(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -188,7 +190,7 @@ export class OtherDeliveryChallanController {
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.DC_TYPE_OTHER);
       const otherDeliveryChallans =
-        await this.otherDeliveryChallanService.getAll(queryOptions, userId);
+        await this.otherDeliveryChallanService.getAll(queryOptions, userId, isAdminUser(res));
 
       if (!otherDeliveryChallans) {
         return next(new AppError(404, 'No Other Delivery Challans found'));

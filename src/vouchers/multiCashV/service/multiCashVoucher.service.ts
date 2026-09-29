@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 import { TYPES } from '../../../types';
 import { CashVoucher } from '../entity/mCashVoucher.entity';
 import { DocumentTypeEnum as DocDefEnum } from '../../../documentDef/entity/documentdef.entity';
@@ -76,9 +77,9 @@ export class MultiCashVoucherService {
     await Promise.all(tasks);
   }
   public async getAllVouchers(
-    queryOptions: PaginationOptions, userId: string
+    queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false
   ): Promise<{ data: MultiCashVoucherListItemDto[]; meta: any }> {
-    const hash = createHash('md5').update(`${userId}:${JSON.stringify(queryOptions)}`).digest('hex');
+    const hash = createHash('md5').update(`${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`).digest('hex');
     const cacheKey = `${this.CACHE_PREFIX}:list:${hash}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
@@ -88,6 +89,9 @@ export class MultiCashVoucherService {
       userId,
       DocumentTypeEnum.MULTI_CASH_VOUCHER,
       queryOptions,
+      false,
+      false,
+      isAdmin,
     );
 
     const activeDocuments = data as DocumentWithRelatedData[];
@@ -358,7 +362,7 @@ export class MultiCashVoucherService {
     }
   }
 
-  public async createVoucher(voucherData: CreateMultiCashVoucherDto): Promise<any> {
+  public async createVoucher(voucherData: CreateMultiCashVoucherDto): Promise<CreatedWithApproval<any>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(voucherData.requestedBy, DocDefEnum.PROCUREMENT);
 
@@ -417,10 +421,10 @@ export class MultiCashVoucherService {
 
       await queryRunner.commitTransaction();
 
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
       await this.invalidateCache();
 
-      return voucher;
+      return withApproval(voucher, assignment);
     } catch (error: any) {
       await queryRunner.rollbackTransaction();
       throw error;

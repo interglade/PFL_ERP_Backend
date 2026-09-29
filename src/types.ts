@@ -470,6 +470,15 @@ RegistrationReportsController:Symbol.for("RegistrationReportsController"),
   // Document Excel exports
   DocumentExportService: Symbol.for("DocumentExportService"),
   VouchersController: Symbol.for("VouchersController"),
+
+  // Admin Control Center dashboard
+  AdminControlCenterController: Symbol.for("AdminControlCenterController"),
+  AccFiltersService: Symbol.for("AccFiltersService"),
+  AccOverviewService: Symbol.for("AccOverviewService"),
+  AccPurchaseService: Symbol.for("AccPurchaseService"),
+  AccSalesService: Symbol.for("AccSalesService"),
+  AccDocumentsService: Symbol.for("AccDocumentsService"),
+  AccUsersService: Symbol.for("AccUsersService"),
 };
 
 export { TYPES };

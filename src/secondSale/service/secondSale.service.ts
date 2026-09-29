@@ -1,4 +1,5 @@
 import { inject, injectable } from "inversify";
+import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 import { DataSource, DeepPartial, ILike, In } from "typeorm";
 import { TYPES } from "../../types";
 import { SecondSaleRepository } from "../repository/secondSale.repository";
@@ -94,7 +95,7 @@ export class SecondSaleService {
     }
   }
 
-  public async createSecondSale(secondSaleData: CreateSecondSaleDto, requestedBy: string): Promise<any> {
+  public async createSecondSale(secondSaleData: CreateSecondSaleDto, requestedBy: string): Promise<CreatedWithApproval<any>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(requestedBy, DocDefEnum.SALE);
 
@@ -175,10 +176,10 @@ console.log("savedsecodsale...................",savedSecondSale);
       await queryRunner.commitTransaction();
 console.log(document.id)
       // 8. Start approval flow after commit
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
 
       await this.invalidateCache();
-      return savedSecondSale;
+      return withApproval(savedSecondSale, assignment);
 
     } catch (error: any) {
       await queryRunner.rollbackTransaction();
@@ -370,9 +371,9 @@ console.log(document.id)
   //   }
   // }
 
-  public async getAllSecondSales(queryOptions: PaginationOptions, userId: string): Promise<SecondSaleListResponseDto> {
+  public async getAllSecondSales(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<SecondSaleListResponseDto> {
     try {
-      const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${JSON.stringify(queryOptions)}`;
+      const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`;
       const cached = await this.cacheService.get<SecondSaleListResponseDto>(cacheKey);
       if (cached) return cached;
 
@@ -380,6 +381,8 @@ console.log(document.id)
         userId,
         DocumentTypeEnum.SECOND_SALE,
         queryOptions,
+        false,
+        isAdmin,
       );
       const { search } = queryOptions;
       const typedDocuments = data as DocumentWithRelatedData[];

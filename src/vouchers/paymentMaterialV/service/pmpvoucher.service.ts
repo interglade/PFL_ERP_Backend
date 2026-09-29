@@ -1,4 +1,5 @@
 import { id, inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 
 import { PMPVoucher } from '../entity/packingMaterialVoucher.entity';
 import { TYPES } from '../../../types';
@@ -63,8 +64,8 @@ export class PMPVoucherService {
     await Promise.all(tasks);
   }
 
-  public async getAllVouchers(queryOptions: PaginationOptions, userId: string): Promise<{ data: PMPVoucherListItemDto[]; meta: { total: number; page: number; pages: number } }> {
-    const hash = createHash('md5').update(`${userId}:${JSON.stringify(queryOptions)}`).digest('hex');
+  public async getAllVouchers(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<{ data: PMPVoucherListItemDto[]; meta: { total: number; page: number; pages: number } }> {
+    const hash = createHash('md5').update(`${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`).digest('hex');
     const cacheKey = `${this.CACHE_PREFIX}:list:${hash}`;
     const cached = await this.cacheService.get<{ data: PMPVoucherListItemDto[]; meta: { total: number; page: number; pages: number } }>(cacheKey);
     if (cached) return cached;
@@ -74,6 +75,9 @@ export class PMPVoucherService {
       userId,
       DocumentTypeEnum.PACKAGING_MATERIAL_VOUCHER,
       queryOptions,
+      false,
+      false,
+      isAdmin,
     );
 
     const activeDocuments = data as DocumentWithRelatedData[];
@@ -463,7 +467,7 @@ public async getAllRecycleBinVouchers(queryOptions: PaginationOptions, userId: s
     }
   }
 
-  public async createVoucher(voucherData: CreatePMPVoucherDto): Promise<any> {
+  public async createVoucher(voucherData: CreatePMPVoucherDto): Promise<CreatedWithApproval<any>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(voucherData.requestedBy, DocDefEnum.PROCUREMENT);
 
@@ -496,10 +500,10 @@ public async getAllRecycleBinVouchers(queryOptions: PaginationOptions, userId: s
 
       await queryRunner.commitTransaction();
 
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
       await this.invalidateCache();
 
-      return savePmpVoucher;
+      return withApproval(savePmpVoucher, assignment);
     } catch (error: any) {
       await queryRunner.rollbackTransaction();
       throw error;

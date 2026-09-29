@@ -8,6 +8,8 @@ import { NextFunction } from 'express';
 import AppError from '../../../utils/appError'; // Custom error handling middleware
 
 import { captureUser, deserializeUser, requireUser } from '../../../middleware/deserializeUser';
+import { isAdminUser } from '../../../utils/isAdminUser';
+import { createdMessage } from '../../../utils/approvalMessage';
 
 
 import logger from '../../../utils/logger';
@@ -60,7 +62,7 @@ export class TPVoucherController {
      
       tpVoucherData.requestedBy = res.locals.user.id;
       tpVoucherData.requestingDepartment = res.locals.user.selectDepartment;
-      const createdVoucher = await this.tpVoucherService.createTPVoucher(tpVoucherData);
+      const { record: createdVoucher, sentTo } = await this.tpVoucherService.createTPVoucher(tpVoucherData);
       if (!createdVoucher) {
         logger.error('TPVoucher creation failed');
         ControllerLogger.logError('Transport Payment Voucher creation', new AppError(400, "TPVoucher could not be created"), req, res);
@@ -97,7 +99,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
           
       res.status(201).json({
         status: 'success',
-        message: 'Transport Payment Voucher created successfully',
+        message: createdMessage('Transport Payment Voucher', 'VoucherNo', createdVoucher.voucherNo, sentTo),
         //data: createdVoucher,
       });
     } catch (error) {
@@ -125,7 +127,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
       entityName: 'Transport Payment Voucher',
       definition: TRANSPORT_PAYMENT_VOUCHER_EXPORT,
       list: { documentType: FilterDocumentType.TRANSPORT_PAYMENT_VOUCHER, searchFields: ['"voucher.voucherNo",'] },
-      fetchList: (queryOptions, userId) => this.tpVoucherService.getAllTPVouchers(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.tpVoucherService.getAllTPVouchers(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -149,7 +151,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
             };
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.TRANSPORT_PAYMENT_VOUCHER);
-      const vouchers = await this.tpVoucherService.getAllTPVouchers(queryOptions, userId);
+      const vouchers = await this.tpVoucherService.getAllTPVouchers(queryOptions, userId, isAdminUser(res));
       // if (!vouchers.length) {
       //   return next(new AppError(404, 'No Transport Payment Vouchers found'));
       // }

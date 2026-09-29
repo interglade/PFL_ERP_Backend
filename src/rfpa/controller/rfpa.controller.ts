@@ -32,6 +32,7 @@ import { DocumentExportService } from '../../excel/export/documentExport.service
 import { RFPA_EXPORT } from '../excel/rfpa.export';
 import { applyDocumentListFilters } from '../../global/filters/documentListOptions';
 import { DocumentTypeEnum as FilterDocumentType } from '../../approvalFlow/entity/docuemnt.entity';
+import { isAdminUser } from '../../utils/isAdminUser';
 
 @controller('/rfpa', deserializeUser, requireUser)
 export class RfpaController {
@@ -43,7 +44,7 @@ export class RfpaController {
     @inject(TYPES.UserActivityLogService) private activityLogService: UserActivityLogService,
     @inject(TYPES.DocumentExportService)
     private readonly documentExportService: DocumentExportService,
-    
+
   ) { }
 
 
@@ -204,7 +205,7 @@ export class RfpaController {
         );
       }
 
-      const newRfpa = await this.rfpaService.createRfpa(rfpaData);
+      const { rfpa: newRfpa, sentTo } = await this.rfpaService.createRfpa(rfpaData);
       logger.info('RFPA created successfully: %o', newRfpa);
 
       ControllerLogger.logSuccess('RFPA created', newRfpa.id, req, res);
@@ -241,9 +242,13 @@ export class RfpaController {
           }).catch(() => {});
 
 
+      const message = sentTo
+        ? `RFPA with RFPANo=${newRfpa.rfpaId} is created successfully and sent to ${sentTo} for approval.`
+        : `RFPA with RFPANo=${newRfpa.rfpaId} is created successfully.`;
+
       res.status(201).json({
         status: 'success',
-        message: 'RFPA created successfully',
+        message,
         data: newRfpa,
       });
     } catch (error) {
@@ -728,7 +733,7 @@ public async getRfpaByIdByUpdate(
       entityName: 'RFPA',
       definition: RFPA_EXPORT,
       list: { documentType: FilterDocumentType.RFPA },
-      fetchList: (queryOptions, userId) => this.rfpaService.getAllRfpa(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.rfpaService.getAllRfpa(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -774,7 +779,7 @@ public async getRfpaByIdByUpdate(
 
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.RFPA);
-      const rfpas: RfpaListResponseDto = await this.rfpaService.getAllRfpa(queryOptions, userId);
+      const rfpas: RfpaListResponseDto = await this.rfpaService.getAllRfpa(queryOptions, userId, isAdminUser(res));
 
       if (!rfpas || rfpas.data.length === 0) {
         logger.warn('No RFPAS found for this user.');
@@ -822,7 +827,7 @@ public async getRfpaByIdByUpdate(
       logger.info(`Fetching RFPA with Document ID`);
 
       const userId = res.locals.user.id;
-      const rfpa: RfpaDocumentViewResponseDto | null = await this.rfpaService.getRfpaByIdForView(docid, userId);
+      const rfpa: RfpaDocumentViewResponseDto | null = await this.rfpaService.getRfpaByIdForView(docid, userId, isAdminUser(res));
       if (!rfpa) {
         ControllerLogger.logError(
           'RFPA view',

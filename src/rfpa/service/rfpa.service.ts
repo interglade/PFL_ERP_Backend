@@ -33,7 +33,7 @@ import { DocumentbService, DocumentWithRelatedData } from '../../approvalFlow/se
 import { DocSingalApproverService } from '../../approvalFlow/service/DocSingalApproverService.service';
 import { ApprovalFlowService } from '../../approvalFlow/service/approvalFlow.service';
 import { DocumentbRepository } from '../../approvalFlow/repository/documentb.repository';
-import { CreateRfpaDto, RfpaDocumentViewResponseDto, RfpaListResponseDto, RfpaNumbersResponseDto, RfpaRecycleBinResponseDto, RfpaUpdateFormDto, UpdateRfpaDto } from '../dto/rfpa.dto';
+import { CreateRfpaDto, CreateRfpaResultDto, RfpaDocumentViewResponseDto, RfpaListResponseDto, RfpaNumbersResponseDto, RfpaRecycleBinResponseDto, RfpaUpdateFormDto, UpdateRfpaDto } from '../dto/rfpa.dto';
 import { PaymentInfoForRFPA } from '../entity/rfpaPayementInfo.entity';
 import { RFPAProduct } from '../entity/rfpaProduct.entity';
 import { Company } from '../../company/entity/company.entity';
@@ -43,6 +43,7 @@ import { Farmer } from '../../farmer/entity/farmer.entity';
 import { Product } from '../../product/createproduct/entity/product.entity';
 import { ProductVarient } from '../../product/productVarient/entity/productVarient.entity';
 import { UOM } from '../../uom/entity/uom.entity';
+import { formatUserNames } from '../../utils/userNames';
 
 export interface RFPAWithRelatedData extends RFPA {
   relatedData?: any;
@@ -127,7 +128,7 @@ export class RfpaService {
     }
   }
 
-  async createRfpa(rfpaData: CreateRfpaDto & Record<string, any>): Promise<RFPA> {
+  async createRfpa(rfpaData: CreateRfpaDto & Record<string, any>): Promise<CreateRfpaResultDto> {
     // Check if approval flow exists for the user
     if (!rfpaData.createdBy) {
       throw new AppError(400, 'createdBy field is required for approval flow validation');
@@ -219,10 +220,10 @@ export class RfpaService {
 
       await queryRunner.commitTransaction();
 
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
 
       await this.invalidateCache();
-      return savedRfpa;
+      return { rfpa: savedRfpa, sentTo: formatUserNames(assignment?.users) };
     } catch (error: any) {
       await queryRunner.rollbackTransaction();
       logger.error('Error creating RFPA:', error);
@@ -788,8 +789,8 @@ export class RfpaService {
 
 
 
-  public async getAllRfpa(queryOptions: PaginationOptions, userId: string): Promise<RfpaListResponseDto> {
-    const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${JSON.stringify(queryOptions)}`;
+  public async getAllRfpa(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<RfpaListResponseDto> {
+    const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -798,6 +799,7 @@ export class RfpaService {
       DocumentTypeEnum.RFPA,
       false,
       queryOptions,
+      isAdmin,
     );
     const { search } = queryOptions;
     const paginatedResult = await buildQueryFromArray(queryBuilder, queryOptions);
@@ -910,8 +912,8 @@ export class RfpaService {
 
 
 
-  public async getRfpaByIdForView(docid: string, userId: string): Promise<RfpaDocumentViewResponseDto | null> {
-    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid, userId)
+  public async getRfpaByIdForView(docid: string, userId: string, isAdmin: boolean = false): Promise<RfpaDocumentViewResponseDto | null> {
+    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid, userId, isAdmin)
     if (!document) {
       return null;
     }

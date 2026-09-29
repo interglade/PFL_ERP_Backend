@@ -288,6 +288,13 @@ import { DocSingalApproverService } from "./approvalFlow/service/DocSingalApprov
 import { AdminDashboardService } from "./dashboard/service/adminDashboardService.service";
 import { WeeklyBusinessPlanService } from "./dashboard/service/weeklyBusinessPlan.service";
 import { AdminDashboardController } from "./dashboard/controller/adminDashboard.controller";
+import { AdminControlCenterController } from "./adminControlCenter/controller/adminControlCenter.controller";
+import { AccFiltersService } from "./adminControlCenter/service/accFilters.service";
+import { AccOverviewService } from "./adminControlCenter/service/accOverview.service";
+import { AccPurchaseService } from "./adminControlCenter/service/accPurchase.service";
+import { AccSalesService } from "./adminControlCenter/service/accSales.service";
+import { AccDocumentsService } from "./adminControlCenter/service/accDocuments.service";
+import { AccUsersService } from "./adminControlCenter/service/accUsers.service";
 import { ProductVarientRepository } from "./product/productVarient/repository/varients.repository";
 import { ProductVarientsService } from "./product/productVarient/service/varients.service";
 import { VarientsController } from "./product/productVarient/controller/varient.controller";
@@ -1359,4 +1366,13 @@ container.bind<GrnProductHistoryRepository>(TYPES.GrnProductHistoryRepository).t
   return dataSource.getRepository(GrnProductHistory).extend(GrnProductHistoryRepository);
 }).inRequestScope();
 container.bind<GrnProductHistoryService>(TYPES.GrnProductHistoryService).to(GrnProductHistoryService).inSingletonScope();
+
+// Admin Control Center dashboard
+container.bind<AccFiltersService>(TYPES.AccFiltersService).to(AccFiltersService).inSingletonScope();
+container.bind<AccOverviewService>(TYPES.AccOverviewService).to(AccOverviewService).inSingletonScope();
+container.bind<AccPurchaseService>(TYPES.AccPurchaseService).to(AccPurchaseService).inSingletonScope();
+container.bind<AccSalesService>(TYPES.AccSalesService).to(AccSalesService).inSingletonScope();
+container.bind<AccDocumentsService>(TYPES.AccDocumentsService).to(AccDocumentsService).inSingletonScope();
+container.bind<AccUsersService>(TYPES.AccUsersService).to(AccUsersService).inSingletonScope();
+container.bind<AdminControlCenterController>(TYPES.AdminControlCenterController).to(AdminControlCenterController).inSingletonScope();
 export { container };

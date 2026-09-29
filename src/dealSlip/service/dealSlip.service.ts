@@ -1,4 +1,5 @@
 import { inject, injectable } from "inversify";
+import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 import { TYPES } from "../../types";
 import { DealSlipRepository } from "../repository/dealSlip.repository";
 
@@ -207,7 +208,7 @@ export class DealSlipService {
     }
   }
 
-  async createDealSlip(dealSlipData: CreateDealSlipDto & Record<string, any>): Promise<DealSlip> {
+  async createDealSlip(dealSlipData: CreateDealSlipDto & Record<string, any>): Promise<CreatedWithApproval<DealSlip>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(dealSlipData.requestedBy, DocDefEnum.PROCUREMENT);
 
@@ -262,10 +263,10 @@ export class DealSlipService {
 
           await queryRunner.commitTransaction();
 
-          await this.documentbService.startApprovalFlow(document.id);
+          const assignment = await this.documentbService.startApprovalFlow(document.id);
           await this.invalidateDealSlipCache();
 
-                          return savedDealSlip;
+                          return withApproval(savedDealSlip, assignment);
         } catch (error: any) {
           await queryRunner.rollbackTransaction();
           throw error;
@@ -501,8 +502,8 @@ public async deleteDealSlip(dealSlipId: string): Promise<{ dealSlipNo: string } 
   return { dealSlipNo: dealSlip.dealSlipNo };
 }
 
- public async getAllDealSlips(queryOptions: PaginationOptions, userId: string): Promise<DealSlipListResponseDto> {
-  const key = `${CACHE_PREFIX}:list:${userId}:${JSON.stringify(queryOptions)}`;
+ public async getAllDealSlips(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<DealSlipListResponseDto> {
+  const key = `${CACHE_PREFIX}:list:${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`;
   const cached = await this.cacheService.get<any>(key);
   if (cached) return cached;
 
@@ -511,6 +512,7 @@ public async deleteDealSlip(dealSlipId: string): Promise<{ dealSlipNo: string } 
     DocumentTypeEnum.DEAL_SLIP,
     false,
     queryOptions,
+    isAdmin,
   );
   const data1 = await buildQueryFromArray(data, queryOptions);
   const { search } = queryOptions;
@@ -683,12 +685,14 @@ public async getRecycleBinDealSlips(queryOptions: PaginationOptions, userId: str
   await this.cacheService.set(recycleKey, recycleResponse, CACHE_TTL);
   return recycleResponse;
 }
-public async getDealSlipByIdForView(docid: string, userId: string): Promise<DealSlipDocumentViewDto | null> {
-    const key = `${CACHE_PREFIX}:docview:${docid}`;
+public async getDealSlipByIdForView(docid: string, userId: string, isAdmin: boolean = false): Promise<DealSlipDocumentViewDto | null> {
+    // Keyed by userId as well: access is checked per user, so a shared key would
+    // serve the document to users who are not allowed to see it.
+    const key = `${CACHE_PREFIX}:docview:${docid}:${userId}`;
     const cached = await this.cacheService.get<any>(key);
     if (cached) return cached;
 
-    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid, userId);
+    const document = await this.docSingalApproverService.getSingleApprovalDocumentById(docid, userId, isAdmin);
     if (!document) return null;
 
     const id = document.documentTypeId;
@@ -769,7 +773,7 @@ public async deleteMultipleDealSlips(ids: string[]): Promise<BulkDeleteDealSlipR
       this.cacheService.del(`${CACHE_PREFIX}:id:${id}`),
       this.cacheService.del(`${CACHE_PREFIX}:view:${id}`),
       this.cacheService.del(`${CACHE_PREFIX}:update:${id}`),
-      this.cacheService.del(`${CACHE_PREFIX}:docview:${id}`),
+      this.cacheService.invalidatePattern(`${CACHE_PREFIX}:docview:${id}:*`),
     ]),
     this.cacheService.invalidatePattern(`${CACHE_PREFIX}:list:*`),
     this.cacheService.invalidatePattern(`${CACHE_PREFIX}:recycle:*`),

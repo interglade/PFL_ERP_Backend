@@ -5,6 +5,7 @@
   "scripts": {
     "test": "jest",
     "start": " ts-node-dev --respawn --transpile-only --exit-child src/app.ts",
+    "start:nowatch": "ts-node --transpile-only src/app.ts",
     "typeorm": "typeorm-ts-node-commonjs",
     "build": "tsc",
     "typeorm:migrate": "ts-node --transpile-only ./node_modules/typeorm/cli.js migration:run -d src/utils/data-source.ts",

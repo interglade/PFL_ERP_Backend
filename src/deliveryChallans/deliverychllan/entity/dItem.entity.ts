@@ -1,4 +1,4 @@
-import { Entity, Column, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
 
 import { DeliveryChallanPurchase } from './deliveryChallan.entity';
 import Model from '../../../global/model.entity';
@@ -8,6 +8,7 @@ import { UOM } from '../../../uom/entity/uom.entity';
 import { PackingMaterial } from '../../../packingMaterial/entity/packingMaterial.entity';
 
 @Entity('item')
+@Index(['deliveryChallan'])
 export class Item extends Model {
 
   @ManyToOne(() => Product, {

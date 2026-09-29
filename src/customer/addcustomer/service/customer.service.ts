@@ -500,6 +500,49 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
     return result;
   }
 
+  // Loads only the columns needed for the attachments view.
+  async getCustomerAttachments(id: string): Promise<Customer | null> {
+    return this.customerRepository
+      .createQueryBuilder('customer')
+      .leftJoin('customer.bankDetails', 'bankDetails')
+      .leftJoin('customer.statutoryDetails', 'statutoryDetails')
+      .leftJoin('customer.billingDetails', 'billingDetails')
+      .leftJoin('customer.deliveryDetails', 'deliveryDetails')
+      .leftJoin('customer.paymentTerms', 'paymentTerms')
+      .leftJoin('customer.keyMobileNumbers', 'keyMobileNumbers')
+      .select([
+        'customer.id',
+        'customer.customerCode',
+        'customer.organisationName',
+        'customer.customerImage',
+        'bankDetails.id',
+        'bankDetails.cancelledChequeCopy',
+        'bankDetails.bankStatementCopy',
+        'statutoryDetails.id',
+        'statutoryDetails.panCopy',
+        'statutoryDetails.aadharCopy',
+        'statutoryDetails.billBookCopy',
+        'statutoryDetails.incorpoCertificateCopy',
+        'statutoryDetails.regiCertificateCopy',
+        'billingDetails.id',
+        'billingDetails.billingFormatCopy',
+        'billingDetails.billingAddressProofCopy',
+        'deliveryDetails.id',
+        'deliveryDetails.deliveryAddressProofCopy',
+        'paymentTerms.id',
+        'paymentTerms.lc',
+        'paymentTerms.bg',
+        'paymentTerms.docEvidenceCopy',
+        'keyMobileNumbers.id',
+        'keyMobileNumbers.mandiLicenceCopy',
+        'keyMobileNumbers.regiCopy',
+        'keyMobileNumbers.electricityBillCopy',
+        'keyMobileNumbers.visitingCardCopy',
+      ])
+      .where('customer.id = :id', { id })
+      .getOne();
+  }
+
   async findCustomerByIdforview(id: string): Promise<CustomerViewResponseDto> {
     const key = `${CACHE_PREFIX}:view:${id}`;
     const cached = await this.cacheService.get<any>(key);

@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 import { TYPES } from '../../../types';
 import { OtherDeliveryChallanRepository } from '../repository/otherDeliveryChallan.repository';
 import logger from '../../../utils/logger';
@@ -80,7 +81,7 @@ export class OtherDeliveryChallanService {
     }
   }
 
-  async create(data: CreateODCDto & Record<string, any>): Promise<any> {
+  async create(data: CreateODCDto & Record<string, any>): Promise<CreatedWithApproval<any>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(data.createdBy, DocDefEnum.OPERATION);
 
@@ -155,10 +156,10 @@ export class OtherDeliveryChallanService {
       await queryRunner.commitTransaction();
 
       // Start approval flow after commit so challan is visible to other DB connections
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
       await this.invalidateCache();
 
-      return savedChallan;
+      return withApproval(savedChallan, assignment);
     } catch (error: any) {
       // Rollback transaction - undo all changes
       await queryRunner.rollbackTransaction();
@@ -389,8 +390,8 @@ export class OtherDeliveryChallanService {
 
 
   
-  async getAll(queryOptions: PaginationOptions, userId: string): Promise<ODCListResponseDto> {
-    const hash = createHash('md5').update(`${userId}:${JSON.stringify(queryOptions)}`).digest('hex');
+  async getAll(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<ODCListResponseDto> {
+    const hash = createHash('md5').update(`${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`).digest('hex');
     const cacheKey = `${this.CACHE_PREFIX}:list:${hash}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
@@ -399,6 +400,8 @@ export class OtherDeliveryChallanService {
       userId,
       DocumentTypeEnum.DC_TYPE_OTHER,
       queryOptions,
+      false,
+      isAdmin,
     );
 
     const typedDocuments = data as DocumentWithRelatedData[];

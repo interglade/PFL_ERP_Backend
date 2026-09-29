@@ -523,6 +523,77 @@ async approveCustomer(
     }
   }
 
+  // All attachments of a customer in one call, grouped by form section,
+  // with the stored URL and a JWT-gated download link via /files/download.
+  @httpGet('/attachments/:id')
+  public async getCustomerAttachments(
+    @requestParam('id') id: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const customer = await this.customerService.getCustomerAttachments(id);
+      if (!customer) {
+        ControllerLogger.logNotFound('Customer', id, req, res);
+        return next(new AppError(404, 'Customer not found'));
+      }
+
+      const bank = customer.bankDetails;
+      const statutory = customer.statutoryDetails;
+      const billing = customer.billingDetails;
+      const delivery = customer.deliveryDetails;
+      const payment = customer.paymentTerms;
+      const keyMobile = customer.keyMobileNumbers;
+
+      const slots = [
+        { section: 'Customer', key: 'customerImage', label: 'Customer Image', url: customer.customerImage },
+        { section: 'Bank Details', key: 'cancelledChequeCopy', label: 'Cancelled Cheque Copy', url: bank?.cancelledChequeCopy },
+        { section: 'Bank Details', key: 'bankStatementCopy', label: 'Bank Statement Copy', url: bank?.bankStatementCopy },
+        { section: 'Statutory Details', key: 'panCopy', label: 'PAN Copy', url: statutory?.panCopy },
+        { section: 'Statutory Details', key: 'aadharCopy', label: 'Aadhar Copy', url: statutory?.aadharCopy },
+        { section: 'Statutory Details', key: 'billBookCopy', label: 'Bill Book Copy', url: statutory?.billBookCopy },
+        { section: 'Statutory Details', key: 'incorpoCertificateCopy', label: 'Incorporation Certificate Copy', url: statutory?.incorpoCertificateCopy },
+        { section: 'Statutory Details', key: 'regiCertificateCopy', label: 'Registration Certificate Copy', url: statutory?.regiCertificateCopy },
+        { section: 'Billing Details', key: 'billingFormatCopy', label: 'Billing Format Copy', url: billing?.billingFormatCopy },
+        { section: 'Billing Details', key: 'billingAddressProofCopy', label: 'Billing Address Proof Copy', url: billing?.billingAddressProofCopy },
+        { section: 'Delivery Details', key: 'deliveryAddressProofCopy', label: 'Delivery Address Proof Copy', url: delivery?.deliveryAddressProofCopy },
+        { section: 'Payment Terms', key: 'lc', label: 'Letter of Credit (LC)', url: payment?.lc },
+        { section: 'Payment Terms', key: 'bg', label: 'Bank Guarantee (BG)', url: payment?.bg },
+        { section: 'Payment Terms', key: 'docEvidenceCopy', label: 'Document Evidence Copy', url: payment?.docEvidenceCopy },
+        { section: 'Key Mobile Numbers', key: 'mandiLicenceCopy', label: 'Mandi Licence Copy', url: keyMobile?.mandiLicenceCopy },
+        { section: 'Key Mobile Numbers', key: 'regiCopy', label: 'Registration Copy', url: keyMobile?.regiCopy },
+        { section: 'Key Mobile Numbers', key: 'electricityBillCopy', label: 'Electricity Bill Copy', url: keyMobile?.electricityBillCopy },
+        { section: 'Key Mobile Numbers', key: 'visitingCardCopy', label: 'Visiting Card Copy', url: keyMobile?.visitingCardCopy },
+      ];
+
+      const attachments = slots.map((slot) => ({
+        section: slot.section,
+        key: slot.key,
+        label: slot.label,
+        available: !!slot.url,
+        url: slot.url || null,
+        fileName: slot.url ? decodeURIComponent(slot.url.split('/').pop() || '') : null,
+        downloadUrl: slot.url ? `/files/download?url=${encodeURIComponent(slot.url)}` : null,
+      }));
+
+      ControllerLogger.logView('Customer attachments', id, req, res);
+      res.status(200).json({
+        status: 'success',
+        data: {
+          customerId: customer.id,
+          customerCode: customer.customerCode,
+          organisationName: customer.organisationName,
+          totalAttachments: attachments.filter((a) => a.available).length,
+          attachments,
+        },
+      });
+    } catch (err) {
+      ControllerLogger.logError('Get Customer Attachments', err, req, res);
+      next(err);
+    }
+  }
+
   @httpGet('/:id')
   public async getCustomerById(
     @requestParam('id') id: string,

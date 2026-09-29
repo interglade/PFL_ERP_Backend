@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 import { CustomerDeliveryChallanRepository } from '../repository/customerDeliveryChallan.repository';
 import { TYPES } from '../../../types';
 import logger from '../../../utils/logger';
@@ -135,7 +136,7 @@ export class CustomerDeliveryChallanService {
     }
   }
 
-  async create(data: CreateCustomerDeliveryChallanDto & Record<string, any>, requestedBy: string): Promise<CustomerDeliveryChallan> {
+  async create(data: CreateCustomerDeliveryChallanDto & Record<string, any>, requestedBy: string): Promise<CreatedWithApproval<CustomerDeliveryChallan>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(requestedBy, DocDefEnum.SALE);
 
@@ -307,10 +308,10 @@ export class CustomerDeliveryChallanService {
       await queryRunner.commitTransaction();
 
       // Start approval flow after commit so challan is visible to other DB connections
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
       await this.invalidateCDCCache();
 
-      return actualChallan;
+      return withApproval(actualChallan, assignment);
 
     } catch (error: any) {
       // Rollback transaction - undo all changes
@@ -589,8 +590,9 @@ export class CustomerDeliveryChallanService {
   public async getAllCustomerDeliveryChallans(
     queryOptions: PaginationOptions,
     userId: string,
+    isAdmin: boolean = false,
   ): Promise<CustomerDeliveryChallanListResponseDto> {
-    const key = `${CACHE_PREFIX}:list:${userId}:${JSON.stringify(queryOptions)}`;
+    const key = `${CACHE_PREFIX}:list:${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`;
     const cached = await this.cacheService.get<any>(key);
     if (cached) return cached;
 
@@ -599,6 +601,8 @@ export class CustomerDeliveryChallanService {
         userId,
         DocumentTypeEnum.DC_TYPE_CUSTOMER,
         queryOptions,
+        false,
+        isAdmin,
       );
 
     const typedDocuments = data as DocumentWithRelatedData[];

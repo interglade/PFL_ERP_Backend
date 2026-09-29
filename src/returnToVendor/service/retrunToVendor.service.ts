@@ -1,4 +1,5 @@
 import { inject, injectable } from "inversify";
+import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 import { TYPES } from "../../types";
 import { ProductVarientRepository } from "../../product/productVarient/repository/varients.repository";
 import { DataSource, In } from "typeorm";
@@ -23,7 +24,7 @@ import {
 } from "../dto/returnToVendor.dto";
 import { BulkDeleteResultDto } from "../../global/general.dto";
 import { GrnRepository } from "../../grn/repository/grn.repository";
-import { DocumentbService, DocumentWithRelatedData } from "../../approvalFlow/service/documentb.service";
+import { ApprovalAssignment, DocumentbService, DocumentWithRelatedData } from "../../approvalFlow/service/documentb.service";
 import { DocDoubleApproverService } from "../../approvalFlow/service/docDoubleApprover.service";
 import { ReturnToVendor } from "../entity/returnToVendor.entity";
 
@@ -106,7 +107,7 @@ export class ReturnToVendorService {
     }
   }
 
-    public async createReturn(returnData: CreateRTVDto & Record<string, any>, requestedBy: string, clientIp?: string): Promise<ReturnToVendor> {
+    public async createReturn(returnData: CreateRTVDto & Record<string, any>, requestedBy: string, clientIp?: string): Promise<CreatedWithApproval<ReturnToVendor>> {
       // Check if approval flow exists for the user
       await this.checkApprovalFlowExists(requestedBy, DocDefEnum.OPERATION);
 
@@ -174,15 +175,16 @@ export class ReturnToVendorService {
           // RTV's document reaches DocumentStatus.COMPLETE — see
           // InventoryMovementService.applyReturnToVendor().
 
+          let assignment: ApprovalAssignment | null = null;
           try {
-            await this.documentbService.startApprovalFlow(document.id);
+            assignment = await this.documentbService.startApprovalFlow(document.id);
           } catch (approvalError: any) {
             logger.warn('Approval flow not started (no flow configured):', approvalError?.message);
           }
 
           UserLogger.logRfpaCreated(savedreturn.id, requestedBy, clientIp);
           await this.invalidateCache();
-          return savedreturn;
+          return withApproval(savedreturn, assignment);
 
       } catch (error: any) {
           try {
@@ -195,8 +197,8 @@ export class ReturnToVendorService {
       }
     }
 
-    public async getAll(queryOptions: PaginationOptions, userId: string): Promise<RTVListResponseDto> {
-        const hash = createHash('md5').update(`${userId}:${JSON.stringify(queryOptions)}`).digest('hex');
+    public async getAll(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<RTVListResponseDto> {
+        const hash = createHash('md5').update(`${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`).digest('hex');
         const cacheKey = `${this.CACHE_PREFIX}:list:${hash}`;
         const cached = await this.cacheService.get<any>(cacheKey);
         if (cached) return cached;
@@ -205,6 +207,8 @@ export class ReturnToVendorService {
             userId,
             DocumentTypeEnum.RETURN_TO_VENDOR,
             queryOptions,
+            false,
+            isAdmin,
         );
 
         const { search } = queryOptions;

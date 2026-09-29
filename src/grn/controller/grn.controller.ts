@@ -21,6 +21,8 @@ import {
   deserializeUser,
   requireUser,
 } from '../../middleware/deserializeUser';
+import { isAdminUser } from '../../utils/isAdminUser';
+import { createdMessage } from '../../utils/approvalMessage';
 import { Source, CompanyName } from '../../utils/status.enum';
 
 import logger from '../../utils/logger';
@@ -174,7 +176,7 @@ console.log(req.body);
 
       //console.log("Final GRN Data:", grnData);
 
-      const newGrn = await this.grnService.createGrn(grnData);
+      const { record: newGrn, sentTo } = await this.grnService.createGrn(grnData);
       if (!newGrn) {
         
         return next(new AppError(400, 'GRN could not be created'));
@@ -266,7 +268,7 @@ console.log(req.body);
 
       res.status(201).json({
         status: 'success',
-        message: 'GRN created successfully',
+        message: createdMessage('GRN', 'GRNNo', newGrn.grnNo, sentTo),
         //data: newGrn,
       });
     } catch (error) {
@@ -360,7 +362,7 @@ console.log(req.body);
       entityName: 'GRN',
       definition: GRN_EXPORT,
       list: { documentType: FilterDocumentType.GRN, searchFields: ['grn.grnNo'], filterKeys: ['companyName', 'source', 'grnType', 'locationType'] },
-      fetchList: (queryOptions, userId) => this.grnService.getAllGrns(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -398,7 +400,7 @@ console.log(req.body);
       };
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.GRN);
-      const grns = await this.grnService.getAllGrns(queryOptions, userId);
+      const grns = await this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res));
       //console.log(grns)
       if (!grns) {
         
@@ -799,6 +801,12 @@ console.log(req.body)
       const result = await this.grnService.updateAmountStatus(id, status as any);
 
       ControllerLogger.logSuccess('GRN amount status updated', id, req, res);
+
+      // Recorded for the admin dashboard's recent activity; never blocks the response.
+      const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName || ''}`.trim() || res.locals.user.username || 'Unknown User';
+      void this.logUserActivity(req, res, ActivityAction.UPDATE,
+        `${userName} marked GRN as ${status === 'paid' ? 'Paid' : 'Unpaid'}`,
+        { entityId: id, metadata: { event: 'amount-status', ammountStatus: status } });
 
       res.status(200).json({
         status: 'success',

@@ -21,6 +21,8 @@ import {
   requireUser,
   captureUser,
 } from '../../middleware/deserializeUser';
+import { isAdminUser } from '../../utils/isAdminUser';
+import { createdMessage } from '../../utils/approvalMessage';
 import { PaginationOptions } from '../../utils/pagination';
 
 import { PdfGeneratorService } from '../../utils/pdfGenerator';
@@ -74,7 +76,7 @@ export class FinalInvoiceController {
       entityName: 'Final Invoice',
       definition: FINAL_INVOICE_EXPORT,
       list: { documentType: FilterDocumentType.FINAL_INVOICE },
-      fetchList: (queryOptions, userId) => this.finalInvoiceService.getAll(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.finalInvoiceService.getAll(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -99,10 +101,7 @@ export class FinalInvoiceController {
 
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.FINAL_INVOICE);
-      const invoices = await this.finalInvoiceService.getAll(
-        queryOptions,
-        userId
-      );
+      const invoices = await this.finalInvoiceService.getAll(queryOptions, userId, isAdminUser(res));
 
       if (!invoices || invoices.data.length === 0) {
         ControllerLogger.logOperationFailed('Get All', 'Final Invoices', 'No records found', req, res);
@@ -204,7 +203,7 @@ export class FinalInvoiceController {
       const createdBy = res.locals.user.id;
       const invoiceData: CreateInvoiceDto = req.body;
 
-      const invoice = await this.finalInvoiceService.create(
+      const { record: invoice, sentTo } = await this.finalInvoiceService.create(
         deliveryChallanId,
         invoiceData,
         createdBy
@@ -249,7 +248,7 @@ export class FinalInvoiceController {
       
       res.status(201).json({
         status: 'success',
-        message: 'Final invoice created successfully',
+        message: createdMessage('Final Invoice', 'InvoiceNo', invoice.invoiceNo, sentTo),
         data: invoice,
       });
     } catch (err) {
@@ -424,6 +423,24 @@ export class FinalInvoiceController {
       const result = await this.finalInvoiceService.updateAmountStatus(id, status as any);
 
       ControllerLogger.logSuccess('Invoice amount status updated', id, req, res);
+
+      // Recorded for the admin dashboard's recent activity; never blocks the response.
+      const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName || ''}`.trim() || res.locals.user.username || 'Unknown User';
+      this.activityLogService.logActivity({
+        userId: res.locals.user.id,
+        userName,
+        action: ActivityAction.UPDATE,
+        module: ActivityModule.INVOICE,
+        entityName: 'INVOICE',
+        entityId: id,
+        description: `${userName} marked Final Invoice as ${status === 'paid' ? 'Paid' : 'Unpaid'}`,
+        metadata: { event: 'amount-status', ammountStatus: status },
+        ipAddress: req.ip || '',
+        userAgent: req.get('user-agent'),
+        endpoint: req.originalUrl,
+        httpMethod: req.method,
+        statusCode: 200,
+      }).catch(() => {});
 
       res.status(200).json({
         status: 'success',

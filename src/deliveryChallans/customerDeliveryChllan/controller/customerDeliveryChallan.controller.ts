@@ -22,6 +22,8 @@ import { PaginationOptions } from '../../../utils/pagination';
 import { uploadAttachments } from '../../../middleware/upload.middleware';
 import { setAttachmentUrls } from '../../../utils/fileUploadHelper';
 import { captureUser, deserializeUser, requireUser } from '../../../middleware/deserializeUser';
+import { isAdminUser } from '../../../utils/isAdminUser';
+import { createdMessage } from '../../../utils/approvalMessage';
 import { CustomerDeliveryChallanService } from '../service/customerDeliveryChallan.service';
 import { NotificationService } from '../../../notification/service/notification.service';
 import { UserActivityLogService } from '../../../employeeActivity/service/userActivityLog.service';
@@ -59,7 +61,7 @@ export class CustomerDeliveryChallanController {
 
       req.body.createdBy = res.locals.user.id;
 
-      const challan = await this.customerDeliveryChallanService.create(
+      const { record: challan, sentTo } = await this.customerDeliveryChallanService.create(
         req.body as CreateCustomerDeliveryChallanDto & Record<string, any>,
         req.body.createdBy
       );
@@ -103,7 +105,7 @@ export class CustomerDeliveryChallanController {
       ControllerLogger.logSuccess('Customer Delivery Challan created', challan.id, req, res);
       res.status(201).json({
         status: 'success',
-        message: 'Customer delivery challan created successfully',
+        message: createdMessage('Customer Delivery Challan', 'ChallanNo', challan.challanNo, sentTo),
         data: challan,
       });
     } catch (err) {
@@ -213,7 +215,7 @@ export class CustomerDeliveryChallanController {
       entityName: 'Customer Delivery Challan',
       definition: CUSTOMER_DELIVERY_CHALLAN_EXPORT,
       list: { documentType: FilterDocumentType.DC_TYPE_CUSTOMER },
-      fetchList: (queryOptions, userId) => this.customerDeliveryChallanService.getAllCustomerDeliveryChallans(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.customerDeliveryChallanService.getAllCustomerDeliveryChallans(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -239,10 +241,7 @@ export class CustomerDeliveryChallanController {
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.DC_TYPE_CUSTOMER);
       const challans: CustomerDeliveryChallanListResponseDto =
-        await this.customerDeliveryChallanService.getAllCustomerDeliveryChallans(
-          queryOptions,
-          userId
-        );
+        await this.customerDeliveryChallanService.getAllCustomerDeliveryChallans(queryOptions, userId, isAdminUser(res));
 
       if (!challans || challans.data.length === 0) {
         ControllerLogger.logOperationFailed('Get All', 'Customer Delivery Challans', 'No records found', req, res);

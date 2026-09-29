@@ -47,6 +47,12 @@ export interface DocumentWithRelatedData extends Documentb {
   relatedData?: any;
 }
 
+/** Who a new document was sent to when its approval flow started. */
+export interface ApprovalAssignment {
+  role: 'verifier' | 'approver';
+  users: User[];
+}
+
 @injectable()
 export class DocumentbService {
   constructor(
@@ -321,7 +327,7 @@ export class DocumentbService {
     }
   }
 
-  async startApprovalFlow(documentId: string): Promise<void> {
+  async startApprovalFlow(documentId: string): Promise<ApprovalAssignment | null> {
    // console.log("Starting approval flow for document ID:", documentId);
     const document = await this.documentbRepository.findOne({
       where: { id: documentId },
@@ -345,7 +351,7 @@ export class DocumentbService {
 
     if (!document.approvalFlow) {
       //console.log('No approval flow configured for document:', documentId);
-      return;
+      return null;
     }
 
     const { approvalFlow, totalAmt, type } = document;
@@ -361,7 +367,7 @@ export class DocumentbService {
       approvalFlow.verifiers.length > 0
     ) {
       await this.assignToUsers(documentId, approvalFlow.verifiers, 'verifier');
-      return;
+      return { role: 'verifier', users: approvalFlow.verifiers };
     }
 
     const approvers = this.getMatchingApproverBlock(
@@ -375,18 +381,20 @@ export class DocumentbService {
         document.approvalFlow.approvers.firstApprover.users;
       //console.log('FirstLevelApprovers', FirstLevelApprovers);
       await this.assignToUsers(documentId, FirstLevelApprovers, 'approver');
-      return;
+      return { role: 'approver', users: FirstLevelApprovers };
     } else if (this.isDoubleApprovalBasedDocument(type) /*&& approvers*/) {
       const firstLevelApprovers =
         document.approvalFlow.approvers.firstApprover.users;
       const secondLevelApprovers =
         document.approvalFlow.approvers.secondApprover.users;
-    
+
       await this.assignToUsers(documentId, firstLevelApprovers, 'approver');
       await this.assignToUsers(documentId, secondLevelApprovers, 'approver');
-      return;
+      // Both levels are assigned, but the document is reported as sent to the first level.
+      return { role: 'approver', users: firstLevelApprovers ?? [] };
     }
     await this.assignToUsers(documentId, approvers, 'approver');
+    return { role: 'approver', users: approvers };
   }
 
   getMatchingApproverBlock(
@@ -461,7 +469,7 @@ export class DocumentbService {
         [DocumentTypeEnum.DEAL_SLIP]: [
           'dealslip:list:*', 'dealslip:all:*', 'dealslip:recycle:*', 'dealslip:nos:*',
           ...(typeId ? [`dealslip:id:${typeId}`, `dealslip:view:${typeId}`, `dealslip:update:${typeId}`] : []),
-          `dealslip:docview:${documentId}`,
+          `dealslip:docview:${documentId}:*`,
         ],
         [DocumentTypeEnum.GRN]: [
           'grn:all:*', 'grn:recycle:*', 'grn:numbers:*',
@@ -1241,7 +1249,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
 
 
 
-  public async getAllDocumentByUserId(userId: string, documentType: string, queryOptions: PaginationOptions, skipPagination: boolean = false, includeDeleted: boolean = false): Promise<any> {
+  public async getAllDocumentByUserId(userId: string, documentType: string, queryOptions: PaginationOptions, skipPagination: boolean = false, includeDeleted: boolean = false, isAdmin: boolean = false): Promise<any> {
 
     if (!Object.values(DocumentTypeEnum).includes(documentType as DocumentTypeEnum)) {
       throw new Error(`Invalid document type: ${documentType}`);
@@ -1271,7 +1279,15 @@ function isWithinRange(min: number | string | null, max: number | string | null,
       .leftJoinAndSelect('document.approvalInfo', 'approvalInfo')
       .leftJoinAndSelect('approvalInfo.firstFinalized', 'firstFinalized')
       .leftJoinAndSelect('approvalInfo.secondFinalized', 'secondFinalized')
-      .where(
+      .where('document.document_type_id IS NOT NULL')
+      .andWhere('document.type = :documentType', { documentType })
+      .andWhere('document.isDeleted = :isDeleted', { isDeleted: includeDeleted })
+      .andWhere(includeDeleted ? 'document.deletedAt IS NOT NULL' : 'document.deletedAt IS NULL');
+
+    // Admin sees every document in every status; everyone else only what their
+    // role in the approval flow allows.
+    if (!isAdmin) {
+      queryBuilder.andWhere(
         new Brackets((qb) => {
           // Creator — नेहमी दिसतो (सर्व statuses)
           qb.where('lastActionBy.id = :userId', { userId })
@@ -1364,11 +1380,8 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             }),
           );
         }),
-      )
-      .andWhere('document.document_type_id IS NOT NULL')
-      .andWhere('document.type = :documentType', { documentType })
-      .andWhere('document.isDeleted = :isDeleted', { isDeleted: includeDeleted })
-      .andWhere(includeDeleted ? 'document.deletedAt IS NOT NULL' : 'document.deletedAt IS NULL');
+      );
+    }
 
     // Document filters (dates, status, parties, products, search, ...) run here, in SQL,
     // inside the visibility rules above and before pagination.

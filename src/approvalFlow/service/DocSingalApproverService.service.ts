@@ -93,7 +93,7 @@ export class DocSingalApproverService {
           this.cacheService.del(`dealslip:view:${documentTypeId}`),
           this.cacheService.del(`dealslip:id:${documentTypeId}`),
           this.cacheService.del(`dealslip:update:${documentTypeId}`),
-          ...(documentId ? [this.cacheService.del(`dealslip:docview:${documentId}`)] : []),
+          ...(documentId ? [this.cacheService.invalidatePattern(`dealslip:docview:${documentId}:*`)] : []),
         );
       } else if (type === DocumentTypeEnum.AQR) {
         // AQR view key includes userId: aqr:view:{docid}:{userId} — use pattern to bust all users
@@ -283,6 +283,7 @@ export class DocSingalApproverService {
       documentType: string,
       includeDeleted: boolean = false,
       queryOptions?: PaginationOptions,
+      isAdmin: boolean = false,
     ): Promise<any> {
       if (!Object.values(DocumentTypeEnum).includes(documentType as DocumentTypeEnum)) {
         throw new Error(`Invalid document type: ${documentType}`);
@@ -298,14 +299,19 @@ export class DocSingalApproverService {
         .where('document.type = :documentType', { documentType })
         .andWhere('document.document_type_id IS NOT NULL')
         .andWhere('document.isDeleted = :isDeleted', { isDeleted: includeDeleted })
-        .andWhere(includeDeleted ? 'document.deletedAt IS NOT NULL' : 'document.deletedAt IS NULL')
-        .andWhere(
+        .andWhere(includeDeleted ? 'document.deletedAt IS NOT NULL' : 'document.deletedAt IS NULL');
+
+      // Admin sees every document; everyone else only the ones they created
+      // or are a first-level approver on.
+      if (!isAdmin) {
+        queryBuilder.andWhere(
           new Brackets((qb) => {
             qb.where('firstApproverUser.id = :userId', { userId })
               .orWhere('lastActionBy.id = :userId', { userId });
-        }),
+          }),
         );
-    
+      }
+
       // Document filters run here, in SQL, inside the visibility rules above. Callers
       // that pass none keep the previous (unordered, unfiltered) behaviour.
       if (queryOptions?.documentFilters) {
@@ -322,7 +328,7 @@ export class DocSingalApproverService {
 
 //TODO: Only creator or first-level approvers can see single-approval document
 //TODO:get Single Approval Document ById
-async getSingleApprovalDocumentById(documentId: string, userId: string): Promise<any> {
+async getSingleApprovalDocumentById(documentId: string, userId: string, isAdmin: boolean = false): Promise<any> {
   const cacheKey = `singledoc:view:${documentId}:${userId}`;
   const cached = await this.cacheService.get<any>(cacheKey);
   if (cached) return cached;
@@ -372,7 +378,7 @@ async getSingleApprovalDocumentById(documentId: string, userId: string): Promise
     const firstLevelUsers = document.approvalFlow?.approvers?.firstApprover?.users ?? [];
     const isFirstApprover = firstLevelUsers.some((u: any) => u.id === userId);
 
-    if (!isCreator && !isFirstApprover) {
+    if (!isAdmin && !isCreator && !isFirstApprover) {
       return null;
     }
 

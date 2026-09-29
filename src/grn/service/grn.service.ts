@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 import { TYPES } from '../../types';
 
 import { ILike, In, LessThan, MoreThanOrEqual, DataSource } from 'typeorm';
@@ -212,7 +213,7 @@ public async getAllRecycleBinGrns(queryOptions: PaginationOptions, userId: strin
     }
   }
 
-  public async createGrn(grnData: CreateGrnDto): Promise<any> {
+  public async createGrn(grnData: CreateGrnDto): Promise<CreatedWithApproval<any>> {
     // Check if approval flow exists for the user
     if (!grnData.createdBy) {
       throw new AppError(400, 'createdBy field is required for approval flow validation');
@@ -279,10 +280,10 @@ public async getAllRecycleBinGrns(queryOptions: PaginationOptions, userId: strin
 
         await queryRunner.commitTransaction();
 
-        await this.documentbService.startApprovalFlow(document.id);
+        const assignment = await this.documentbService.startApprovalFlow(document.id);
 
         await this.invalidateCache();
-        return savedGrn;
+        return withApproval(savedGrn, assignment);
       } catch (error: any) {
         await queryRunner.rollbackTransaction();
         console.error('Error creating GRN:', error);
@@ -292,11 +293,11 @@ public async getAllRecycleBinGrns(queryOptions: PaginationOptions, userId: strin
       }
     }
 
-public async getAllGrns(queryOptions: PaginationOptions, userId: string): Promise<{
+public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<{
     data: GrnListItemDto[];
     meta: { total: number; page: number; pages: number };
   }> {
-    const hash = createHash('md5').update(`${userId}:${JSON.stringify(queryOptions)}`).digest('hex');
+    const hash = createHash('md5').update(`${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`).digest('hex');
     const cacheKey = `${this.CACHE_PREFIX}:all:${hash}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
@@ -307,6 +308,8 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string): Promis
       DocumentTypeEnum.GRN,
       queryOptions,
       true,
+      false,
+      isAdmin,
     );
 
     const typedDocuments = allDocuments as DocumentWithRelatedData[];

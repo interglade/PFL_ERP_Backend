@@ -18,6 +18,8 @@ import logger from "../../utils/logger";
 import { ControllerLogger } from "../../utils/controllerLogger"; // if needed for file upload
 
 import { deserializeUser, requireUser } from "../../middleware/deserializeUser";
+import { isAdminUser } from "../../utils/isAdminUser";
+import { createdMessage } from "../../utils/approvalMessage";
 import { PaginationOptions } from "../../utils/pagination";
 
 import { UserActivityLogService } from "../../employeeActivity/service/userActivityLog.service";
@@ -58,7 +60,7 @@ export class VehicleDispatchController {
 
 
       logger.debug("Vehicle dispatch data prepared for creation", dispatchData);
-      const vehicleDispatch = await this.vehicleDispatchService.create(
+      const { record: vehicleDispatch, sentTo } = await this.vehicleDispatchService.create(
         dispatchData
       );
       if (!vehicleDispatch) {
@@ -98,7 +100,7 @@ export class VehicleDispatchController {
      
       res.status(201).json({
         status: "success",
-        message: "Vehicle Dispatch created successfully",
+        message: createdMessage('Vehicle Dispatch', 'VehicleDispatchNo', vehicleDispatch.vehicleDispatchNo, sentTo),
         data: vehicleDispatch.id,
       });
     } catch (err) {
@@ -325,7 +327,7 @@ export class VehicleDispatchController {
       entityName: 'Vehicle Dispatch',
       definition: VEHICLE_DISPATCH_EXPORT,
       list: { documentType: FilterDocumentType.VEHICLE_DISPATCH_REGISTER, searchFields: ['vehicleType vehicleNo'], filterKeys: ['vehicleType', 'vehicleNo'] },
-      fetchList: (queryOptions, userId) => this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -365,7 +367,7 @@ export class VehicleDispatchController {
     
         // Same filters as the Excel export: validated, applied in SQL before pagination.
         applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.VEHICLE_DISPATCH_REGISTER);
-        const vehicalDispatch = await this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId);
+        const vehicalDispatch = await this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res));
     
         if (!vehicalDispatch || vehicalDispatch.data.length === 0) {
           logger.warn('No Vehical Dispatch found for this user.');
@@ -414,7 +416,7 @@ export class VehicleDispatchController {
        //   logger.info(Fetching Vehical Dispatch with Document ID);
           
           const userId = res.locals.user.id;
-          const vehicalDispatch = await this.vehicleDispatchService.getVehicalDispatchByIdForView(docid,userId);
+          const vehicalDispatch = await this.vehicleDispatchService.getVehicalDispatchByIdForView(docid, userId, isAdminUser(res));
           if (!vehicalDispatch) {
             return res.status(403).json({
             status: 'fail',

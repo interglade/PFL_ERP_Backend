@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne } from "typeorm";
+import { Column, Entity, Index, JoinColumn, ManyToOne } from "typeorm";
 
 import { GRN } from './grn.entity';
 import Model from "../../global/model.entity";
@@ -9,6 +9,7 @@ import { UOM } from "../../uom/entity/uom.entity";
 
 
 
+@Index(['grn'])
 @Entity({ name: 'grn_products' }) // Table for GRN-Product relationship
 export class GrnProduct extends Model {
   

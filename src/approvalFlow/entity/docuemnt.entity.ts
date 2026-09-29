@@ -1,6 +1,7 @@
 // document.entity.ts
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
@@ -50,6 +51,9 @@ export enum DocumentTypeEnum {
 }
 
 @Entity('documents')
+// Looked up by module row (GRN id, invoice id, ...) and grouped by type/status
+@Index(['document_type_id', 'type'])
+@Index(['type', 'status'])
 export class Documentb extends Model {
   @Column({
     type: 'enum',

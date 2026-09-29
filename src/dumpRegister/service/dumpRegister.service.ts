@@ -1,4 +1,5 @@
 import { inject, injectable } from "inversify";
+import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 
 
 
@@ -107,7 +108,7 @@ export class DumpRegisterService{
       }
     }
 
-    async createDumpRegister(data: CreateDumpRegisterDto): Promise<any> {
+    async createDumpRegister(data: CreateDumpRegisterDto): Promise<CreatedWithApproval<any>> {
        // Check if approval flow exists for the user
        await this.checkApprovalFlowExists(data.requestedBy, DocDefEnum.OPERATION);
 
@@ -228,10 +229,10 @@ const serialNo = await this.generateSerialNo();
         await queryRunner.commitTransaction();
 
         // Start approval flow after commit so dump register is visible to other DB connections
-        await this.documentService.startApprovalFlow(document.id);
+        const assignment = await this.documentService.startApprovalFlow(document.id);
         await this.invalidateDumpCache();
 
-        return savedDumpRegister;
+        return withApproval(savedDumpRegister, assignment);
       } catch (error) {
         // Rollback transaction - undo all changes
         await queryRunner.rollbackTransaction();
@@ -493,8 +494,8 @@ const serialNo = await this.generateSerialNo();
     return viewResult;
   }
 
-async getAllDumpRegisters(queryOptions: PaginationOptions, userId: string): Promise<DumpRegisterListResultDto> {
-    const key = `${CACHE_PREFIX}:list:${userId}:${JSON.stringify(queryOptions)}`;
+async getAllDumpRegisters(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<DumpRegisterListResultDto> {
+    const key = `${CACHE_PREFIX}:list:${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`;
     const cached = await this.cacheService.get<DumpRegisterListResultDto>(key);
     if (cached) return cached;
 
@@ -502,6 +503,8 @@ async getAllDumpRegisters(queryOptions: PaginationOptions, userId: string): Prom
       userId,
       DocumentTypeEnum.DUMP_REGISTER,
       queryOptions,
+      false,
+      isAdmin,
     );
     const { search } = queryOptions;
     const typedDocuments = data as DocumentWithRelatedData[];

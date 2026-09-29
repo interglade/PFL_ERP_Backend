@@ -14,6 +14,8 @@ import { ControllerLogger } from "../../utils/controllerLogger";
 
 import { UserActivityLogService } from "../../employeeActivity/service/userActivityLog.service";
 import { deserializeUser, requireUser } from "../../middleware/deserializeUser";
+import { isAdminUser } from "../../utils/isAdminUser";
+import { createdMessage } from "../../utils/approvalMessage";
 import { NotificationService } from "../../notification/service/notification.service";
 import { CreateAqrDto, UpdateAqrDto } from "../dto/aqr.dto";
 import { ActivityAction, ActivityModule } from "../../employeeActivity/entity/userActivityLog.entity";
@@ -44,7 +46,7 @@ public async createAqr(
     const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName || ''}`.trim() || res.locals.user.username || 'Unknown User';
 
     const aqrData: CreateAqrDto = { ...req.body, requestedBy: res.locals.user.id };
-    const createdAqr = await this.aqrService.createAqr(aqrData);
+    const { record: createdAqr, sentTo } = await this.aqrService.createAqr(aqrData);
 
     if (!createdAqr) {
       ControllerLogger.logOperationFailed("Create", "AQR", "not created", req, res);
@@ -71,7 +73,7 @@ public async createAqr(
       statusCode: 201,
     }).catch(() => {});
 
-    return res.status(201).json({ status: "success", message: "AQR created successfully" });
+    return res.status(201).json({ status: "success", message: createdMessage('AQR', 'AQRNo', createdAqr.aqrNo, sentTo) });
   } catch (error) {
     ControllerLogger.logError("AQR creation", error, req, res);
     if (error instanceof Error) return next(new AppError(400, error.message));
@@ -96,7 +98,7 @@ public async createAqr(
       entityName: 'AQR',
       definition: AQR_EXPORT,
       list: { documentType: FilterDocumentType.AQR, filterKeys: ['supplierName', 'arrivalDate'] },
-      fetchList: (queryOptions, userId) => this.aqrService.getAllAqrs(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.aqrService.getAllAqrs(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -124,7 +126,7 @@ public async createAqr(
 
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.AQR);
-      const aqrs = await this.aqrService.getAllAqrs(queryOptions, userId);
+      const aqrs = await this.aqrService.getAllAqrs(queryOptions, userId, isAdminUser(res));
 
       if (!aqrs || aqrs.data.length === 0) {
         return res.status(200).json({ status: "success", data: [], allRecords: 0, totalPages: 0, page: queryOptions.page });
@@ -199,7 +201,7 @@ public async createAqr(
   ) {
     try {
       const userId = res.locals.user.id;
-      const aqr = await this.aqrService.getAQRByIdForView(docid, userId);
+      const aqr = await this.aqrService.getAQRByIdForView(docid, userId, isAdminUser(res));
 
       if (!aqr) {
         ControllerLogger.logOperationFailed("View", "AQR", "permission denied or not found", req, res);

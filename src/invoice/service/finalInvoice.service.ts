@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 
 import { DataSource } from 'typeorm';
 
@@ -85,7 +86,7 @@ export class FinalInvoiceService {
     }
   }
 
-  async create(deliveryChallanId: string, additionalData: CreateInvoiceDto, requestedBy: any): Promise<any> {
+  async create(deliveryChallanId: string, additionalData: CreateInvoiceDto, requestedBy: any): Promise<CreatedWithApproval<any>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(requestedBy, DocDefEnum.SALE);
 
@@ -245,7 +246,7 @@ export class FinalInvoiceService {
       await queryRunner.commitTransaction();
 
       // Start approval flow after commit so invoice is visible to other DB connections
-      await this.documentService.startApprovalFlow(document.id);
+      const assignment = await this.documentService.startApprovalFlow(document.id);
 
       await this.invalidateCache();
       // Fetch the complete invoice with relations
@@ -262,7 +263,7 @@ export class FinalInvoiceService {
         ],
       });
       console.log("invoice generated",completeInvoice);
-      return completeInvoice;
+      return withApproval(completeInvoice, assignment);
     } catch (error: any) {
       await queryRunner.rollbackTransaction();
       //console.error('Error creating Final Invoice:', error);
@@ -542,8 +543,9 @@ export class FinalInvoiceService {
   public async getAll(
     queryOptions: PaginationOptions,
     userId: string,
+    isAdmin: boolean = false,
   ): Promise<{ data: InvoiceListItemDto[]; meta: { total: number; page: number; pages: number } }> {
-    const cacheKey = `${this.CACHE_PREFIX}:all:${userId}:${createHash('md5').update(JSON.stringify(queryOptions)).digest('hex')}`;
+    const cacheKey = `${this.CACHE_PREFIX}:all:${userId}:${isAdmin ? 'admin' : 'user'}:${createHash('md5').update(JSON.stringify(queryOptions)).digest('hex')}`;
     console.log("in invoice service — cache key:", cacheKey);
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) {
@@ -591,14 +593,19 @@ export class FinalInvoiceService {
       .addSelect('lastActionBy.firstName', 'lastActionByFirstName')
       .addSelect('lastActionBy.lastName', 'lastActionByLastName')
       .where('invoice.isDeleted = false')
-      .andWhere('invoice.deletedAt IS NULL')
-      .andWhere(
+      .andWhere('invoice.deletedAt IS NULL');
+
+    // Admin sees every invoice; everyone else only the ones they created or
+    // approve at either level.
+    if (!isAdmin) {
+      qb.andWhere(
         new Brackets((qb) => {
           qb.orWhere('firstApproverUser.id = :userId', { userId })
             .orWhere('secondApproverUser.id = :userId', { userId })
             .orWhere('lastActionBy.id = :userId', { userId });
         }),
       );
+    }
 
     if (search && search.trim()) {
       const term = `%${search.toLowerCase()}%`;

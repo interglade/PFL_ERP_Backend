@@ -5,6 +5,8 @@ import { DealSlipService } from "../service/dealSlip.service";
 import { Request, Response, NextFunction } from "express";
 import AppError from "../../utils/appError";
 import { captureUser, deserializeUser, requireUser} from "../../middleware/deserializeUser";
+import { isAdminUser } from "../../utils/isAdminUser";
+import { createdMessage } from "../../utils/approvalMessage";
 import { PaginationOptions } from "../../utils/pagination";
 import { ControllerLogger } from "../../utils/controllerLogger";
 
@@ -109,7 +111,7 @@ export class DealSlipController {
       entityName: 'Deal Slip',
       definition: DEAL_SLIP_EXPORT,
       list: { documentType: FilterDocumentType.DEAL_SLIP, filterKeys: ['approvalStatus', 'loadingLocation', 'requestingDepartment', 'dealSlipNo'] },
-      fetchList: (queryOptions, userId) => this.dealSlipService.getAllDealSlips(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.dealSlipService.getAllDealSlips(queryOptions, userId, isAdminUser(res)),
        // TEMP: testing only, revert after
      //fetchList: async () => ({ data: [{ id: '00000000-0000-0000-0000-000000000000', documentId: null }] }),
     });
@@ -151,7 +153,7 @@ export class DealSlipController {
 
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.DEAL_SLIP);
-      const dealSlips: DealSlipListResponseDto = await this.dealSlipService.getAllDealSlips(queryOptions, userId);
+      const dealSlips: DealSlipListResponseDto = await this.dealSlipService.getAllDealSlips(queryOptions, userId, isAdminUser(res));
 
       if (!dealSlips || dealSlips.data.length === 0) {
         return res.status(200).json({
@@ -234,7 +236,7 @@ export class DealSlipController {
       dealData.requestedBy = requestedBy;
       dealData.requestingDepartment = res.locals.user.selectDepartment;
       
-      const dealSlip = await this.dealSlipService.createDealSlip(dealData);
+      const { record: dealSlip, sentTo } = await this.dealSlipService.createDealSlip(dealData);
       
       // 🔔 Send notification for deal slip creation
       try {
@@ -271,6 +273,7 @@ export class DealSlipController {
       ControllerLogger.logSuccess('Deal Slip created', dealSlip.id, req, res);
       res.status(200).json({
         status: "success",
+        message: createdMessage('Deal Slip', 'DealSlipNo', dealSlip.dealSlipNo, sentTo),
         data: dealSlip,
       });
     } catch (error) {
@@ -475,7 +478,7 @@ export class DealSlipController {
   ) {
     try {
       const userId = res.locals.user.id;
-      const dealSlip: DealSlipDocumentViewDto | null = await this.dealSlipService.getDealSlipByIdForView(docid, userId);
+      const dealSlip: DealSlipDocumentViewDto | null = await this.dealSlipService.getDealSlipByIdForView(docid, userId, isAdminUser(res));
       
       if (!dealSlip) {
         ControllerLogger.logOperationFailed('View', 'Deal Slip', 'Permission denied', req, res);

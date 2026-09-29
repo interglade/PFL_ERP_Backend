@@ -5,6 +5,8 @@ import { TYPES } from "../../types";
 import { NextFunction,Request,Response } from "express";
 import AppError from "../../utils/appError";
 import { captureUser, deserializeUser, requireUser } from "../../middleware/deserializeUser";
+import { isAdminUser } from "../../utils/isAdminUser";
+import { createdMessage } from "../../utils/approvalMessage";
 import logger, { UserLogger } from "../../utils/logger";
 import { PaginationOptions } from "../../utils/pagination";
 import { ControllerLogger } from "../../utils/controllerLogger";
@@ -59,7 +61,7 @@ export class PostReturnByCustomerController {
       entityName: 'Return By Customer',
       definition: RETURN_BY_CUSTOMER_EXPORT,
       list: { documentType: FilterDocumentType.RETURN_BY_CUSTOMER, searchFields: ['postreturn.id'] },
-      fetchList: (queryOptions, userId) => this.postReturnByCustomerService.getAllPostReturnByCustomer(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.postReturnByCustomerService.getAllPostReturnByCustomer(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -85,7 +87,7 @@ export class PostReturnByCustomerController {
       const userId = res.locals.user?.id;
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.RETURN_BY_CUSTOMER);
-      const postReturns = await this.postReturnByCustomerService.getAllPostReturnByCustomer(queryOptions, userId);
+      const postReturns = await this.postReturnByCustomerService.getAllPostReturnByCustomer(queryOptions, userId, isAdminUser(res));
       
       // Log the successful retrieval
       ControllerLogger.logList("Post Return By Customer", req, res);
@@ -286,7 +288,7 @@ export class PostReturnByCustomerController {
       const requestedBy = res.locals.user.id; // Pass full user object
       const clientIp = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 'Unknown';
 
-      const newPostReturn = await this.postReturnByCustomerService.createReturn(postReturnData, requestedBy, clientIp);
+      const { record: newPostReturn, sentTo } = await this.postReturnByCustomerService.createReturn(postReturnData, requestedBy, clientIp);
       
       ControllerLogger.logSuccess('Post Return By Customer created', newPostReturn.id, req, res);
 
@@ -319,7 +321,7 @@ export class PostReturnByCustomerController {
       res.status(201).json({
         status: "success",
         data: newPostReturn.id,
-        message: "Post return created successfully",
+        message: createdMessage('Return by Customer', 'RBCNo', newPostReturn.rbcNo, sentTo),
       });
     } catch (error) {
       ControllerLogger.logError('Post Return By Customer creation', error, req, res);

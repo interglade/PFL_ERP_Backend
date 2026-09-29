@@ -17,6 +17,8 @@ import AppError from '../../utils/appError';
 import logger from '../../utils/logger';
 import { ControllerLogger } from '../../utils/controllerLogger';
 import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
+import { isAdminUser } from '../../utils/isAdminUser';
+import { createdMessage } from '../../utils/approvalMessage';
 ;
 import { Source } from '../../utils/status.enum';
 import { error } from 'console';
@@ -71,7 +73,7 @@ export class InwardRegisterController {
       } else if (data.source === Source.FARMER) {
         data.selectedFarmer = { id: data.selectedParty! };
       }
-      const inwardRegister =
+      const { record: inwardRegister, sentTo } =
         await this.inwardRegisterService.createInwardRegister(data);
       if (!inwardRegister) {
         logger.warn('Inward register not created', { data });
@@ -107,7 +109,7 @@ export class InwardRegisterController {
 
       res.status(201).json({
         status: 'success',
-        message: 'Inward register created successfully',
+        message: createdMessage('Inward Register', 'InwardNo', inwardRegister.inwardNo, sentTo),
         data: inwardRegister,
       });
     } catch (err) {
@@ -357,7 +359,7 @@ export class InwardRegisterController {
       entityName: 'Inward Register',
       definition: INWARD_REGISTER_EXPORT,
       list: { documentType: FilterDocumentType.INWARD_REGISTER, searchFields: ['batchNo'], filterKeys: ['inwardType', 'batchNo'] },
-      fetchList: (queryOptions, userId) => this.inwardRegisterService.getAllInwardRegisters(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.inwardRegisterService.getAllInwardRegisters(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -400,7 +402,7 @@ export class InwardRegisterController {
   
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.INWARD_REGISTER);
-      const inwardRegisters = await this.inwardRegisterService.getAllInwardRegisters(queryOptions, userId);
+      const inwardRegisters = await this.inwardRegisterService.getAllInwardRegisters(queryOptions, userId, isAdminUser(res));
   
       if (!inwardRegisters || inwardRegisters.data.length === 0) {
         logger.warn('No InwardRegister found for this user.');
@@ -448,7 +450,7 @@ export class InwardRegisterController {
      // logger.info(Fetching Inward register with Document ID);
       
       const userId = res.locals.user.id;
-      const inwodRegister = await this.inwardRegisterService.getInwardregisterByIdForView(docid,userId);
+      const inwodRegister = await this.inwardRegisterService.getInwardregisterByIdForView(docid, userId, isAdminUser(res));
       if (!inwodRegister) {
         return res.status(403).json({
         status: 'fail',

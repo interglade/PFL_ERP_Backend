@@ -355,7 +355,7 @@ export class DocDoubleApproverService {
 
 
   //TODO: Get Document with Data
-  public async getAllDocumentByUserIdForDoubleApprover(userId: string, documentType: string, queryOptions: PaginationOptions, includeDeleted: boolean = false): Promise<any> {
+  public async getAllDocumentByUserIdForDoubleApprover(userId: string, documentType: string, queryOptions: PaginationOptions, includeDeleted: boolean = false, isAdmin: boolean = false): Promise<any> {
     if (!Object.values(DocumentTypeEnum).includes(documentType as DocumentTypeEnum)) {
       throw new Error(`Invalid document type: ${documentType}`);
     }
@@ -374,17 +374,22 @@ export class DocDoubleApproverService {
         'document.status', 'document.isDeleted', 'document.deletedAt', 'document.createdAt',
         'lastActionBy.id', 'lastActionBy.firstName', 'lastActionBy.lastName',
       ])
-      .where(
+      .where('document.document_type_id IS NOT NULL')
+      .andWhere('document.type = :documentType', { documentType })
+      .andWhere('document.isDeleted = :isDeleted', { isDeleted: includeDeleted })
+      .andWhere(includeDeleted ? 'document.deletedAt IS NOT NULL' : 'document.deletedAt IS NULL');
+
+    // Admin sees every document; everyone else only the ones they created or
+    // approve at either level.
+    if (!isAdmin) {
+      queryBuilder.andWhere(
         new Brackets((qb) => {
           qb.orWhere('firstApproverUser.id = :userId', { userId })
             .orWhere('secondApproverUser.id = :userId', { userId })
             .orWhere('lastActionBy.id = :userId', { userId });
         }),
-      )
-      .andWhere('document.document_type_id IS NOT NULL')
-      .andWhere('document.type = :documentType', { documentType })
-      .andWhere('document.isDeleted = :isDeleted', { isDeleted: includeDeleted })
-      .andWhere(includeDeleted ? 'document.deletedAt IS NOT NULL' : 'document.deletedAt IS NULL');
+      );
+    }
 
     // Document filters (dates, status, parties, products, search, ...) run here, in SQL,
     // inside the visibility rules above and before pagination.

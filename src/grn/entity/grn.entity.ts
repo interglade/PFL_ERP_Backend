@@ -41,6 +41,11 @@ export enum GrnType {
 }
 
 @Entity('grns')
+// Dashboard / report filters
+@Index(['createdAt'])
+@Index(['companyName'])
+@Index(['location'])
+@Index(['createdBy'])
 export class GRN extends Model {
   @ManyToOne(() => Company, {
     cascade: true,

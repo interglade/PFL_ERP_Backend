@@ -465,6 +465,25 @@ private async notifyVendorApproved(vendor: Vendor, approverId: string, status: S
     return result;
   }
 
+  // Loads only the columns needed for the attachments view.
+  async getVendorAttachments(id: string): Promise<Vendor | null> {
+    return this.vendorRepository
+      .createQueryBuilder("vendor")
+      .leftJoin("vendor.vendorBankDetails", "vendorBankDetails")
+      .select([
+        "vendor.id",
+        "vendor.vendorCode",
+        "vendor.companyName",
+        "vendor.gstnCopy",
+        "vendor.panCardCopy",
+        "vendor.msmeCopy",
+        "vendorBankDetails.id",
+        "vendorBankDetails.cancelledChequeCopy",
+      ])
+      .where("vendor.id = :id", { id })
+      .getOne();
+  }
+
 
 //service
 

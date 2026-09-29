@@ -19,6 +19,8 @@ import {
   deserializeUser,
   requireUser,
 } from '../../middleware/deserializeUser';
+import { isAdminUser } from '../../utils/isAdminUser';
+import { createdMessage } from '../../utils/approvalMessage';
 
 import logger from '../../utils/logger';
 
@@ -68,7 +70,7 @@ export class SecondSaleController {
 
       const requestedBy: string = res.locals.user.id;
 
-      const secondSale = await this.secondSaleService.createSecondSale(
+      const { record: secondSale, sentTo } = await this.secondSaleService.createSecondSale(
         secondSaleData,
         requestedBy,
       );
@@ -108,7 +110,7 @@ export class SecondSaleController {
 
       res.status(201).json({
         status: 'success',
-        message: 'Second sale created successfully',
+        message: createdMessage('Second Sale', 'SecondSaleNo', secondSale.secondSaleNo, sentTo),
         data: secondSale.id,
       });
     } catch (err) {
@@ -218,7 +220,7 @@ export class SecondSaleController {
       entityName: 'Second Sale',
       definition: SECOND_SALE_EXPORT,
       list: { documentType: FilterDocumentType.SECOND_SALE, searchFields: ['secondSale.id'] },
-      fetchList: (queryOptions, userId) => this.secondSaleService.getAllSecondSales(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.secondSaleService.getAllSecondSales(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -247,10 +249,7 @@ export class SecondSaleController {
       
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.SECOND_SALE);
-      const secondSales = await this.secondSaleService.getAllSecondSales(
-        queryOptions,
-        userId
-      );
+      const secondSales = await this.secondSaleService.getAllSecondSales(queryOptions, userId, isAdminUser(res));
       if (!secondSales) {
         logger.error('No second sales found');
         ControllerLogger.logError('Second Sale list retrieval', new AppError(404, 'No second sales found'), req, res);

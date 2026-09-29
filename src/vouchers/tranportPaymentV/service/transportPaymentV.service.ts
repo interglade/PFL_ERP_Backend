@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 
 import { TPVoucher } from '../entity/transportPaymentvoucher.entity';
 
@@ -78,7 +79,7 @@ export class TPVoucherService {
     }
   }
 
-  async createTPVoucher(tpvoucherData: CreateTPVoucherDto & Record<string, any>): Promise<TPVoucher> {
+  async createTPVoucher(tpvoucherData: CreateTPVoucherDto & Record<string, any>): Promise<CreatedWithApproval<TPVoucher>> {
     // Check if approval flow exists for the user
     await this.checkApprovalFlowExists(tpvoucherData.requestedBy, DocDefEnum.PROCUREMENT);
 
@@ -122,10 +123,10 @@ export class TPVoucherService {
       
       await queryRunner.commitTransaction();
 
-      await this.documentbService.startApprovalFlow(document.id);
+      const assignment = await this.documentbService.startApprovalFlow(document.id);
 
       await this.invalidateCache();
-      return saveVoucher;
+      return withApproval(saveVoucher, assignment);
     } catch (error: any) {
       await queryRunner.rollbackTransaction();
       throw error;
@@ -240,9 +241,9 @@ export class TPVoucherService {
     
 
 public async getAllTPVouchers(
-    queryOptions: PaginationOptions, userId: string,
+    queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false,
   ): Promise<TPVoucherListResponseDto> {
-    const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${JSON.stringify(queryOptions)}`;
+    const cacheKey = `${this.CACHE_PREFIX}:list:${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -252,6 +253,9 @@ public async getAllTPVouchers(
       userId,
       DocumentTypeEnum.TRANSPORT_PAYMENT_VOUCHER,
       queryOptions,
+      false,
+      false,
+      isAdmin,
     );
 
     const typedDocuments = data as DocumentWithRelatedData[];

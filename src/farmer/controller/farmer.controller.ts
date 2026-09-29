@@ -602,7 +602,7 @@ export class FarmerController {
   // Returns every document slot (7/12, ID proof, farmer photo, farm photo)
   // with its stored URL and a JWT-gated download link via /files/download.
 
-  @httpGet('/:id/attachments')
+  @httpGet('/attachments/:id')
   public async getFarmerAttachments(
     @requestParam('id') id: string,
     @request() req: Request,

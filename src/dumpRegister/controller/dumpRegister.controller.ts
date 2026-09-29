@@ -15,6 +15,8 @@ import { Request, Response, NextFunction } from "express";
 import AppError from "../../utils/appError";
 
 import { deserializeUser, requireUser, captureUser } from "../../middleware/deserializeUser";
+import { isAdminUser } from "../../utils/isAdminUser";
+import { createdMessage } from "../../utils/approvalMessage";
 import { ControllerLogger } from "../../utils/controllerLogger";
 import { PaginationOptions } from "../../utils/pagination";
 import {
@@ -52,7 +54,7 @@ export class DumpRegisterController {
       const requestedBy = res.locals.user.id;
       dumpRegisterData.requestedBy = requestedBy;
      
-      const dumpRegister = await this.dumpRegisterService.createDumpRegister(dumpRegisterData);
+      const { record: dumpRegister, sentTo } = await this.dumpRegisterService.createDumpRegister(dumpRegisterData);
       
       if (!dumpRegister) {
         ControllerLogger.logOperationFailed('Create', 'Dump Register', 'Creation failed', req, res);
@@ -83,7 +85,7 @@ export class DumpRegisterController {
       ControllerLogger.logSuccess('Dump Register created', dumpRegister.id, req, res);
       res.status(201).json({
         status: "success",
-        message: "Dump register created successfully",
+        message: createdMessage('Dump Register', 'DumpNo', dumpRegister.dumpNo, sentTo),
         data: dumpRegister.id,
       });
     } catch (error) {
@@ -209,7 +211,7 @@ export class DumpRegisterController {
       entityName: 'Dump Register',
       definition: DUMP_REGISTER_EXPORT,
       list: { documentType: FilterDocumentType.DUMP_REGISTER, searchFields: ['dumpRegister.id'] },
-      fetchList: (queryOptions, userId) => this.dumpRegisterService.getAllDumpRegisters(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.dumpRegisterService.getAllDumpRegisters(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -239,7 +241,7 @@ export class DumpRegisterController {
       
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.DUMP_REGISTER);
-      const dumpRegisters = await this.dumpRegisterService.getAllDumpRegisters(queryOptions, userId);
+      const dumpRegisters = await this.dumpRegisterService.getAllDumpRegisters(queryOptions, userId, isAdminUser(res));
       
       if (!dumpRegisters) {
         ControllerLogger.logOperationFailed('Get All', 'Dump Registers', 'No records found', req, res);

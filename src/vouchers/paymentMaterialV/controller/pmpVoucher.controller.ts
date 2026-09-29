@@ -5,6 +5,8 @@ import { controller, httpGet, httpPost, httpPut, httpDelete, request, response, 
 import { TYPES } from "../../../types";
 
 import { captureUser, deserializeUser, requireUser } from "../../../middleware/deserializeUser";
+import { isAdminUser } from "../../../utils/isAdminUser";
+import { createdMessage } from "../../../utils/approvalMessage";
 
 import logger from "../../../utils/logger";
 
@@ -53,7 +55,7 @@ export class PMPVoucherController {
       entityName: 'Packing Material Voucher',
       definition: PACKING_MATERIAL_VOUCHER_EXPORT,
       list: { documentType: FilterDocumentType.PACKAGING_MATERIAL_VOUCHER, searchFields: ['"voucher.voucherNo",'] },
-      fetchList: (queryOptions, userId) => this.pmpVoucherService.getAllVouchers(queryOptions, userId),
+      fetchList: (queryOptions, userId) => this.pmpVoucherService.getAllVouchers(queryOptions, userId, isAdminUser(res)),
     });
   }
 
@@ -78,7 +80,7 @@ export class PMPVoucherController {
       };
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.PACKAGING_MATERIAL_VOUCHER);
-      const vouchers = await this.pmpVoucherService.getAllVouchers(queryOptions, userId);
+      const vouchers = await this.pmpVoucherService.getAllVouchers(queryOptions, userId, isAdminUser(res));
       logger.info("Vouchers fetched successfully", { vouchers });
       
       ControllerLogger.logList("PMP Voucher", req, res);
@@ -229,7 +231,7 @@ export class PMPVoucherController {
       
     voucherData.requestedBy= res.locals.user.id;
     voucherData.requestingDepartment = res.locals.user.selectDepartment;
-      const newVoucher = await this.pmpVoucherService.createVoucher(voucherData);
+      const { record: newVoucher, sentTo } = await this.pmpVoucherService.createVoucher(voucherData);
       logger.info("New voucher created successfully");
       
       ControllerLogger.logSuccess('PMP Voucher created', newVoucher.id, req, res);
@@ -262,7 +264,7 @@ export class PMPVoucherController {
 
       res.status(201).json({
         status: "success",
-        message: 'Packing Material Payment Voucher created successfully',
+        message: createdMessage('Packing Material Voucher', 'VoucherNo', newVoucher.voucherNo, sentTo),
         //data: newVoucher,
       });
     } catch (err) {

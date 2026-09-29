@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   OneToMany,
@@ -21,6 +22,12 @@ import { User } from '../../employee/entity/user.entity';
 
 
 @Entity('invoices')
+// Dashboard / report filters
+@Index(['invoiceDate'])
+@Index(['companyName'])
+@Index(['fromLocation'])
+@Index(['createdBy'])
+@Index(['deliveryChallan'])
 export class Invoice extends Model {
   @ManyToOne(() => Company, {
     cascade: true,
