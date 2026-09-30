@@ -15,9 +15,9 @@
 
 import { VehicleDispatch } from '../entity/vehicleDispatch.entity';
 import { ExportDefinition } from '../../excel/export/exportTypes';
-import { ADDRESS_COLUMNS, COMPANY_COLUMNS, joinSelect } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
-import { addressColumn, auditColumns, companyColumns } from '../../excel/export/commonColumns';
+import { ADDRESS_COLUMNS, COMPANY_COLUMNS, joinSelect, withoutColumns } from '../../excel/export/exportQuery';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { addressColumn, companyColumns } from '../../excel/export/commonColumns';
 
 type Row = DocumentRow<VehicleDispatch>;
 
@@ -36,7 +36,6 @@ export const VEHICLE_DISPATCH_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Dispatch No', maps: 'dispatch.vehicleDispatchNo', get: (r) => r.record.vehicleDispatchNo },
-        { header: 'Dispatch Record ID', maps: 'dispatch.id', get: (r) => r.record.id },
         { header: 'Dispatch Date', maps: 'dispatch.date', type: 'date', get: (r) => r.record.date },
         ...companyColumns<Row>((r) => r.record.companyName),
         { header: 'Vehicle Type', maps: 'dispatch.vehicleType', get: (r) => r.record.vehicleType },
@@ -62,10 +61,9 @@ export const VEHICLE_DISPATCH_EXPORT: ExportDefinition = {
         { header: 'Accounts Dept Verification', maps: 'dispatch.accDeptVerification', get: (r) => r.record.accDeptVerification },
         { header: 'Remarks (PFL)', maps: 'dispatch.remarksPFL', get: (r) => r.record.remarksPFL },
         { header: 'Feedback By Transporter Owner', maps: 'dispatch.feedbackbyTransporterOwner', get: (r) => r.record.feedbackbyTransporterOwner },
-        ...auditColumns<Row>((r) => r.record, 'dispatch'),
         ...documentColumns<VehicleDispatch>(),
       ],
     }),
-    approvalSheet({ numberHeader: 'Dispatch No', sources: [{ entity: VehicleDispatch, numberColumn: 'vehicleDispatchNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Dispatch No', sources: [{ entity: VehicleDispatch, numberColumn: 'vehicleDispatchNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

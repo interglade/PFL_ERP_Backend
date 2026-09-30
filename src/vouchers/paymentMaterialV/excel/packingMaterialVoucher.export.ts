@@ -10,8 +10,8 @@
 import { PMPVoucher } from '../entity/packingMaterialVoucher.entity';
 import { Materials } from '../entity/material.entity';
 import { ExportDefinition, ExportSheet } from '../../../excel/export/exportTypes';
-import { ADDRESS_COLUMNS, UOM_COLUMNS, joinSelect } from '../../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
+import { ADDRESS_COLUMNS, UOM_COLUMNS, joinSelect, withoutColumns } from '../../../excel/export/exportQuery';
+import { APPROVAL_ID_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
 import { addressColumn, auditColumns, uomColumn } from '../../../excel/export/commonColumns';
 import { joinVoucherCommon, voucherIdentityColumns, voucherTrailingColumns } from '../../excel/voucherCommon.export';
 
@@ -70,6 +70,6 @@ export const PACKING_MATERIAL_VOUCHER_EXPORT: ExportDefinition = {
   fileStem: 'Packing_Material_Voucher',
   sheets: [
     ...PACKING_MATERIAL_VOUCHER_SHEETS,
-    approvalSheet({ numberHeader: 'Voucher No', sources: [{ entity: PMPVoucher, numberColumn: 'voucherNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Voucher No', sources: [{ entity: PMPVoucher, numberColumn: 'voucherNo' }] }), APPROVAL_ID_COLUMNS),
   ],
 };

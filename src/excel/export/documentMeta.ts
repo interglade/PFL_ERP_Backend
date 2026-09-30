@@ -10,7 +10,6 @@
 
 import { EntityManager, EntityTarget, ObjectLiteral } from 'typeorm';
 import { Documentb } from '../../approvalFlow/entity/docuemnt.entity';
-import { ApproverStatus } from '../../approvalFlow/entity/approvalname.entity';
 import { ExportColumn, ExportLoadContext, ExportSheet } from './exportTypes';
 import { USER_COLUMNS, chunk } from './exportQuery';
 import { personName } from './exportValue';
@@ -162,97 +161,14 @@ export function documentHeaderSheet<T extends { id: string }>(options: {
   };
 }
 
-function latest(stages: ApprovalStageRow[], statuses?: readonly string[]): ApprovalStageRow | null {
-  const matching = statuses ? stages.filter((s) => s.status && statuses.includes(s.status)) : stages;
-  if (!matching.length) return null;
-  // Workflow order is the tie-breaker when timestamps are missing or equal.
-  return matching.reduce((best, s) => {
-    const a = best.statusChangedAt ? new Date(best.statusChangedAt).getTime() : 0;
-    const b = s.statusChangedAt ? new Date(s.statusChangedAt).getTime() : 0;
-    return b > a || (b === a && s.stageOrder > best.stageOrder) ? s : best;
-  });
-}
-
-const APPROVED_STATUSES = [ApproverStatus.APPROVED, ApproverStatus.VERIFIED] as readonly string[];
-const REJECTED_STATUSES = [ApproverStatus.REJECTED] as readonly string[];
-
-/**
- * Status/approval/audit columns appended to every document header sheet.
- * `inventory` adds whether the approval has already moved stock.
- */
-export function documentColumns<T>(options: { inventory?: boolean } = {}): ExportColumn<DocumentRow<T>>[] {
-  const columns: ExportColumn<DocumentRow<T>>[] = [
-    { header: 'Document ID', maps: 'documents.id', get: (r) => r.doc?.id },
+/** Status/approval/audit columns appended to every document header sheet. */
+export function documentColumns<T>(): ExportColumn<DocumentRow<T>>[] {
+  return [
     { header: 'Overall Status', maps: 'documents.status', get: (r) => r.doc?.status },
-    {
-      header: 'Last Approval Stage',
-      maps: 'approval_stage_info (latest)',
-      get: (r) => latest(r.doc?.stages ?? [])?.stage,
-    },
-    {
-      header: 'Last Approval Action',
-      maps: 'approval_stage_info.status (latest)',
-      get: (r) => latest(r.doc?.stages ?? [])?.status,
-    },
-    {
-      header: 'Last Action By',
-      maps: 'approval_stage_info.userName (latest)',
-      get: (r) => latest(r.doc?.stages ?? [])?.userName,
-    },
-    {
-      header: 'Last Action Date',
-      maps: 'approval_stage_info.statusChangedAt (latest)',
-      type: 'datetime',
-      get: (r) => latest(r.doc?.stages ?? [])?.statusChangedAt,
-    },
-    {
-      header: 'Approved By',
-      maps: 'approval_stage_info.userName (latest approved/verified)',
-      get: (r) => latest(r.doc?.stages ?? [], APPROVED_STATUSES)?.userName,
-    },
-    {
-      header: 'Approval Date',
-      maps: 'approval_stage_info.statusChangedAt (latest approved/verified)',
-      type: 'datetime',
-      get: (r) => latest(r.doc?.stages ?? [], APPROVED_STATUSES)?.statusChangedAt,
-    },
-    {
-      header: 'Rejected By',
-      maps: 'approval_stage_info.userName (rejected)',
-      get: (r) => latest(r.doc?.stages ?? [], REJECTED_STATUSES)?.userName,
-    },
-    {
-      header: 'Rejection Date',
-      maps: 'approval_stage_info.statusChangedAt (rejected)',
-      type: 'datetime',
-      get: (r) => latest(r.doc?.stages ?? [], REJECTED_STATUSES)?.statusChangedAt,
-    },
-    {
-      header: 'Rejection Reason',
-      maps: 'approval_stage_info.reason (rejected)',
-      get: (r) => latest(r.doc?.stages ?? [], REJECTED_STATUSES)?.reason,
-    },
-    { header: 'Document Remarks', maps: 'documents.remarks', get: (r) => r.doc?.remarks },
     { header: 'Document Created By', maps: 'documents.lastActionBy -> users', get: (r) => personName(r.doc?.creator) },
-    {
-      header: 'Document Created By Employee ID',
-      maps: 'documents.lastActionBy -> users.employeeId',
-      get: (r) => r.doc?.creator?.employeeId,
-    },
     { header: 'Document Created Date', maps: 'documents.createdAt', type: 'datetime', get: (r) => r.doc?.createdAt },
     { header: 'Document Updated Date', maps: 'documents.updatedAt', type: 'datetime', get: (r) => r.doc?.updatedAt },
   ];
-
-  if (options.inventory) {
-    columns.push({
-      header: 'Inventory Posted',
-      maps: 'documents.inventoryProcessed',
-      type: 'boolean',
-      get: (r) => r.doc?.inventoryProcessed,
-    });
-  }
-
-  return columns;
 }
 
 interface ApprovalRow extends ApprovalStageRow {
@@ -272,6 +188,15 @@ export interface ApprovalSource {
   /** Value of the type column, e.g. `Multi Cash Voucher`. */
   typeLabel?: string;
 }
+
+/**
+ * Id and workflow-position columns of the Approvals sheet that modules leave out of
+ * their workbook: `withoutColumns(approvalSheet(...), APPROVAL_ID_COLUMNS)`.
+ */
+export const APPROVAL_ID_COLUMNS = ['Record ID', 'Document ID', 'Stage Order', 'Action By User ID'] as const;
+
+/** `APPROVAL_ID_COLUMNS` plus the stage name, for modules that also hide the stage. */
+export const APPROVAL_ID_AND_STAGE_COLUMNS = [...APPROVAL_ID_COLUMNS, 'Stage'] as const;
 
 /**
  * Approval history sheet: one row per stage acted on, per document.

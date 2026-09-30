@@ -10,8 +10,8 @@
 import { CashVoucher } from '../entity/mCashVoucher.entity';
 import { MVItems } from '../entity/mvoucher.entity';
 import { ExportDefinition, ExportSheet } from '../../../excel/export/exportTypes';
-import { joinSelect } from '../../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
+import { joinSelect, withoutColumns } from '../../../excel/export/exportQuery';
+import { APPROVAL_ID_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
 import { auditColumns } from '../../../excel/export/commonColumns';
 import { joinVoucherCommon, voucherIdentityColumns, voucherTrailingColumns } from '../../excel/voucherCommon.export';
 
@@ -61,6 +61,6 @@ export const MULTI_CASH_VOUCHER_EXPORT: ExportDefinition = {
   fileStem: 'Multi_Cash_Voucher',
   sheets: [
     ...MULTI_CASH_VOUCHER_SHEETS,
-    approvalSheet({ numberHeader: 'Voucher No', sources: [{ entity: CashVoucher, numberColumn: 'voucherNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Voucher No', sources: [{ entity: CashVoucher, numberColumn: 'voucherNo' }] }), APPROVAL_ID_COLUMNS),
   ],
 };

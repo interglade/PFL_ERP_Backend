@@ -11,8 +11,8 @@
 
 import { OtherDeliveryChallan } from '../entity/otherDeliveryChallan.entity';
 import { ExportDefinition } from '../../../excel/export/exportTypes';
-import { ADDRESS_COLUMNS, BRANCH_COLUMNS, joinSelect } from '../../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
+import { ADDRESS_COLUMNS, BRANCH_COLUMNS, joinSelect, withoutColumns } from '../../../excel/export/exportQuery';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
 import { addressColumn, branchColumn } from '../../../excel/export/commonColumns';
 import { challanBaseColumns, challanItemsSheet, joinChallanBase } from '../../deliverychllan/excel/deliveryChallanCommon.export';
 
@@ -32,17 +32,16 @@ export const OTHER_DELIVERY_CHALLAN_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Challan No', maps: 'delivery_challan_purchase.challanNo', get: (r) => r.record.challanNo },
-        { header: 'Challan Record ID', maps: 'delivery_challan_purchase.id', get: (r) => r.record.id },
         branchColumn<Row>('From Location', (r) => r.record.fromLocation, 'delivery_challan_purchase.other_from_location_id_for_other'),
         { header: 'Party Name', maps: 'delivery_challan_purchase.other_customer_name', get: (r) => r.record.customer },
         { header: 'Party Contact No', maps: 'delivery_challan_purchase.other_customer_contact_no', get: (r) => r.record.customerContactNo },
         { header: 'Party Email', maps: 'delivery_challan_purchase.other_customer_email', get: (r) => r.record.customerEmail },
         addressColumn<Row>('Party Address', (r) => r.record.customerAddress, 'delivery_challan_purchase.customer_address_for_other'),
         ...challanBaseColumns<OtherDeliveryChallan>(),
-        ...documentColumns<OtherDeliveryChallan>({ inventory: true }),
+        ...documentColumns<OtherDeliveryChallan>(),
       ],
     }),
     challanItemsSheet('Other DC Items'),
-    approvalSheet({ numberHeader: 'Challan No', sources: [{ entity: OtherDeliveryChallan, numberColumn: 'challanNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Challan No', sources: [{ entity: OtherDeliveryChallan, numberColumn: 'challanNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

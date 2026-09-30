@@ -24,8 +24,9 @@ import {
   VARIANT_COLUMNS,
   VENDOR_COLUMNS,
   joinSelect,
+  withoutColumns,
 } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
   auditColumns,
   branchColumn,
@@ -62,7 +63,6 @@ export const AQR_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'AQR No', maps: 'aqr.aqrNo', get: (r) => r.record.aqrNo },
-        { header: 'AQR Record ID', maps: 'aqr.id', get: (r) => r.record.id },
         { header: 'AQR For', maps: 'aqr.aqrFor', get: (r) => r.record.aqrFor },
         { header: 'Source', maps: 'aqr.source', get: (r) => r.record.source },
         ...companyColumns<Row>((r) => r.record.companyName),
@@ -82,7 +82,6 @@ export const AQR_EXPORT: ExportDefinition = {
         ...userColumns<Row>('QC Check By', (r) => r.record.qcCheckBy, 'aqr.qcCheckBy'),
         ...userColumns<Row>('Verified By', (r) => r.record.verifiedBy, 'aqr.verifiedBy'),
         { header: 'Remark', maps: 'aqr.remark', get: (r) => r.record.remark },
-        ...auditColumns<Row>((r) => r.record, 'aqr'),
         ...documentColumns<Aqr>(),
       ],
     }),
@@ -110,6 +109,6 @@ export const AQR_EXPORT: ExportDefinition = {
         ...auditColumns<AqrParameter>((p) => p, 'aqr_parameter'),
       ],
     },
-    approvalSheet({ numberHeader: 'AQR No', sources: [{ entity: Aqr, numberColumn: 'aqrNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'AQR No', sources: [{ entity: Aqr, numberColumn: 'aqrNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

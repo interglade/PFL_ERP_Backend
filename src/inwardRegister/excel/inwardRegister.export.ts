@@ -22,8 +22,9 @@ import {
   VENDOR_COLUMNS,
   joinProductLine,
   joinSelect,
+  withoutColumns,
 } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
   auditColumns,
   branchColumn,
@@ -60,7 +61,6 @@ export const INWARD_REGISTER_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Inward No', maps: 'inward_register.inwardNo', get: (r) => r.record.inwardNo },
-        { header: 'Inward Record ID', maps: 'inward_register.id', get: (r) => r.record.id },
         { header: 'Inward Type', maps: 'inward_register.inwardType', get: (r) => r.record.inwardType },
         { header: 'Inward Date', maps: 'inward_register.date', type: 'date', get: (r) => r.record.date },
         { header: 'Batch No', maps: 'inward_register.batchNo', get: (r) => r.record.batchNo },
@@ -83,8 +83,7 @@ export const INWARD_REGISTER_EXPORT: ExportDefinition = {
         { header: 'Remarks', maps: 'inward_register.remarks', get: (r) => r.record.remarks },
         ...userColumns<Row>('Purchased By', (r) => r.record.purchasedBy, 'inward_register.purchasedBy'),
         ...userColumns<Row>('Inward By', (r) => r.record.inwardBy, 'inward_register.inwardBy'),
-        ...auditColumns<Row>((r) => r.record, 'inward_register'),
-        ...documentColumns<InwardRegister>({ inventory: true }),
+        ...documentColumns<InwardRegister>(),
       ],
     }),
     {
@@ -116,6 +115,6 @@ export const INWARD_REGISTER_EXPORT: ExportDefinition = {
         ...auditColumns<InwardProduct>((l) => l, 'inwardProduct'),
       ],
     },
-    approvalSheet({ numberHeader: 'Inward No', sources: [{ entity: InwardRegister, numberColumn: 'inwardNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Inward No', sources: [{ entity: InwardRegister, numberColumn: 'inwardNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

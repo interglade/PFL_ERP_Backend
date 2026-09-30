@@ -17,8 +17,9 @@ import {
   VENDOR_COLUMNS,
   joinProductLine,
   joinSelect,
+  withoutColumns,
 } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
   auditColumns,
   branchColumn,
@@ -47,7 +48,6 @@ export const RETURN_TO_VENDOR_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Return No', maps: 'return_to_vendor.rtvNo', get: (r) => r.record.rtvNo },
-        { header: 'Return Record ID', maps: 'return_to_vendor.id', get: (r) => r.record.id },
         { header: 'Return Date', maps: 'return_to_vendor.returnDate', type: 'date', get: (r) => r.record.returnDate },
         ...companyColumns<Row>((r) => r.record.companyName),
         branchColumn<Row>('Location', (r) => r.record.location, 'return_to_vendor.location'),
@@ -60,8 +60,7 @@ export const RETURN_TO_VENDOR_EXPORT: ExportDefinition = {
         { header: 'Amount In Words', maps: 'return_to_vendor.amtWords', get: (r) => r.record.amtWords },
         { header: 'Remark', maps: 'return_to_vendor.remark', get: (r) => r.record.remark },
         ...userColumns<Row>('Created By', (r) => r.record.createdBy, 'return_to_vendor.createdBy'),
-        ...auditColumns<Row>((r) => r.record, 'return_to_vendor'),
-        ...documentColumns<ReturnToVendor>({ inventory: true }),
+        ...documentColumns<ReturnToVendor>(),
       ],
     }),
     {
@@ -97,6 +96,6 @@ export const RETURN_TO_VENDOR_EXPORT: ExportDefinition = {
         ...auditColumns<ProductReturnToVendor>((l) => l, 'return_to_vendor_product'),
       ],
     },
-    approvalSheet({ numberHeader: 'Return No', sources: [{ entity: ReturnToVendor, numberColumn: 'rtvNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Return No', sources: [{ entity: ReturnToVendor, numberColumn: 'rtvNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

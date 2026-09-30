@@ -8,7 +8,7 @@ import { ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 import { ExportColumn } from '../../excel/export/exportTypes';
 import { BRANCH_COLUMNS, COMPANY_COLUMNS, USER_COLUMNS, joinSelect } from '../../excel/export/exportQuery';
 import { DocumentRow } from '../../excel/export/documentMeta';
-import { auditColumns, branchColumn, companyColumns, userColumns } from '../../excel/export/commonColumns';
+import { branchColumn, companyColumns, userColumns } from '../../excel/export/commonColumns';
 
 /** Voucher types, as `ExportRef.kind` in the combined export. */
 export const VOUCHER_KINDS = {
@@ -62,7 +62,6 @@ export function joinVoucherCommon<T extends ObjectLiteral>(qb: SelectQueryBuilde
 export function voucherIdentityColumns<T extends VoucherBase>(table: string): ExportColumn<DocumentRow<T>>[] {
   return [
     { header: 'Voucher No', maps: `${table}.voucherNo`, get: (r) => r.record.voucherNo },
-    { header: 'Voucher Record ID', maps: `${table}.id`, get: (r) => r.record.id },
     { header: 'Requesting Department', maps: `${table}.requestingDepartment`, get: (r) => r.record.requestingDepartment },
     ...companyColumns<DocumentRow<T>>((r) => r.record.companyName),
     branchColumn<DocumentRow<T>>('Location', (r) => r.record.location, `${table}.location`),
@@ -85,6 +84,5 @@ export function voucherTrailingColumns<T extends VoucherBase>(table: string): Ex
     ...userColumns<Row>('Approved By (Voucher)', (r) => r.record.approveBy, `${table}.approveBy`),
     { header: 'Attachments', maps: `${table}.anyAttachment`, get: (r) => r.record.anyAttachment },
     { header: 'Remark', maps: `${table}.remark`, get: (r) => r.record.remark },
-    ...auditColumns<Row>((r) => r.record, table),
   ];
 }

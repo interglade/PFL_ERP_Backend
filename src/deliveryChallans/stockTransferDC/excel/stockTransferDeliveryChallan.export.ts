@@ -12,8 +12,8 @@
 
 import { StockTransferDeliveryChallan } from '../entity/stockTransferdeliveryChallan.entity';
 import { ExportDefinition } from '../../../excel/export/exportTypes';
-import { BRANCH_COLUMNS, joinSelect } from '../../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
+import { BRANCH_COLUMNS, joinSelect, withoutColumns } from '../../../excel/export/exportQuery';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
 import { branchColumn } from '../../../excel/export/commonColumns';
 import { challanBaseColumns, challanItemsSheet, joinChallanBase } from '../../deliverychllan/excel/deliveryChallanCommon.export';
 
@@ -33,15 +33,14 @@ export const STOCK_TRANSFER_DELIVERY_CHALLAN_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Challan No', maps: 'delivery_challan_purchase.challanNo', get: (r) => r.record.challanNo },
-        { header: 'Challan Record ID', maps: 'delivery_challan_purchase.id', get: (r) => r.record.id },
         { header: 'Stock Transfer Type', maps: 'delivery_challan_purchase.stockTransferType', get: (r) => r.record.stockTransferType },
         branchColumn<Row>('Source Location', (r) => r.record.fromLocation, 'delivery_challan_purchase.from_location_id'),
         branchColumn<Row>('Destination Location', (r) => r.record.toLocation, 'delivery_challan_purchase.to_location_id'),
         ...challanBaseColumns<StockTransferDeliveryChallan>(),
-        ...documentColumns<StockTransferDeliveryChallan>({ inventory: true }),
+        ...documentColumns<StockTransferDeliveryChallan>(),
       ],
     }),
     challanItemsSheet('Stock Transfer DC Items'),
-    approvalSheet({ numberHeader: 'Challan No', sources: [{ entity: StockTransferDeliveryChallan, numberColumn: 'challanNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Challan No', sources: [{ entity: StockTransferDeliveryChallan, numberColumn: 'challanNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

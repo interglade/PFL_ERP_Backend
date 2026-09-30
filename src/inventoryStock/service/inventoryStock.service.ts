@@ -2,7 +2,9 @@ import { inject, injectable } from 'inversify';
 import { number } from 'zod';
 import { randomUUID } from 'crypto';
 import { TYPES } from '../../types';
+import { SelectQueryBuilder } from 'typeorm';
 import { InventoryStockRepository } from '../repository/inventoryStock.repository';
+import { InventoryStock } from '../entity/inventoryStock.entity';
 import { UserRepository } from '../../employee/repository/user.repository';
 import { InwardProductRepository } from '../../inwardRegister/repository/inwardProduct.repository';
 import { GrnProductRepository } from '../../grn/repository/grnProduct.repository';
@@ -803,98 +805,110 @@ export class InventoryStockService {
   }
 
 
+// Locations the user may see stock for: their access locations plus their
+// current work location (same rule as BranchesService.getFilterDataForUser).
+private async getUserAccessLocationIds(userId: string): Promise<string[]> {
+  const user = await this.userRepository.findOne({
+    where: { id: userId },
+    relations: ['accessLocation', 'currentWorkLocation'],
+  });
+
+  if (!user) return [];
+
+  const locationIds = new Set<string>((user.accessLocation || []).map((l) => l.id));
+  if (user.currentWorkLocation) locationIds.add(user.currentWorkLocation.id);
+
+  return [...locationIds];
+}
+
 async getlocationcompanywisestock(
   queryOptions: PaginationOptions,
+  userId: string,
   company?: string,
   location?: string,
   search?: string
 ) {
-
-  const qb = this.inventoryStockRepository
-    .createQueryBuilder('stock')
-    .leftJoin('stock.company', 'company')
-    .leftJoin('stock.location', 'location')
-    .leftJoin('stock.product', 'product')
-
-    .select([
-      'product.id AS productid',
-      'product.name AS productname',
-    ])
-
-    // ✅ Aggregations - sum across all companies and locations
-    .addSelect('COALESCE(SUM(stock."inwardQty"), 0)', 'inwardqty')
-    .addSelect('COALESCE(SUM(stock."inwardAmt"), 0)', 'inwardamt')
-    .addSelect('COALESCE(SUM(stock."dumpQty"), 0)', 'dumpqty')
-    .addSelect('COALESCE(SUM(stock."dumpAmt"), 0)', 'dumpamt')
-
-    // ✅ Group only by product to get unique products
-    .groupBy('product.id')
-    .addGroupBy('product.name');
-
-  // ✅ Filters
-  if (company) {
-    qb.andWhere('company.id = :company', { company });
-  }
-
-  if (location) {
-    qb.andWhere('location.id = :location', { location });
-  }
-
-  // ✅ Search filter - search across product, company, and location names
-  if (search) {
-    qb.andWhere(
-      '(LOWER(product.name) LIKE LOWER(:search) OR LOWER(company.name) LIKE LOWER(:search) OR LOWER(location.name) LIKE LOWER(:search))',
-      { search: `%${search}%` }
-    );
-  }
-
-  // 🔎 Debug SQL
-  console.log('🔍 SQL Query:', qb.getSql());
-  console.log('🔍 Parameters:', qb.getParameters());
-
-  // ✅ Pagination Setup
   const page = queryOptions.page || 1;
   const limit = queryOptions.limit || 10;
   const skip = (page - 1) * limit;
 
-  // ✅ Get total count - count distinct products
-  const countQb = this.inventoryStockRepository
-    .createQueryBuilder('stock')
-    .leftJoin('stock.company', 'company')
-    .leftJoin('stock.location', 'location')
-    .leftJoin('stock.product', 'product')
-    .select('COUNT(DISTINCT product.id)', 'total');
+  const accessLocationIds = await this.getUserAccessLocationIds(userId);
 
-  if (company) countQb.andWhere('company.id = :company', { company });
-  if (location) countQb.andWhere('location.id = :location', { location });
-
-  // ✅ Apply search filter to count query as well
-  if (search) {
-    countQb.andWhere(
-      '(LOWER(product.name) LIKE LOWER(:search) OR LOWER(company.name) LIKE LOWER(:search) OR LOWER(location.name) LIKE LOWER(:search))',
-      { search: `%${search}%` }
-    );
+  // A user with no access locations sees no stock.
+  if (accessLocationIds.length === 0) {
+    return { data: [], meta: { total: 0, page, pages: 0, limit } };
   }
+
+  // Shared by the data and count queries so both always see the same rows.
+  // A requested location outside the user's access list yields no rows.
+  const applyFilters = (qb: SelectQueryBuilder<InventoryStock>) => {
+    qb.where('location.id IN (:...accessLocationIds)', { accessLocationIds });
+
+    if (company) qb.andWhere('company.id = :company', { company });
+    if (location) qb.andWhere('location.id = :location', { location });
+
+    // Search across product, company, and location names
+    if (search) {
+      qb.andWhere(
+        '(LOWER(product.name) LIKE LOWER(:search) OR LOWER(company.name) LIKE LOWER(:search) OR LOWER(location.name) LIKE LOWER(:search))',
+        { search: `%${search}%` }
+      );
+    }
+    return qb;
+  };
+
+  const baseQuery = () =>
+    this.inventoryStockRepository
+      .createQueryBuilder('stock')
+      .leftJoin('stock.company', 'company')
+      .leftJoin('stock.location', 'location')
+      .leftJoin('stock.product', 'product');
+
+  // One row per product per company per location
+  const qb = applyFilters(baseQuery())
+    .select([
+      'product.id AS productid',
+      'product.name AS productname',
+      'company.name AS companyname',
+      'location.name AS locationname',
+    ])
+    .addSelect('COALESCE(SUM(stock."inwardQty"), 0)', 'inwardqty')
+    .addSelect('COALESCE(SUM(stock."inwardAmt"), 0)', 'inwardamt')
+    .addSelect('COALESCE(SUM(stock."dumpQty"), 0)', 'dumpqty')
+    .addSelect('COALESCE(SUM(stock."dumpAmt"), 0)', 'dumpamt')
+    .groupBy('product.id')
+    .addGroupBy('product.name')
+    .addGroupBy('company.id')
+    .addGroupBy('company.name')
+    .addGroupBy('location.id')
+    .addGroupBy('location.name')
+    // OFFSET/LIMIT needs a stable order or pages can repeat or skip rows.
+    .orderBy('product.name', 'ASC')
+    .addOrderBy('company.name', 'ASC')
+    .addOrderBy('location.name', 'ASC')
+    .addOrderBy('product.id', 'ASC')
+    .addOrderBy('company.id', 'ASC')
+    .addOrderBy('location.id', 'ASC');
+
+  const countQb = applyFilters(baseQuery())
+    .select('COUNT(DISTINCT (product.id, company.id, location.id))', 'total');
 
   const totalResult = await countQb.getRawOne();
   const totalCount = Number(totalResult?.total || 0);
 
-  // ✅ Apply pagination to main query
   qb.offset(skip).limit(limit);
 
   const data = await qb.getRawMany();
 
-  console.log('🔍 Sample Raw:', data[0]);
-
-  // ✅ Mapping Result
   const mappedData = data.map(r => ({
     id: r.productid,
+    company: r.companyname ?? null,
+    location: r.locationname ?? null,
     product: r.productname,
     inwardQty: Number(r.inwardqty || 0),
     inwardAmt: Number(r.inwardamt || 0),
     dumpQty: Number(r.dumpqty || 0),
     dumpAmt: Number(r.dumpamt || 0),
-
   }));
 
   return {

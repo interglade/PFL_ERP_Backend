@@ -24,8 +24,9 @@ import {
   aggregateLines,
   joinProductLine,
   joinSelect,
+  withoutColumns,
 } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
   auditColumns,
   branchColumn,
@@ -74,7 +75,6 @@ export const RETURN_BY_CUSTOMER_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Return No', maps: 'return_by_customer.rbcNo', get: (r) => r.record.rbcNo },
-        { header: 'Return Record ID', maps: 'return_by_customer.id', get: (r) => r.record.id },
         { header: 'Return Date', maps: 'return_by_customer.date', type: 'date', get: (r) => r.record.date },
         ...companyColumns<Row>((r) => r.record.companyName),
         branchColumn<Row>('Location', (r) => r.record.location, 'return_by_customer.location'),
@@ -85,7 +85,6 @@ export const RETURN_BY_CUSTOMER_EXPORT: ExportDefinition = {
         { header: 'Rejected Amount', maps: 'SUM(returned_products_by_customer.rejectedQtyAmt)', type: 'amount', get: (r) => r.record.rejectedTotal },
         { header: 'Remark', maps: 'return_by_customer.remark', get: (r) => r.record.remark },
         ...userColumns<Row>('Created By', (r) => r.record.createdBy, 'return_by_customer.createdBy'),
-        ...auditColumns<Row>((r) => r.record, 'return_by_customer'),
         ...documentColumns<ReturnRecord>(),
       ],
     }),
@@ -155,6 +154,6 @@ export const RETURN_BY_CUSTOMER_EXPORT: ExportDefinition = {
         ...auditColumns<ReturnLine>((l) => l, 'returned_products_by_customer'),
       ],
     },
-    approvalSheet({ numberHeader: 'Return No', sources: [{ entity: PostReturnByCustomer, numberColumn: 'rbcNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Return No', sources: [{ entity: PostReturnByCustomer, numberColumn: 'rbcNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

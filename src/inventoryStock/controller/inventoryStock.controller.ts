@@ -104,15 +104,17 @@ export class InventoryStockController {
   ){
     try{
       const {company, location, page, limit, search, sort} = req.query;
+      const userId = res.locals.user.id;
 
       const queryOptions = {
         page: page ? parseInt(page as string) : 1,
         limit: limit ? parseInt(limit as string) : 10,
-       
+
       };
 
       const result = await this.inventoryStockService.getlocationcompanywisestock(
         queryOptions,
+        userId,
         company as string,
         location as string,
         search as string

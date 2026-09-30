@@ -10,7 +10,8 @@
 
 import { LPVoucher } from '../entity/labourPaymentVoucher.entity';
 import { ExportDefinition, ExportSheet } from '../../../excel/export/exportTypes';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
+import { APPROVAL_ID_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
+import { withoutColumns } from '../../../excel/export/exportQuery';
 import { joinVoucherCommon, voucherIdentityColumns, voucherTrailingColumns } from '../../excel/voucherCommon.export';
 
 const TABLE = 'labour_payment_voucher';
@@ -44,6 +45,6 @@ export const LABOUR_PAYMENT_VOUCHER_EXPORT: ExportDefinition = {
   fileStem: 'Labour_Payment_Voucher',
   sheets: [
     ...LABOUR_PAYMENT_VOUCHER_SHEETS,
-    approvalSheet({ numberHeader: 'Voucher No', sources: [{ entity: LPVoucher, numberColumn: 'voucherNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Voucher No', sources: [{ entity: LPVoucher, numberColumn: 'voucherNo' }] }), APPROVAL_ID_COLUMNS),
   ],
 };

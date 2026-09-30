@@ -98,6 +98,14 @@ export async function aggregateLines(
 }
 
 /**
+ * Drops columns by header from one module's copy of a sheet, so a shared sheet
+ * builder (e.g. `approvalSheet`) can be trimmed for that module alone.
+ */
+export function withoutColumns<T>(sheet: ExportSheet<T>, headers: readonly string[]): ExportSheet<T> {
+  return { ...sheet, columns: sheet.columns.filter((column) => !headers.includes(column.header)) };
+}
+
+/**
  * Restricts a sheet to refs of one `kind`, for workbooks mixing record types.
  * The sheet's query is skipped entirely for chunks with no refs of that kind.
  */

@@ -9,8 +9,8 @@
 
 import { TPVoucher } from '../entity/transportPaymentvoucher.entity';
 import { ExportDefinition, ExportSheet } from '../../../excel/export/exportTypes';
-import { CATEGORY_COLUMNS, PRODUCT_COLUMNS, joinSelect } from '../../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
+import { CATEGORY_COLUMNS, PRODUCT_COLUMNS, joinSelect, withoutColumns } from '../../../excel/export/exportQuery';
+import { APPROVAL_ID_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
 import { joinVoucherCommon, voucherIdentityColumns, voucherTrailingColumns } from '../../excel/voucherCommon.export';
 
 const TABLE = 'transport_payment_voucher';
@@ -77,6 +77,6 @@ export const TRANSPORT_PAYMENT_VOUCHER_EXPORT: ExportDefinition = {
   fileStem: 'Transport_Payment_Voucher',
   sheets: [
     ...TRANSPORT_PAYMENT_VOUCHER_SHEETS,
-    approvalSheet({ numberHeader: 'Voucher No', sources: [{ entity: TPVoucher, numberColumn: 'voucherNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Voucher No', sources: [{ entity: TPVoucher, numberColumn: 'voucherNo' }] }), APPROVAL_ID_COLUMNS),
   ],
 };

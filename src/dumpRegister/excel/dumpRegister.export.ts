@@ -12,8 +12,8 @@
 import { DumpRegister } from '../entity/dumpRegister.entity';
 import { DumpProduct } from '../entity/dumpProduct.entity';
 import { ExportDefinition } from '../../excel/export/exportTypes';
-import { BRANCH_COLUMNS, COMPANY_COLUMNS, USER_COLUMNS, joinProductLine, joinSelect } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { BRANCH_COLUMNS, COMPANY_COLUMNS, USER_COLUMNS, joinProductLine, joinSelect, withoutColumns } from '../../excel/export/exportQuery';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
   auditColumns,
   branchColumn,
@@ -42,7 +42,6 @@ export const DUMP_REGISTER_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Dump No', maps: 'dump_register.dumpNo', get: (r) => r.record.dumpNo },
-        { header: 'Dump Record ID', maps: 'dump_register.id', get: (r) => r.record.id },
         { header: 'Dump Type', maps: 'dump_register.dumpType', get: (r) => r.record.dumpType },
         { header: 'Dump Date', maps: 'dump_register.date', type: 'date', get: (r) => r.record.date },
         { header: 'Batch No', maps: 'dump_register.batchNo', get: (r) => r.record.batchNo },
@@ -56,8 +55,7 @@ export const DUMP_REGISTER_EXPORT: ExportDefinition = {
         { header: 'Total Cost In Words', maps: 'dump_register.totalCostInWords', get: (r) => r.record.totalCostInWords },
         { header: 'Remark', maps: 'dump_register.remark', get: (r) => r.record.remark },
         ...userColumns<Row>('Requested By', (r) => r.record.requestedBy, 'dump_register.requestedBy'),
-        ...auditColumns<Row>((r) => r.record, 'dump_register'),
-        ...documentColumns<DumpRegister>({ inventory: true }),
+        ...documentColumns<DumpRegister>(),
       ],
     }),
     {
@@ -85,6 +83,6 @@ export const DUMP_REGISTER_EXPORT: ExportDefinition = {
         ...auditColumns<DumpProduct>((l) => l, 'dump_product'),
       ],
     },
-    approvalSheet({ numberHeader: 'Dump No', sources: [{ entity: DumpRegister, numberColumn: 'dumpNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Dump No', sources: [{ entity: DumpRegister, numberColumn: 'dumpNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

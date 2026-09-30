@@ -19,6 +19,7 @@ import { BranchessRepository } from '../repository/branches.repository';
 import { AddressService } from '../../address/service/address.service';
 import { AuditLogService } from '../../employeeActivity/service/auditLog.service';
 import { Branches, BranchType } from '../entity/branches.entity';
+import { User } from '../../employee/entity/user.entity';
 
 const CACHE_TTL = 300; // 5 minutes
 const CACHE_PREFIX = 'branches';
@@ -219,6 +220,28 @@ export class BranchessService {
     });
 
     await this.cacheService.set(key, branches, CACHE_TTL);
+    return branches as BranchFilterItemDto[];
+  }
+
+  // Not cached: access locations change on user update, which does not invalidate branch cache.
+  async getFilterDataForUser(userId: string): Promise<BranchFilterItemDto[]> {
+    const user = await this.branchesRepository.manager.findOne(User, {
+      where: { id: userId },
+      relations: ['accessLocation', 'currentWorkLocation'],
+    });
+
+    if (!user) return [];
+
+    const locationIds = new Set<string>((user.accessLocation || []).map((l) => l.id));
+    if (user.currentWorkLocation) locationIds.add(user.currentWorkLocation.id);
+
+    if (locationIds.size === 0) return [];
+
+    const branches = await this.branchesRepository.find({
+      select: ['id', 'name', 'type'],
+      where: { id: In([...locationIds]) },
+    });
+
     return branches as BranchFilterItemDto[];
   }
 

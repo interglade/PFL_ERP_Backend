@@ -31,6 +31,7 @@ import {
 } from '../dto/branch.dto';
 import { NotificationService } from '../../notification/service/notification.service';
 import { ActivityAction, ActivityModule } from '../../employeeActivity/entity/userActivityLog.entity';
+import { Role } from '../../employee/entity/user.entity';
 
 @controller('/location-branches', deserializeUser, requireUser)
 export class BranchessController {
@@ -171,6 +172,17 @@ export class BranchessController {
     @next() next: NextFunction,
   ) {
     try {
+      // ?accessOnly=true → only locations the logged-in user has access to (admins still get all)
+      const accessOnly = String(req.query.accessOnly ?? '').toLowerCase() === 'true';
+      const user = res.locals.user;
+      const isAdmin = Array.isArray(user?.roles) && user.roles.includes(Role.ADMIN);
+
+      if (accessOnly && !isAdmin) {
+        const userBranches: BranchFilterItemDto[] = await this.branchesService.getFilterDataForUser(user.id);
+        ControllerLogger.logGetAllRecords('Branch', req, res);
+        return res.status(200).json({ status: 'success', data: userBranches });
+      }
+
       const branches: BranchFilterItemDto[] = await this.branchesService.getAllByFilterDataBranchType();
 
       if (!branches || branches.length === 0) {

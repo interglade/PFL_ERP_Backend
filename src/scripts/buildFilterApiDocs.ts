@@ -1182,7 +1182,7 @@ export function buildFilterApiDocs(): string {
     '- Documents appear in the Get All order, and line items follow their document.',
     '- A sheet that would exceed Excel’s 1,048,575 data rows continues on `<Sheet> (2)`.',
     '- Every document export ends with an **Approvals** sheet: one row per approval action (stage, action, user, reason, date).',
-    '- Every document sheet includes the approval summary columns: Document ID, Overall Status, last approval stage/action/user/date, approved by/date, rejected by/date/reason, document creator and timestamps.',
+    '- Every document sheet includes the approval summary columns: Overall Status, Document Created By, Document Created Date and Document Updated Date. Approver and rejecter details are on the Approvals sheet.',
     '',
     'Cell formats:',
     '',

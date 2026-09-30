@@ -12,8 +12,8 @@
 
 import { CustomerDeliveryChallan } from '../entity/customerDeliveryChallan.entity';
 import { ExportDefinition } from '../../../excel/export/exportTypes';
-import { ADDRESS_COLUMNS, BRANCH_COLUMNS, CUSTOMER_COLUMNS, joinSelect } from '../../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
+import { ADDRESS_COLUMNS, BRANCH_COLUMNS, CUSTOMER_COLUMNS, joinSelect, withoutColumns } from '../../../excel/export/exportQuery';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../../excel/export/documentMeta';
 import { addressColumn, branchColumn, customerColumns } from '../../../excel/export/commonColumns';
 import { challanBaseColumns, challanItemsSheet, joinChallanBase } from '../../deliverychllan/excel/deliveryChallanCommon.export';
 
@@ -38,7 +38,6 @@ export const CUSTOMER_DELIVERY_CHALLAN_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Challan No', maps: 'delivery_challan_purchase.challanNo', get: (r) => r.record.challanNo },
-        { header: 'Challan Record ID', maps: 'delivery_challan_purchase.id', get: (r) => r.record.id },
         ...customerColumns<Row>((r) => r.record.customerName),
         { header: 'PO Number', maps: 'delivery_challan_purchase.poNumber', get: (r) => r.record.poNumber },
         branchColumn<Row>('From Location', (r) => r.record.fromLocation, 'delivery_challan_purchase.branch_id'),
@@ -50,10 +49,10 @@ export const CUSTOMER_DELIVERY_CHALLAN_EXPORT: ExportDefinition = {
         { header: 'Return By Customer Created', maps: 'delivery_challan_purchase.isReturnByCustomerCreated', type: 'boolean', get: (r) => r.record.isReturnByCustomerCreated },
         { header: 'Return By Customer Nos', maps: 'return_by_customer.rbcNo', get: (r) => (r.record.returns ?? []).map((ret) => ret.rbcNo) },
         ...challanBaseColumns<CustomerDeliveryChallan>(),
-        ...documentColumns<CustomerDeliveryChallan>({ inventory: true }),
+        ...documentColumns<CustomerDeliveryChallan>(),
       ],
     }),
     challanItemsSheet('Customer DC Items'),
-    approvalSheet({ numberHeader: 'Challan No', sources: [{ entity: CustomerDeliveryChallan, numberColumn: 'challanNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Challan No', sources: [{ entity: CustomerDeliveryChallan, numberColumn: 'challanNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

@@ -21,8 +21,9 @@ import {
   UOM_COLUMNS,
   joinProductLine,
   joinSelect,
+  withoutColumns,
 } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
   addressColumn,
   auditColumns,
@@ -49,7 +50,6 @@ export const SECOND_SALE_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Second Sale No', maps: 'second_sale_document.secondSaleNo', get: (r) => r.record.secondSaleNo },
-        { header: 'Second Sale Record ID', maps: 'second_sale_document.id', get: (r) => r.record.id },
         { header: 'Sale Date', maps: 'second_sale_document.saleDate', type: 'date', get: (r) => r.record.saleDate },
         ...companyColumns<Row>((r) => r.record.companyName),
         branchColumn<Row>('Location', (r) => r.record.location, 'second_sale_document.location'),
@@ -67,7 +67,6 @@ export const SECOND_SALE_EXPORT: ExportDefinition = {
         { header: 'Pending Amount', maps: 'second_sale_document.pendingAmt', type: 'amount', get: (r) => r.record.pendingAmt },
         { header: 'Payment Mode', maps: 'second_sale_document.paymentMode', get: (r) => r.record.paymentMode },
         { header: 'Remarks', maps: 'second_sale_document.remarks', get: (r) => r.record.remarks },
-        ...auditColumns<Row>((r) => r.record, 'second_sale_document'),
         ...documentColumns<SecondSale>(),
       ],
     }),
@@ -106,6 +105,6 @@ export const SECOND_SALE_EXPORT: ExportDefinition = {
         ...auditColumns<SecondSaleProduct>((l) => l, 'second_sale_product'),
       ],
     },
-    approvalSheet({ numberHeader: 'Second Sale No', sources: [{ entity: SecondSale, numberColumn: 'secondSaleNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Second Sale No', sources: [{ entity: SecondSale, numberColumn: 'secondSaleNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

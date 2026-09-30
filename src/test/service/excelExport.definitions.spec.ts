@@ -49,6 +49,24 @@ const DEFINITIONS: [string, ExportDefinition][] = [
   ['All Vouchers', ALL_VOUCHERS_EXPORT],
 ];
 
+/** Columns deliberately left off every first sheet (business request). */
+const OMITTED_FIRST_SHEET_COLUMNS = [
+  'Created Date',
+  'Updated Date',
+  'Document ID',
+  'Last Approval Stage',
+  'Last Approval Action',
+  'Last Action By',
+  'Last Action Date',
+  'Approved By',
+  'Approval Date',
+  'Rejected By',
+  'Rejection Date',
+  'Rejection Reason',
+  'Document Remarks',
+  'Document Created By Employee ID',
+];
+
 describe.each(DEFINITIONS)('%s export definition', (_name, definition) => {
   it('has a file stem that is safe in a file name', () => {
     expect(definition.fileStem).toMatch(/^[A-Za-z0-9_]+$/);
@@ -84,11 +102,12 @@ describe.each(DEFINITIONS)('%s export definition', (_name, definition) => {
     }
   });
 
-  it('first sheet identifies each document by number and record id', () => {
+  it('first sheet identifies each document by number and status, without record ids or audit dates', () => {
     const headers = definition.sheets[0].columns.map((c) => c.header);
     expect(headers.some((h) => / No$/.test(h))).toBe(true);
-    expect(headers.some((h) => / Record ID$/.test(h))).toBe(true);
-    expect(headers).toEqual(expect.arrayContaining(['Document ID', 'Overall Status', 'Created Date', 'Updated Date']));
+    expect(headers).toContain('Overall Status');
+    expect(headers.filter((h) => / Record ID$/.test(h))).toEqual([]);
+    expect(headers.filter((h) => OMITTED_FIRST_SHEET_COLUMNS.includes(h))).toEqual([]);
   });
 });
 

@@ -55,7 +55,6 @@ export function challanBaseColumns<T extends DeliveryChallanPurchase>(): ExportC
     { header: 'Attachments', maps: `${t}.anyAttachment`, get: (r) => r.record.anyAttachment },
     { header: 'Remark', maps: `${t}.remark`, get: (r) => r.record.remark },
     ...userColumns<Row>('Created By', (r) => r.record.createdBy, `${t}.created_by`),
-    ...auditColumns<Row>((r) => r.record, t),
   ];
 }
 

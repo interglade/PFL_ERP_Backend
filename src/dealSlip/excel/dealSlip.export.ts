@@ -19,21 +19,19 @@ import {
   BRANCH_COLUMNS,
   COMPANY_COLUMNS,
   FARMER_COLUMNS,
-  USER_COLUMNS,
   VENDOR_COLUMNS,
   aggregateLines,
   joinProductLine,
   joinSelect,
+  withoutColumns,
 } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
-  auditColumns,
   branchColumn,
   companyColumns,
   farmerColumns,
   productColumns,
   uomColumn,
-  userColumns,
   vendorColumns,
 } from '../../excel/export/commonColumns';
 
@@ -49,7 +47,6 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
       name: 'Deal Slip',
       loadRecords: async (ctx) => {
         const qb = ctx.manager.getRepository(DealSlip).createQueryBuilder('dealSlip');
-        joinSelect(qb, 'dealSlip.createdBy', 'createdBy', USER_COLUMNS);
         qb.leftJoin('dealSlip.rfpa', 'rfpa').addSelect([
           'rfpa.id',
           'rfpa.rfpaId',
@@ -79,11 +76,8 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Deal Slip No', maps: 'deal_slips.dealSlipNo', get: (r) => r.record.dealSlipNo },
-        { header: 'Deal Slip Record ID', maps: 'deal_slips.id', get: (r) => r.record.id },
         { header: 'Lot No', maps: 'deal_slips.lotNo', get: (r) => r.record.lotNo },
         { header: 'RFPA No', maps: 'deal_slips.rfpa -> rfpa.rfpaId', get: (r) => r.record.rfpa?.rfpaId },
-        { header: 'RFPA Record ID', maps: 'deal_slips.rfpa -> rfpa.id', get: (r) => r.record.rfpa?.id },
-        { header: 'Requesting Department', maps: 'deal_slips.requestingDepartment', get: (r) => r.record.requestingDepartment },
         { header: 'Deal Slip Approval Status', maps: 'deal_slips.approvalStatus', get: (r) => r.record.approvalStatus },
         { header: 'Approval Note', maps: 'deal_slips.approvalNote', get: (r) => r.record.approvalNote },
         { header: 'Loading Location', maps: 'deal_slips.loadingLocation', get: (r) => r.record.loadingLocation },
@@ -111,8 +105,6 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
         { header: 'Due Date', maps: 'payment_info_for_rfpa.dueDate', type: 'date', get: (r) => r.record.rfpa?.paymentInfo?.dueDate },
         { header: 'Credit Period', maps: 'payment_info_for_rfpa.creditPeriod', type: 'number', get: (r) => r.record.rfpa?.paymentInfo?.creditPeriod },
         { header: 'Validity Of Quote', maps: 'payment_info_for_rfpa.validityOfQuote', get: (r) => r.record.rfpa?.paymentInfo?.validityOfQuote },
-        ...userColumns<Row>('Created By', (r) => r.record.createdBy, 'deal_slips.createdBy'),
-        ...auditColumns<Row>((r) => r.record, 'deal_slips'),
         ...documentColumns<DealSlipRecord>(),
       ],
     }),
@@ -155,13 +147,8 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
         { header: 'Deal Slip No', maps: 'deal_slips.dealSlipNo', get: (l: Line) => l.dealSlipNo },
         { header: 'Deal Slip Record ID', maps: 'deal_slips.id', get: (l: Line) => l.dealSlipId },
         { header: 'RFPA No', maps: 'rfpa.rfpaId', get: (l: Line) => l.rfpa?.rfpaId },
-        { header: 'Item ID', maps: 'rfpa_product.id', get: (l: Line) => l.id },
         ...productColumns<Line>((l) => l.productName, (l) => l.variant),
         { header: 'Grade', maps: 'rfpa_product.grade', get: (l: Line) => l.grade },
-        { header: 'Count', maps: 'rfpa_product.count', get: (l: Line) => l.count },
-        { header: 'Size', maps: 'rfpa_product.size', get: (l: Line) => l.size },
-        { header: 'Origin', maps: 'rfpa_product.origin', get: (l: Line) => l.origin },
-        { header: 'Variety', maps: 'rfpa_product.variety', get: (l: Line) => l.variety },
         { header: 'Quantity', maps: 'rfpa_product.quantity', type: 'quantity', get: (l: Line) => l.quantity },
         uomColumn<Line>('UOM', (l) => l.uom, 'rfpa_product.uom'),
         { header: 'Unit Price', maps: 'rfpa_product.unitPrice', type: 'amount', get: (l: Line) => l.unitPrice },
@@ -172,6 +159,6 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
         { header: 'Delivery Date', maps: 'rfpa_product.deliveryDate', type: 'date', get: (l: Line) => l.deliveryDate },
       ],
     },
-    approvalSheet({ numberHeader: 'Deal Slip No', sources: [{ entity: DealSlip, numberColumn: 'dealSlipNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Deal Slip No', sources: [{ entity: DealSlip, numberColumn: 'dealSlipNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

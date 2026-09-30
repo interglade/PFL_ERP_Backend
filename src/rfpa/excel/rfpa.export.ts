@@ -17,13 +17,13 @@ import {
   BRANCH_COLUMNS,
   COMPANY_COLUMNS,
   FARMER_COLUMNS,
-  USER_COLUMNS,
   VENDOR_COLUMNS,
   aggregateLines,
   joinProductLine,
   joinSelect,
+  withoutColumns,
 } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
   auditColumns,
   branchColumn,
@@ -31,7 +31,6 @@ import {
   farmerColumns,
   productColumns,
   uomColumn,
-  userColumns,
   vendorColumns,
 } from '../../excel/export/commonColumns';
 
@@ -50,7 +49,6 @@ export const RFPA_EXPORT: ExportDefinition = {
         joinSelect(qb, 'rfpa.purchaseForSalesLocation', 'purchaseForSalesLocation', BRANCH_COLUMNS);
         joinSelect(qb, 'rfpa.selectedVendor', 'vendor', VENDOR_COLUMNS);
         joinSelect(qb, 'rfpa.selectedFarmer', 'farmer', FARMER_COLUMNS);
-        joinSelect(qb, 'rfpa.createdBy', 'createdBy', USER_COLUMNS);
         qb.leftJoinAndSelect('rfpa.paymentInfo', 'paymentInfo');
         const records: RfpaRecord[] = await qb.where('rfpa.id IN (:...ids)', { ids: ctx.ids }).getMany();
 
@@ -63,8 +61,6 @@ export const RFPA_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'RFPA No', maps: 'rfpa.rfpaId', get: (r) => r.record.rfpaId },
-        { header: 'RFPA Record ID', maps: 'rfpa.id', get: (r) => r.record.id },
-        { header: 'Requesting Department', maps: 'rfpa.requestingDepartment', get: (r) => r.record.requestingDepartment },
         { header: 'Source', maps: 'rfpa.source', get: (r) => r.record.source },
         ...companyColumns<Row>((r) => r.record.companyName),
         branchColumn<Row>('Purchase Location', (r) => r.record.purchaseLocation, 'rfpa.purchaseLocation'),
@@ -87,8 +83,6 @@ export const RFPA_EXPORT: ExportDefinition = {
         { header: 'Due Date', maps: 'payment_info_for_rfpa.dueDate', type: 'date', get: (r) => r.record.paymentInfo?.dueDate },
         { header: 'Credit Period', maps: 'payment_info_for_rfpa.creditPeriod', type: 'number', get: (r) => r.record.paymentInfo?.creditPeriod },
         { header: 'Validity Of Quote', maps: 'payment_info_for_rfpa.validityOfQuote', get: (r) => r.record.paymentInfo?.validityOfQuote },
-        ...userColumns<Row>('Created By', (r) => r.record.createdBy, 'rfpa.createdBy'),
-        ...auditColumns<Row>((r) => r.record, 'rfpa'),
         ...documentColumns<RfpaRecord>(),
       ],
     }),
@@ -106,14 +100,8 @@ export const RFPA_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'RFPA No', maps: 'rfpa.rfpaId', get: (l: RFPAProduct) => l.rfpa?.rfpaId },
-        { header: 'RFPA Record ID', maps: 'rfpa.id', get: (l: RFPAProduct) => l.rfpa?.id },
-        { header: 'Item ID', maps: 'rfpa_product.id', get: (l: RFPAProduct) => l.id },
         ...productColumns<RFPAProduct>((l) => l.productName, (l) => l.variant),
         { header: 'Grade', maps: 'rfpa_product.grade', get: (l: RFPAProduct) => l.grade },
-        { header: 'Count', maps: 'rfpa_product.count', get: (l: RFPAProduct) => l.count },
-        { header: 'Size', maps: 'rfpa_product.size', get: (l: RFPAProduct) => l.size },
-        { header: 'Origin', maps: 'rfpa_product.origin', get: (l: RFPAProduct) => l.origin },
-        { header: 'Variety', maps: 'rfpa_product.variety', get: (l: RFPAProduct) => l.variety },
         { header: 'Quantity', maps: 'rfpa_product.quantity', type: 'quantity', get: (l: RFPAProduct) => l.quantity },
         uomColumn<RFPAProduct>('UOM', (l) => l.uom, 'rfpa_product.uom'),
         { header: 'Unit Price', maps: 'rfpa_product.unitPrice', type: 'amount', get: (l: RFPAProduct) => l.unitPrice },
@@ -125,6 +113,6 @@ export const RFPA_EXPORT: ExportDefinition = {
         ...auditColumns<RFPAProduct>((l) => l, 'rfpa_product'),
       ],
     },
-    approvalSheet({ numberHeader: 'RFPA No', sources: [{ entity: RFPA, numberColumn: 'rfpaId' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'RFPA No', sources: [{ entity: RFPA, numberColumn: 'rfpaId' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

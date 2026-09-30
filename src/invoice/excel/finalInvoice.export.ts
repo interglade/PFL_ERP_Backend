@@ -22,8 +22,9 @@ import {
   USER_COLUMNS,
   joinProductLine,
   joinSelect,
+  withoutColumns,
 } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { APPROVAL_ID_AND_STAGE_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
   addressColumn,
   auditColumns,
@@ -80,7 +81,6 @@ export const FINAL_INVOICE_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'Invoice No', maps: 'invoices.invoiceNo', get: (r) => r.record.invoiceNo },
-        { header: 'Invoice Record ID', maps: 'invoices.id', get: (r) => r.record.id },
         { header: 'Invoice Date', maps: 'invoices.invoiceDate', type: 'date', get: (r) => r.record.invoiceDate },
         ...companyColumns<Row>((r) => r.record.companyName),
         ...customerColumns<Row>((r) => r.record.customerName),
@@ -104,7 +104,6 @@ export const FINAL_INVOICE_EXPORT: ExportDefinition = {
         { header: 'Total Amount In Words', maps: 'invoices.totalAmtInWords', get: (r) => r.record.totalAmtInWords },
         { header: 'Payment Status', maps: 'invoices.ammountStatus', get: (r) => r.record.ammountStatus },
         ...userColumns<Row>('Created By', (r) => r.record.createdBy, 'invoices.createdBy'),
-        ...auditColumns<Row>((r) => r.record, 'invoices'),
         ...documentColumns<Invoice>(),
       ],
     }),
@@ -139,6 +138,6 @@ export const FINAL_INVOICE_EXPORT: ExportDefinition = {
         ...auditColumns<InvoiceProduct>((l) => l, 'invoice_products'),
       ],
     },
-    approvalSheet({ numberHeader: 'Invoice No', sources: [{ entity: Invoice, numberColumn: 'invoiceNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'Invoice No', sources: [{ entity: Invoice, numberColumn: 'invoiceNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),
   ],
 };

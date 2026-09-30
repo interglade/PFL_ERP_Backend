@@ -24,10 +24,10 @@ import {
   VENDOR_COLUMNS,
   joinProductLine,
   joinSelect,
+  withoutColumns,
 } from '../../excel/export/exportQuery';
-import { DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
+import { APPROVAL_ID_COLUMNS, DocumentRow, approvalSheet, documentColumns, documentHeaderSheet } from '../../excel/export/documentMeta';
 import {
-  auditColumns,
   branchColumn,
   companyColumns,
   farmerColumns,
@@ -47,34 +47,21 @@ export const GRN_EXPORT: ExportDefinition = {
       loadRecords: async (ctx) => {
         const qb = ctx.manager.getRepository(GRN).createQueryBuilder('grn');
         joinSelect(qb, 'grn.companyName', 'company', COMPANY_COLUMNS);
-        joinSelect(qb, 'grn.dealSlipId', 'dealSlip', ['id', 'dealSlipNo', 'lotNo']);
-        joinSelect(qb, 'grn.rfpa', 'rfpa', ['id', 'rfpaId']);
         joinSelect(qb, 'grn.purchaseLocation', 'purchaseLocation', BRANCH_COLUMNS);
         joinSelect(qb, 'grn.purchaseForSalesLocation', 'purchaseForSalesLocation', BRANCH_COLUMNS);
-        joinSelect(qb, 'grn.location', 'location', BRANCH_COLUMNS);
         joinSelect(qb, 'grn.selectedVendor', 'vendor', VENDOR_COLUMNS);
         joinSelect(qb, 'grn.selectedFarmer', 'farmer', FARMER_COLUMNS);
         joinSelect(qb, 'grn.purchaseInstructionsBy', 'purchaseInstructionsBy', USER_COLUMNS);
-        joinSelect(qb, 'grn.purchaseBy', 'purchaseBy', USER_COLUMNS);
-        joinSelect(qb, 'grn.createdBy', 'createdBy', USER_COLUMNS);
-        joinSelect(qb, 'grn.currentLevel', 'currentLevel', ['id', 'name', 'hierarchy']);
         qb.leftJoinAndSelect('grn.paymentInfo', 'paymentInfo');
         return qb.where('grn.id IN (:...ids)', { ids: ctx.ids }).getMany();
       },
       columns: [
         { header: 'GRN No', maps: 'grns.grnNo', get: (r) => r.record.grnNo },
-        { header: 'GRN Record ID', maps: 'grns.id', get: (r) => r.record.id },
         { header: 'GRN Type', maps: 'grns.grnType', get: (r) => r.record.grnType },
         { header: 'Purchase Type', maps: 'grns.purchaseType', get: (r) => r.record.purchaseType },
         { header: 'Location Type', maps: 'grns.locationType', get: (r) => r.record.locationType },
-        { header: 'Requesting Department', maps: 'grns.requestingDepartment', get: (r) => r.record.requestingDepartment },
         { header: 'Source', maps: 'grns.source', get: (r) => r.record.source },
         ...companyColumns<Row>((r) => r.record.companyName),
-        { header: 'Deal Slip No', maps: 'grns.dealSlipId -> deal_slips.dealSlipNo', get: (r) => r.record.dealSlipId?.dealSlipNo },
-        { header: 'Deal Slip Lot No', maps: 'grns.dealSlipId -> deal_slips.lotNo', get: (r) => r.record.dealSlipId?.lotNo },
-        { header: 'RFPA No', maps: 'grns.rfpa -> rfpa.rfpaId', get: (r) => r.record.rfpa?.rfpaId },
-        branchColumn<Row>('Location', (r) => r.record.location, 'grns.location'),
-        { header: 'Base Location', maps: 'grns.baseLocation', get: (r) => r.record.baseLocation },
         branchColumn<Row>('Purchase Location', (r) => r.record.purchaseLocation, 'grns.purchaseLocation'),
         { header: 'Other Purchase Location', maps: 'grns.otherPurchaseLoc', get: (r) => r.record.otherPurchaseLoc },
         branchColumn<Row>('Purchase For Sales Location', (r) => r.record.purchaseForSalesLocation, 'grns.purchaseForSalesLocation'),
@@ -96,11 +83,8 @@ export const GRN_EXPORT: ExportDefinition = {
         { header: 'Security Person', maps: 'grns.securityPerson', get: (r) => r.record.securityPerson },
         { header: 'RMN', maps: 'grns.rmn', get: (r) => r.record.rmn },
         { header: 'Purchased By', maps: 'grns.purchasedBy', get: (r) => r.record.purchasedBy },
-        ...userColumns<Row>('Purchase By User', (r) => r.record.purchaseBy, 'grns.purchaseBy'),
         ...userColumns<Row>('Purchase Instructions By', (r) => r.record.purchaseInstructionsBy, 'grns.purchaseInstructionsBy'),
-        { header: 'Approval Note', maps: 'grns.approvalNote', get: (r) => r.record.approvalNote },
         { header: 'Special Requirement', maps: 'grns.specialReq', get: (r) => r.record.specialReq },
-        { header: 'Current Level', maps: 'grns.currentLevel -> levels.name', get: (r) => r.record.currentLevel?.name },
         { header: 'Remark', maps: 'grns.remark', get: (r) => r.record.remark },
         { header: 'Payment Mode', maps: 'payment_info_for_grn.paymentMode', get: (r) => r.record.paymentInfo?.paymentMode },
         { header: 'Payment Date', maps: 'payment_info_for_grn.paymentDate', type: 'date', get: (r) => r.record.paymentInfo?.paymentDate },
@@ -109,16 +93,6 @@ export const GRN_EXPORT: ExportDefinition = {
         { header: 'Payment Terms', maps: 'payment_info_for_grn.paymentTerms', get: (r) => r.record.paymentInfo?.paymentTerms },
         { header: 'Due Date', maps: 'payment_info_for_grn.dueDate', type: 'date', get: (r) => r.record.paymentInfo?.dueDate },
         { header: 'Credit Period', maps: 'payment_info_for_grn.creditPeriod', type: 'number', get: (r) => r.record.paymentInfo?.creditPeriod },
-        { header: 'AQR Created', maps: 'grns.isAQRCreated', type: 'boolean', get: (r) => r.record.isAQRCreated },
-        { header: 'Inward Created', maps: 'grns.isInwardCreated', type: 'boolean', get: (r) => r.record.isInwardCreated },
-        { header: 'Dump Created', maps: 'grns.isDumpCreated', type: 'boolean', get: (r) => r.record.isDumpCreated },
-        { header: 'Customer DC Created', maps: 'grns.isDCForCustomerCreated', type: 'boolean', get: (r) => r.record.isDCForCustomerCreated },
-        { header: 'Multi Cash Voucher Created', maps: 'grns.isMCVoucherCreated', type: 'boolean', get: (r) => r.record.isMCVoucherCreated },
-        { header: 'Transport Voucher Created', maps: 'grns.isTPVoucherCreated', type: 'boolean', get: (r) => r.record.isTPVoucherCreated },
-        { header: 'Packing Material Voucher Created', maps: 'grns.isPMPVoucherCreated', type: 'boolean', get: (r) => r.record.isPMPVoucherCreated },
-        { header: 'Labour Voucher Created', maps: 'grns.isLPVoucherCreated', type: 'boolean', get: (r) => r.record.isLPVoucherCreated },
-        ...userColumns<Row>('Created By', (r) => r.record.createdBy, 'grns.createdBy'),
-        ...auditColumns<Row>((r) => r.record, 'grns'),
         ...documentColumns<GRN>(),
       ],
     }),
@@ -136,9 +110,7 @@ export const GRN_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'GRN No', maps: 'grns.grnNo', get: (l: GrnProduct) => l.grn?.grnNo },
-        { header: 'GRN Record ID', maps: 'grns.id', get: (l: GrnProduct) => l.grn?.id },
-        { header: 'Item ID', maps: 'grn_products.id', get: (l: GrnProduct) => l.id },
-        ...productColumns<GrnProduct>((l) => l.productName, (l) => l.variant),
+        ...productColumns<GrnProduct>((l) => l.productName, (l) => l.variant).filter((c) => c.header !== 'Category'),
         uomColumn<GrnProduct>('UOM', (l) => l.uom, 'grn_products.uom'),
         { header: 'Quantity', maps: 'grn_products.quantity', type: 'quantity', get: (l: GrnProduct) => l.quantity },
         { header: 'Revised Quantity', maps: 'grn_products.revisedQuantity', type: 'quantity', get: (l: GrnProduct) => l.revisedQuantity },
@@ -153,7 +125,6 @@ export const GRN_EXPORT: ExportDefinition = {
         { header: 'Expected Harvest Date', maps: 'grn_products.expectedHarvestDate', type: 'date', get: (l: GrnProduct) => l.expectedHarvestDate },
         { header: 'Dispatch Date', maps: 'grn_products.dispatchDate', type: 'date', get: (l: GrnProduct) => l.dispatchDate },
         { header: 'Delivery Date', maps: 'grn_products.deliveryDate', type: 'date', get: (l: GrnProduct) => l.deliveryDate },
-        ...auditColumns<GrnProduct>((l) => l, 'grn_products'),
       ],
     },
     {
@@ -192,6 +163,6 @@ export const GRN_EXPORT: ExportDefinition = {
         { header: 'Modified At', maps: 'grn_product_history.modifiedAt', type: 'datetime', get: (h: GrnProductHistory) => h.modifiedAt },
       ],
     },
-    approvalSheet({ numberHeader: 'GRN No', sources: [{ entity: GRN, numberColumn: 'grnNo' }] }),
+    withoutColumns(approvalSheet({ numberHeader: 'GRN No', sources: [{ entity: GRN, numberColumn: 'grnNo' }] }), APPROVAL_ID_COLUMNS),
   ],
 };
