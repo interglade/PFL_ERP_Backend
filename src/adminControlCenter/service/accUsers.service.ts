@@ -1,3 +1,4 @@
+import config from 'config';
 import { inject, injectable } from 'inversify';
 import { DataSource } from 'typeorm';
 import { CacheService } from '../../global/cache.service';
@@ -53,8 +54,36 @@ export class AccUsersService {
     @inject(TYPES.CacheService) private readonly cacheService: CacheService,
   ) {}
 
-  getUsers(refresh: boolean) {
-    return cachedTab(this.cacheService, cacheKey('users'), refresh, () => this.compute());
+  /**
+   * The tab is cached, but each user's status is overlaid live on every call:
+   * Active = currently logged in, Inactive = everyone else.
+   */
+  async getUsers(refresh: boolean) {
+    const [tab, loggedIn] = await Promise.all([
+      cachedTab(this.cacheService, cacheKey('users'), refresh, () => this.compute()),
+      this.loggedInUserIds(),
+    ]);
+    return {
+      ...tab,
+      users: tab.users.map((u) => ({
+        ...u,
+        status: loggedIn.has(u.id) ? ('Active' as const) : ('Inactive' as const),
+      })),
+    };
+  }
+
+  /**
+   * Users with a live session. Login adds an active_sessions row and logout
+   * deletes it; rows older than the refresh token lifetime are sessions that
+   * expired without a logout, so they don't count.
+   */
+  private async loggedInUserIds(): Promise<Set<string>> {
+    const rows: any[] = await this.dataSource.query(
+      `SELECT DISTINCT user_id FROM active_sessions
+        WHERE is_active = true AND login_time > NOW() - make_interval(mins => $1)`,
+      [config.get<number>('refreshTokenExpiresIn')],
+    );
+    return new Set(rows.map((r) => String(r.user_id)));
   }
 
   private async compute(): Promise<UsersTab> {
@@ -92,7 +121,7 @@ export class AccUsersService {
     const [rows, workflowDeps] = await Promise.all([
       this.dataSource.query(
         `SELECT e.id, e."firstName", e."lastName", e.username, e.roles::text[] AS roles, e.department,
-                e.status::text AS status, COALESCE(e."primaryMobNo", '') AS phone,
+                COALESCE(e."primaryMobNo", '') AS phone,
                 b.name AS branch, o.name AS office
            FROM employees e
            LEFT JOIN branches b ON b.id = e."currentLocation_id"
@@ -117,7 +146,8 @@ export class AccUsersService {
         role: primaryRole(parseRoles(r.roles)),
         department: departments.join(', '),
         location: r.branch || r.office || '',
-        status: r.status === 'ACTIVE' ? 'Active' : 'Inactive',
+        // Placeholder - getUsers sets the live login status.
+        status: 'Inactive',
         phone: r.phone,
       };
     });
