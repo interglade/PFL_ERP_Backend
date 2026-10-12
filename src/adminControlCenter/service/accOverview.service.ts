@@ -164,7 +164,7 @@ export class AccOverviewService {
         salesAmount: sales.amount,
         salesChange: pctChange(sales.amountThisMonth, sales.amountLastMonth),
         stockQty: stockWaste.stockQty,
-        wastageQty: stockWaste.wastageThisMonth,
+        wastageQty: stockWaste.wastageTotal,
         wastageChange: pctChange(stockWaste.wastageThisMonth, stockWaste.wastageLastMonth),
         payableAmount: purchase.unpaidAmount,
         payableCount: purchase.unpaidCount,
@@ -182,12 +182,12 @@ export class AccOverviewService {
 
   /**
    * Till-now totals plus this-month / last-month amounts and unpaid figures.
-   * Amounts count paid documents only; qty counts every completed document.
+   * Qty and amounts count paid documents only.
    */
   private async totals(docsSql: string, thisMonth: string, lastMonth: string) {
     const [row] = await this.dataSource.query(
       `WITH docs AS (${docsSql})
-       SELECT COALESCE(SUM(qty), 0) AS qty,
+       SELECT COALESCE(SUM(qty) FILTER (WHERE NOT unpaid), 0) AS qty,
               COALESCE(SUM(amt) FILTER (WHERE NOT unpaid), 0) AS amount,
               COALESCE(SUM(amt) FILTER (WHERE NOT unpaid AND ts >= $1::timestamp), 0) AS "amountThisMonth",
               COALESCE(SUM(amt) FILTER (WHERE NOT unpaid AND ts >= $2::timestamp AND ts < $1::timestamp), 0) AS "amountLastMonth",
@@ -206,13 +206,12 @@ export class AccOverviewService {
     };
   }
 
-  /** Daily trend points. Amounts count paid documents only; qty counts every completed document. */
+  /** Daily trend points, counting paid documents only. */
   private async daily(docsSql: string, start: string, prefix: 'purchase' | 'sales') {
     const rows: any[] = await this.dataSource.query(
       `WITH docs AS (${docsSql})
-       SELECT to_char(ts, 'YYYY-MM-DD') AS day, SUM(qty) AS qty,
-              COALESCE(SUM(amt) FILTER (WHERE NOT unpaid), 0) AS amt
-         FROM docs GROUP BY 1`,
+       SELECT to_char(ts, 'YYYY-MM-DD') AS day, SUM(qty) AS qty, SUM(amt) AS amt
+         FROM docs WHERE NOT unpaid GROUP BY 1`,
       [start],
     );
     return rows.map((r) => ({
@@ -222,7 +221,10 @@ export class AccOverviewService {
     }));
   }
 
-  /** Current stock across every location and company, and approved dump quantity. */
+  /**
+   * Current stock across every location and company, and approved dump
+   * quantity: till-now total plus this-month / last-month for the change.
+   */
   private async stockAndWastage(thisMonth: string, lastMonth: string) {
     const [row] = await this.dataSource.query(
       `WITH dumps AS (
@@ -231,15 +233,16 @@ export class AccOverviewService {
                   WHERE p.dump_register_id = d.id AND p."isDeleted" = false) AS qty
            FROM dump_register d
           WHERE d."isDeleted" = false AND ${completeDoc('d', 'dump-register')}
-            AND COALESCE(d.date::timestamp, d."createdAt") >= $2::timestamp
        )
        SELECT (SELECT COALESCE(SUM("inwardQty"), 0) FROM inventory_stock WHERE "isDeleted" = false) AS "stockQty",
+              (SELECT COALESCE(SUM(qty), 0) FROM dumps) AS "wastageTotal",
               (SELECT COALESCE(SUM(qty), 0) FROM dumps WHERE ts >= $1::timestamp) AS "wastageThisMonth",
-              (SELECT COALESCE(SUM(qty), 0) FROM dumps WHERE ts < $1::timestamp) AS "wastageLastMonth"`,
+              (SELECT COALESCE(SUM(qty), 0) FROM dumps WHERE ts >= $2::timestamp AND ts < $1::timestamp) AS "wastageLastMonth"`,
       [thisMonth, lastMonth],
     );
     return {
       stockQty: round2(num(row?.stockQty)),
+      wastageTotal: round2(num(row?.wastageTotal)),
       wastageThisMonth: round2(num(row?.wastageThisMonth)),
       wastageLastMonth: round2(num(row?.wastageLastMonth)),
     };

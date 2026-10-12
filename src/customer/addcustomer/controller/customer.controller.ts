@@ -19,6 +19,8 @@ import { NextFunction, Request, Response } from 'express';
 
 import { ControllerLogger } from '../../../utils/controllerLogger';
 import { PaginationOptions } from '../../../utils/pagination';
+import { parseMasterFilters } from '../../../global/filters/masterDataFilter';
+import { CUSTOMER_FILTERS } from '../filters/customer.filters';
 
 import { Status } from '../../../utils/status.enum';
 
@@ -392,6 +394,7 @@ async approveCustomer(
         filters: {},
         sort: (sort as string) || undefined,
         search: (search as string) || '',
+        masterFilters: parseMasterFilters(req.query, CUSTOMER_FILTERS),
       };
       const customers = await this.customerService.findAllCustomers(
         queryOptions,
@@ -993,6 +996,7 @@ customerData.bankDetails ??= {} as BankDetailsDto;
         filters: {},
         sort: (sort as string) || undefined,
         search: (search as string) || '',
+        masterFilters: parseMasterFilters(req.query, CUSTOMER_FILTERS),
       };
 
       const file = await this.customerService.exportToExcel(queryOptions, userId);

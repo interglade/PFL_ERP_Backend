@@ -220,7 +220,8 @@ export class DealSlipController {
     }
   }
 
-  @httpPost("/")
+  // Manual creation is disabled: Deal Slips are auto-created when an RFPA is completed.
+  // (Route decorator removed on purpose; the method body is left untouched.)
   public async createDealSlip(
     @requestBody() dealData: CreateDealSlipDto & Record<string, any>,
     @request() req: Request,

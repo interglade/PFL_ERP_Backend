@@ -24,6 +24,8 @@ import { UserRepository } from '../../../employee/repository/user.repository';
 ;
 import { NotificationService } from '../../../notification/service/notification.service';
 import { Status } from '../../../utils/status.enum';
+import { applyMasterFilters } from '../../../global/filters/masterDataFilter';
+import { CUSTOMER_FILTERS } from '../filters/customer.filters';
 import { formatDateTime } from '../../../utils/dateUtils';
 import { CacheService } from '../../../global/cache.service';
 import { CreateCustomerDto, CustomerListResponseDto, CustomerViewResponseDto, PaginatedResponse } from '../dto/createCustomer.dto';
@@ -370,9 +372,9 @@ export class CustomerService {
           `Your customer "${customerName}" has been sent for approval`,
           creatorId,
         );
-        await this.notificationService.createNotiForRole(
+        await this.notificationService.createNotiForRoles(
           `Customer "${customerName}" is awaiting your approval, created by ${creatorName}`,
-          Role.VERIFIER,
+          [Role.VERIFIER, Role.ADMIN],
         );
       }
     } catch {
@@ -442,6 +444,8 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
       { draft: Status.DRAFT, userId },
     );
   }
+
+  applyMasterFilters(queryBuilder, CUSTOMER_FILTERS, queryOptions.masterFilters);
 
   const customers = await buildQuery(queryBuilder, queryOptions, 'customer');
 
@@ -1790,6 +1794,8 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
       queryBuilder.andWhere('customer.status != :draft', { draft: Status.DRAFT });
     }
 
+    applyMasterFilters(queryBuilder, CUSTOMER_FILTERS, options.masterFilters);
+
     const { data } = await buildQuery(
       queryBuilder,
       { ...options, page: undefined, limit: undefined },
@@ -2250,9 +2256,9 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
     });
     if (!approver) throw new AppError(404, 'Approver not found');
 
-    // Only VERIFIER role can approve/reject customers
-    if (!approver.roles || !approver.roles.includes(Role.VERIFIER)) {
-      throw new AppError(403, 'Only a Verifier can approve or reject customers');
+    // Only ADMIN or VERIFIER role can approve/reject customers
+    if (!approver.roles || !(approver.roles.includes(Role.ADMIN) || approver.roles.includes(Role.VERIFIER))) {
+      throw new AppError(403, 'Only an Admin or Verifier can approve or reject customers');
     }
 
     const customer = await this.customerRepository.findOne({
@@ -2282,7 +2288,7 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
 
       const approver = await this.userRepository.findOneBy({ id: approverId });
       const verifierName = `${approver?.firstName || ''} ${approver?.lastName || ''}`.trim()
-        || (approver as any)?.username || 'Verifier';
+        || (approver as any)?.username || (approver?.roles?.includes(Role.ADMIN) ? 'Admin' : 'Verifier');
 
       const customerName = customer.organisationName || 'Customer';
 

@@ -103,6 +103,7 @@ import { RfpaController } from "./rfpa/controller/rfpa.controller";
 import { DealSlip } from "./dealSlip/entity/dealSlip.entity";
 import { DealSlipRepository } from "./dealSlip/repository/dealSlip.repository";
 import { DealSlipService } from "./dealSlip/service/dealSlip.service";
+import { DealSlipAutoCreateService } from "./dealSlip/service/dealSlipAutoCreate.service";
 import { DealSlipController } from "./dealSlip/controller/dealSlip.controller";
 import { GrnRepository } from "./grn/repository/grn.repository";
 import { GRN } from "./grn/entity/grn.entity";
@@ -751,6 +752,7 @@ container.bind<DealSlipRepository>(TYPES.DealSlipRepository).toDynamicValue((con
   return dataSource.getRepository(DealSlip).extend(DealSlipRepository);
 }).inRequestScope(); // or .singletonScope() depending on your scope requirements
 container.bind<DealSlipService>(TYPES.DealSlipService).to(DealSlipService);
+container.bind<DealSlipAutoCreateService>(TYPES.DealSlipAutoCreateService).to(DealSlipAutoCreateService).inSingletonScope();
 container.bind<DealSlipController>(TYPES.DealSlipController).to( DealSlipController);
 
 //----------------------------------Grn---------------------------------
