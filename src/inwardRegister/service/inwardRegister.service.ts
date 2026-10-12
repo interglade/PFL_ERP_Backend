@@ -4,6 +4,9 @@ import { TYPES } from '../../types';
 import { InwardRepository } from '../repository/inwardRegister.repository';
 import { InwardRegister } from '../entity/inwardRegister.entity';
 import AppError from '../../utils/appError';
+import { Source } from '../../utils/status.enum';
+import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
+import { ResolvedSource } from '../../receiving/receiving.types';
 
 import { LessThanOrEqual, DataSource, SelectQueryBuilder, In, IsNull, ILike, DeepPartial } from 'typeorm';
 
@@ -82,9 +85,40 @@ export class InwardRegisterService {
         private readonly cacheService: CacheService,
         @inject(TYPES.ApprovalFlowService)
         private readonly approvalFlowService: ApprovalFlowService,
+        @inject(TYPES.ReceivingGuardService)
+        private readonly receivingGuardService: ReceivingGuardService,
   ) {}
 
   private readonly CACHE_PREFIX = 'iwr';
+
+  /** Company, receiving location, from-location and party default to the source when the form left them out. */
+  private applySourceDefaults(
+    data: {
+      companyName?: string | null;
+      location?: string | null;
+      fromLocation?: string | null;
+      selectedVendor?: { id: string } | null;
+      selectedFarmer?: { id: string } | null;
+      customerName?: string | null;
+      source?: Source;
+    },
+    resolved: ResolvedSource,
+  ): void {
+    if (!data.companyName && resolved.companyId) data.companyName = resolved.companyId;
+    if (!data.location && resolved.locationId) data.location = resolved.locationId;
+    if (!data.fromLocation && resolved.fromLocationId) data.fromLocation = resolved.fromLocationId;
+    if (!data.selectedVendor && !data.selectedFarmer && !data.customerName && resolved.partyId) {
+      if (resolved.partyType === 'vendor') {
+        data.selectedVendor = { id: resolved.partyId };
+        if (!data.source) data.source = Source.VENDOR;
+      } else if (resolved.partyType === 'farmer') {
+        data.selectedFarmer = { id: resolved.partyId };
+        if (!data.source) data.source = Source.FARMER;
+      } else if (resolved.partyType === 'customer') {
+        data.customerName = resolved.partyId;
+      }
+    }
+  }
   private readonly CACHE_TTL = 180;
 
   private async invalidateCache(id?: string): Promise<void> {
@@ -167,6 +201,26 @@ public async createInwardRegister(data: CreateInwardRegisterInput): Promise<Crea
     // const productIds = variants.map(v => v.product?.id).filter(Boolean);
 const serialNo = await this.generateSerialNo();
     //  data.inwardNo = serialNo;
+
+    // Receiving links R1–R6: the Inward points at one COMPLETE source, lists
+    // every product of it once and stays within the unaccounted kg. The source
+    // row is locked inside this transaction so concurrent creates serialise.
+    const sourceRef = ReceivingGuardService.pickSourceRef(
+      { grnId: data.grnNo, deliveryChallanId: data.deliveryChallanNo, rbcId: data.rbcNo },
+      ReceivingGuardService.sourceTypeFromDocKind(data.inwardType),
+    );
+    const resolvedSource = await this.receivingGuardService.resolveAndAssert({
+      docType: 'inward',
+      sourceType: sourceRef?.sourceType,
+      sourceId: sourceRef?.sourceId,
+      lines: (data.inwardProducts ?? []).map((item) => ({
+        productId: item.productName,
+        variantId: item.variant ?? null,
+        kg: item.netWeight,
+      })),
+      manager: queryRunner.manager,
+    });
+    this.applySourceDefaults(data, resolvedSource);
 
       const {
   requestedBy,
@@ -607,6 +661,7 @@ console.log(transformedInwardRegister)
   ): Promise<InwardRegister> {
     const inwardRegister = await this.inwardRegisterRepo.findOne({
       where: { id },
+      relations: ['grnNo', 'deliveryChallanNo', 'rbcNo', 'inwardProducts', 'inwardProducts.productName', 'inwardProducts.variant'],
     });
 
     if (!inwardRegister) {
@@ -615,11 +670,33 @@ console.log(transformedInwardRegister)
  data.date= normalizeDateFormat(data.date);
     const oldData = { ...inwardRegister };
 
-    Object.assign(inwardRegister, data);
+    // Receiving links: the edited Inward must still match its source exactly
+    // (lines not sent are validated as they are stored).
+    const updatedInwardRegister = await this.dataSource.transaction(async (manager) => {
+      const sourceRef = ReceivingGuardService.pickSourceRef(
+        {
+          grnId: data.grnNo !== undefined ? data.grnNo : inwardRegister.grnNo?.id,
+          deliveryChallanId: data.deliveryChallanNo !== undefined ? data.deliveryChallanNo : inwardRegister.deliveryChallanNo?.id,
+          rbcId: data.rbcNo !== undefined ? data.rbcNo : inwardRegister.rbcNo?.id,
+        },
+        ReceivingGuardService.sourceTypeFromDocKind(data.inwardType ?? inwardRegister.inwardType),
+      );
+      const lines = data.inwardProducts
+        ? data.inwardProducts.map((item) => ({ productId: item.productName, variantId: item.variant ?? null, kg: item.netWeight }))
+        : (inwardRegister.inwardProducts ?? []).map((item) => ({ productId: item.productName?.id, variantId: item.variant?.id ?? null, kg: item.netWeight }));
+      const resolvedSource = await this.receivingGuardService.resolveAndAssert({
+        docType: 'inward',
+        sourceType: sourceRef?.sourceType,
+        sourceId: sourceRef?.sourceId,
+        lines,
+        excludeDocId: id,
+        manager,
+      });
+      this.applySourceDefaults(data, resolvedSource);
 
-    const updatedInwardRegister = await this.inwardRegisterRepo.save(
-      inwardRegister,
-    );
+      Object.assign(inwardRegister, data);
+      return manager.save(inwardRegister);
+    });
 
     await this.auditLogService.logChange(
       'InwardRegister',

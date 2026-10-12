@@ -17,6 +17,10 @@ export interface DumpProductInputDto {
   quantity?: number | null;
   unitPrice?: number | null;
   amount?: number | null;
+  /** Receiving links: net kg is what is matched against the source. */
+  grossWeight?: number | null;
+  packingMaterialWeight?: number | null;
+  netWeight?: number | null;
 }
 
 // ─── Create ───────────────────────────────────────────────────────────────────
@@ -72,6 +76,10 @@ export interface UpdateDumpProductInputDto {
   quantity?: number | null;
   unitPrice?: number | null;
   amount?: number | null;
+  /** Receiving links: net kg is what is matched against the source. */
+  grossWeight?: number | null;
+  packingMaterialWeight?: number | null;
+  netWeight?: number | null;
 }
 
 export interface UpdateDumpRegisterDto {
@@ -100,6 +108,9 @@ export interface DumpProductForUpdateDto {
   quantity: number | null;
   unitPrice: number | null;
   amount: number | null;
+  grossWeight: number | null;
+  packingMaterialWeight: number | null;
+  netWeight: number | null;
 }
 
 export interface DumpRegisterForUpdateDto {
@@ -138,6 +149,9 @@ export interface DumpProductDetailDto {
   quantity: number | null;
   amount: number | null;
   unitPrice: number | null;
+  grossWeight: number | null;
+  packingMaterialWeight: number | null;
+  netWeight: number | null;
 }
 
 export interface DumpRegisterByIdDto {
@@ -166,6 +180,9 @@ export interface DumpProductViewDto {
   quantity: number | null;
   unitPrice: number | null;
   amount: number | null;
+  grossWeight: number | null;
+  packingMaterialWeight: number | null;
+  netWeight: number | null;
 }
 
 export interface DumpRegisterViewDto {

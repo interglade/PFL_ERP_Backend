@@ -535,9 +535,14 @@ console.log(req.body);
     const isPMPVoucherCreated = req.query.isPMPVoucherCreated === 'true' ? true : req.query.isPMPVoucherCreated === 'false' ? false : undefined;
     const isLPVoucherCreated = req.query.isLPVoucherCreated === 'true' ? true : req.query.isLPVoucherCreated === 'false' ? false : undefined;
 
+    // Receiving picker params (see GrnService.getReceivableGrnNumbers)
+    const receivable = req.query.receivable === 'true' ? true : req.query.receivable === 'false' ? false : undefined;
+    const missing = typeof req.query.missing === 'string' && req.query.missing.trim() ? req.query.missing.trim() : undefined;
+    const locationId = typeof req.query.locationId === 'string' && req.query.locationId.trim() ? req.query.locationId.trim() : undefined;
+
     const userId = res.locals.user.id;
 
-      const grns = await this.grnService.getAllGrnNumbers({...req.query, isAQRCreated, isInwardCreated, isDumpCreated, isDCForCustomerCreated, isMCVoucherCreated, isTPVoucherCreated, isPMPVoucherCreated, isLPVoucherCreated}, userId); // Call the service method
+      const grns = await this.grnService.getAllGrnNumbers({...req.query, isAQRCreated, isInwardCreated, isDumpCreated, isDCForCustomerCreated, isMCVoucherCreated, isTPVoucherCreated, isPMPVoucherCreated, isLPVoucherCreated, receivable, missing, locationId}, userId); // Call the service method
       if (!grns || grns.length === 0) {
         return next(new AppError(404, 'No GRNs found'));
       }

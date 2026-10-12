@@ -40,6 +40,19 @@ import { DocDoubleApproverService } from '../../approvalFlow/service/docDoubleAp
 import { DocumentbRepository } from '../../approvalFlow/repository/documentb.repository';
 import { CacheService } from '../../global/cache.service';
 import { PostReturnByCustomer } from '../entity/postReturnByCustomer.entity';
+import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
+import { refId } from '../../receiving/receiving.helpers';
+import { completeDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../receiving/receiving.sql';
+
+/** Receiving picker filters for `getAllRBCNumbers`. */
+export interface RbcReceivingFilter {
+  /** Only COMPLETE, not deleted RBCs. */
+  receivable?: boolean;
+  /** Only RBCs with no counting document of this type (aqr | inward | dump). */
+  missing?: string;
+  /** Receiving location (branch) id. */
+  locationId?: string;
+}
 export interface ReturnByCustomerReportFilter {
   startDate?: string;
   endDate?: string;
@@ -103,9 +116,19 @@ export class PostReturnByCustomerService {
     private readonly approvalFlowService: ApprovalFlowService,
     @inject(TYPES.CustomerDeliveryChallanService)
     private readonly customerDeliveryChallanService: CustomerDeliveryChallanService,
+    @inject(TYPES.ReceivingGuardService)
+    private readonly receivingGuardService: ReceivingGuardService,
   ) {}
 
   private readonly CACHE_PREFIX = 'rbc';
+
+  /** Receiving links D6: an RBC lists each product + variant once. */
+  private assertNoDuplicateProducts(products: unknown): void {
+    if (!Array.isArray(products)) return;
+    this.receivingGuardService.assertNoDuplicateLines(
+      products.map((p: any) => ({ productId: refId(p?.productName), variantId: refId(p?.variant) })),
+    );
+  }
   private readonly CACHE_TTL = 180;
 
   private async invalidateCache(id?: string): Promise<void> {
@@ -190,6 +213,7 @@ export class PostReturnByCustomerService {
       if (!returnData.deliveryChallanNo) {
         throw new Error('Delivery Challan number is required');
       }
+      this.assertNoDuplicateProducts(returnData.returnedProducts);
 
       // 2️⃣ Fetch and validate delivery challan with products
       const deliveryChallan = await queryRunner.manager.findOne(
@@ -756,7 +780,10 @@ export class PostReturnByCustomerService {
     await this.cacheService.set(cacheKey, idResult, this.CACHE_TTL);
     return idResult;
   }
-  async getAllRBCNumbers(page?: number, limit?: number, search?: string): Promise<RBCNumbersResponseDto> {
+  async getAllRBCNumbers(page?: number, limit?: number, search?: string, receiving?: RbcReceivingFilter): Promise<RBCNumbersResponseDto> {
+    if (receiving && (receiving.receivable || receiving.missing || receiving.locationId)) {
+      return this.getReceivableRBCNumbers(page, limit, search, receiving);
+    }
     const cacheKey = `${this.CACHE_PREFIX}:numbers:${page ?? 'all'}:${limit ?? 'all'}:${search ?? ''}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
@@ -808,6 +835,64 @@ export class PostReturnByCustomerService {
     return result;
   }
 
+  /**
+   * Receiving picker for RBCs, applied in SQL:
+   * - `receivable=true` -> the RBC is COMPLETE (via `documents`) and not deleted;
+   * - `missing=<type>`  -> no counting document of that type (aqr | inward | dump) references the RBC
+   *                        (counting = not deleted and `documents.status` <> REJECT);
+   * - `locationId`      -> receiving location (branch).
+   * `search` matches `rbcNo` (ILIKE) or the exact id. Without `page` / `limit` every match is
+   * returned (capped at 500). Not cached: the list changes the moment a document is created.
+   */
+  private async getReceivableRBCNumbers(
+    page: number | undefined,
+    limit: number | undefined,
+    search: string | undefined,
+    receiving: RbcReceivingFilter,
+  ): Promise<RBCNumbersResponseDto> {
+    if (receiving.missing && !isProcessingDocType(receiving.missing)) {
+      throw new AppError(400, 'missing must be one of aqr, inward, dump, rtv');
+    }
+    const paginated = Boolean(page && limit);
+    const currentPage = paginated ? Math.max(1, Number(page)) : 1;
+    const currentLimit = paginated ? Math.min(200, Math.max(1, Number(limit))) : 500;
+
+    if (receiving.missing === 'rtv') {
+      // An RTV can only be raised against a GRN, so no RBC is ever "missing" one.
+      return { data: [], total: 0, page: currentPage, totalPages: 0 };
+    }
+
+    const qb = this.postReturnByCustomerRepository
+      .createQueryBuilder('rbc')
+      .select(['rbc.id', 'rbc.rbcNo', 'rbc.createdAt'])
+      .where('rbc.isDeleted = false');
+
+    if (receiving.receivable) qb.andWhere(completeDocumentExistsSql('rbc.id', 'rbc'));
+    if (receiving.missing && isProcessingDocType(receiving.missing)) {
+      qb.andWhere(noCountingDocumentSql('rbc.id', 'rbc', receiving.missing));
+    }
+    if (receiving.locationId) {
+      qb.leftJoin('rbc.location', 'receivingLocation').andWhere('receivingLocation.id = :locationId', { locationId: String(receiving.locationId) });
+    }
+    if (search && search.trim()) {
+      const term = search.trim();
+      qb.andWhere('(rbc.rbcNo ILIKE :search OR rbc.id::text = :exact)', { search: `%${term}%`, exact: term });
+    }
+
+    const [rows, total] = await qb
+      .orderBy('rbc.createdAt', 'DESC')
+      .skip((currentPage - 1) * currentLimit)
+      .take(currentLimit)
+      .getManyAndCount();
+
+    return {
+      data: rows.map((r) => ({ id: r.id, rbcNo: r.rbcNo ?? null })),
+      total,
+      page: currentPage,
+      totalPages: paginated ? Math.ceil(total / currentLimit) : 1,
+    };
+  }
+
    //TODO:Delte Multiple
 public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
   const success: {id: string; No: string}[]= []
@@ -821,6 +906,8 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
         failed.push({ id, reason: 'RBC not found' });
         continue;
       }
+      // Receiving links R10 — a 409 here lands in `failed` with its message.
+      await this.receivingGuardService.assertSourceEditable('rbc', id);
       const relatedDocument = await this.documentbRepository.findOne({
         where: { document_type_id: rbc.id }
       });
@@ -850,6 +937,9 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
     updatedBy: string,
     clientIp?: string,
   ): Promise<any> {
+    // Receiving links R9 / D6: not while an AQR / Inward / Dump counts against it; no repeated product + variant.
+    await this.receivingGuardService.assertSourceEditable('rbc', id);
+    this.assertNoDuplicateProducts(returnData?.returnedProducts);
     const postReturn = await this.postReturnByCustomerRepository.findOne({
       where: { id },
       relations: [

@@ -263,7 +263,11 @@ export class PostReturnByCustomerController {
       const page = req.query.page ? parseInt(req.query.page as string) : undefined;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
       const search = req.query.search as string | undefined;
-      const result = await this.postReturnByCustomerService.getAllRBCNumbers(page, limit, search);
+      // Receiving picker params: receivable=true, missing=aqr|inward|dump, locationId
+      const receivable = req.query.receivable === 'true' ? true : req.query.receivable === 'false' ? false : undefined;
+      const missing = typeof req.query.missing === 'string' && req.query.missing.trim() ? req.query.missing.trim() : undefined;
+      const locationId = typeof req.query.locationId === 'string' && req.query.locationId.trim() ? req.query.locationId.trim() : undefined;
+      const result = await this.postReturnByCustomerService.getAllRBCNumbers(page, limit, search, { receivable, missing, locationId });
       res.status(200).json({
         status: 'success',
         data: result.data,

@@ -29,7 +29,9 @@ import { DocumentbService, DocumentWithRelatedData } from '../../approvalFlow/se
 import { ApprovalFlowService } from '../../approvalFlow/service/approvalFlow.service';
 import { GrnProductHistoryService } from './grnProductHistory.service';
 import { CreateGrnDto, GrnDetailDto, GrnListItemDto, UpdateGrnDto } from '../dto/grn.dto';
-import { GRN } from '../entity/grn.entity';
+import { GRN, GrnDeliveryMode } from '../entity/grn.entity';
+import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
+import { completeDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../receiving/receiving.sql';
 
 interface SourceMetrics {
   totalPurchases: number;
@@ -56,6 +58,7 @@ export class GrnService {
     @inject(TYPES.ApprovalFlowService) private readonly approvalFlowService: ApprovalFlowService,
     @inject(TYPES.DataSource) private readonly dataSource: DataSource,
     @inject(TYPES.GrnProductHistoryService) private readonly grnProductHistoryService: GrnProductHistoryService,
+    @inject(TYPES.ReceivingGuardService) private readonly receivingGuardService: ReceivingGuardService,
   ) { }
 
   private readonly CACHE_PREFIX = 'grn';
@@ -219,6 +222,11 @@ public async getAllRecycleBinGrns(queryOptions: PaginationOptions, userId: strin
       throw new AppError(400, 'createdBy field is required for approval flow validation');
     }
     await this.checkApprovalFlowExists(grnData.createdBy, DocDefEnum.PROCUREMENT);
+    this.assertDeliveryMode(grnData.deliveryMode);
+    // Receiving links D6: a GRN lists each product + variant once.
+    this.receivingGuardService.assertNoDuplicateLines(
+      (grnData.grnProducts ?? []).map((p) => ({ productId: p.productName ?? null, variantId: p.variant ?? null })),
+    );
     
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -346,6 +354,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
           createdTime,
           companyName: related.companyName?.name || null,
           grnType: related.grnType || null,
+          deliveryMode: related.deliveryMode || null,
           purchaseType: related.purchaseType || null,
           locationType: related.locationType || null,
           source: related.source || null,
@@ -497,6 +506,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
         grnNo: grn.grnNo,
         locationType: grn.locationType,
         grnType: grn.grnType,
+        deliveryMode: grn.deliveryMode ?? null,
         rmn: grn.rmn,
         createdDate: createdDate,
         createdTime: createdTime,
@@ -629,6 +639,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
       grnNo: grn.grnNo,
       locationType: grn.locationType,
       grnType: grn.grnType,
+      deliveryMode: grn.deliveryMode ?? null,
       rmn: grn.rmn,
       createdDate: createdDate,
       createdTime: createdTime,
@@ -708,11 +719,20 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
   // Safely extract just the UUID — controller may pass full User object
   const modifiedByUserId: string =
     typeof updatedBy === 'string' ? updatedBy : updatedBy?.id ?? updatedBy;
+  this.assertDeliveryMode(grnData.deliveryMode);
+  if (grnData.grnProducts) {
+    this.receivingGuardService.assertNoDuplicateLines(
+      grnData.grnProducts.map((p) => ({ productId: p.productName ?? null, variantId: p.variant ?? null })),
+    );
+  }
   const queryRunner = this.dataSource.createQueryRunner();
   await queryRunner.connect();
   await queryRunner.startTransaction();
 
   try {
+    // Receiving links R9: a GRN that already has an AQR / Inward / Dump / RTV cannot change.
+    await this.receivingGuardService.assertSourceEditable('grn', id, queryRunner.manager);
+
     // Fetch the current GRN with its products inside the transaction
     const grn = await queryRunner.manager.findOne(this.grnRepository.target, {
       where: { id },
@@ -959,6 +979,8 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     {
       throw new AppError(404,`Grn With ID ${id} not found`);
     }
+    // Receiving links R10: not while a processing document counts against it.
+    await this.receivingGuardService.assertSourceEditable('grn', id);
     const sixMonthsFromNow = new Date();
     sixMonthsFromNow.setMonth(sixMonthsFromNow.getMonth() + 6);
     sixMonthsFromNow.setHours(0, 0, 0, 0);
@@ -1021,9 +1043,19 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     page?: number;
     limit?: number;
     search?: string;
+    /** Receiving picker: only COMPLETE, cc-dc, not deleted GRNs. */
+    receivable?: boolean;
+    /** Receiving picker: only GRNs with no counting document of this type (aqr | inward | dump | rtv). */
+    missing?: string;
+    /** Receiving picker: purchase-for (receiving) location id. */
+    locationId?: string;
   },
   loginUserId: string
 ): Promise<any> {
+
+  if (filter?.receivable || filter?.missing || filter?.locationId) {
+    return this.getReceivableGrnNumbers(filter);
+  }
 
   const hash = createHash('md5').update(`${loginUserId}:${JSON.stringify(filter)}`).digest('hex');
   const cacheKey = `${this.CACHE_PREFIX}:numbers:${hash}`;
@@ -1194,6 +1226,87 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
   return numbersResult;
 }
 
+  private assertDeliveryMode(value: unknown): void {
+    if (value === undefined || value === null || value === '') return;
+    if (!Object.values(GrnDeliveryMode).includes(value as GrnDeliveryMode)) {
+      throw new AppError(400, 'deliveryMode must be cc-dc or direct-to-customer');
+    }
+  }
+
+  /**
+   * Source picker for the receiving forms (AQR / Inward / Dump / RTV). All of
+   * it runs in SQL:
+   * - `receivable=true`  -> the GRN is COMPLETE (via `documents`), not deleted and `deliveryMode = cc-dc`;
+   * - `missing=<type>`   -> no counting document of that type (aqr | inward | dump | rtv) references the GRN
+   *                         (counting = not deleted and `documents.status` <> REJECT);
+   * - `locationId`       -> purchase-for (receiving) location.
+   * `search` matches `grnNo` (ILIKE) or the exact id; `page` / `limit` paginate.
+   * The legacy `is*Created` / `overAllStatus` / `employeeBaseHirechey` flags do
+   * not apply on this path. Not cached: the list changes the moment a document
+   * is created or rejected.
+   */
+  private async getReceivableGrnNumbers(filter: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    receivable?: boolean;
+    missing?: string;
+    locationId?: string;
+  }): Promise<any> {
+    const page = Math.max(1, Number(filter.page) || 1);
+    const limit = Math.min(200, Math.max(1, Number(filter.limit) || 10));
+    if (filter.missing !== undefined && filter.missing !== '' && !isProcessingDocType(filter.missing)) {
+      throw new AppError(400, 'missing must be one of aqr, inward, dump, rtv');
+    }
+
+    const qb = this.grnRepository
+      .createQueryBuilder('grn')
+      .select(['grn.id', 'grn.grnNo', 'grn.createdAt'])
+      .where('grn.isDeleted = false');
+
+    if (filter.receivable) {
+      qb.andWhere('grn.deliveryMode = :deliveryMode', { deliveryMode: GrnDeliveryMode.CC_DC });
+      qb.andWhere(completeDocumentExistsSql('grn.id', 'grn'));
+    }
+    if (filter.missing && isProcessingDocType(filter.missing)) {
+      qb.andWhere(noCountingDocumentSql('grn.id', 'grn', filter.missing));
+    }
+    if (filter.locationId) {
+      qb.leftJoin('grn.purchaseForSalesLocation', 'receivingLocation')
+        .andWhere('receivingLocation.id = :locationId', { locationId: String(filter.locationId) });
+    }
+    if (filter.search && String(filter.search).trim()) {
+      const term = String(filter.search).trim();
+      qb.andWhere('(grn.grnNo ILIKE :search OR grn.id::text = :exact)', { search: `%${term}%`, exact: term });
+    }
+
+    const [grns, total] = await qb
+      .orderBy('grn.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    const documentMap = new Map<string, string>();
+    if (grns.length) {
+      const documents = await this.documentbRepository
+        .createQueryBuilder('doc')
+        .select(['doc.id', 'doc.document_type_id', 'doc.createdAt'])
+        .where('doc.type = :type', { type: DocumentTypeEnum.GRN })
+        .andWhere('doc.document_type_id IN (:...ids)', { ids: grns.map((g) => g.id) })
+        .orderBy('doc.createdAt', 'DESC')
+        .getMany();
+      for (const doc of documents) {
+        if (doc.document_type_id && !documentMap.has(doc.document_type_id)) documentMap.set(doc.document_type_id, doc.id);
+      }
+    }
+
+    const totalPages = Math.ceil(total / limit);
+    return {
+      data: grns.map((g) => ({ id: g.id, grnNo: g.grnNo, documentId: documentMap.get(g.id) ?? null })),
+      pagination: { total, page, limit, totalPages, pages: totalPages },
+    };
+  }
+
   private async generateSerialNo(prefix: string): Promise<string> {
     const count = await this.grnRepository.count({
       where: { grnNo: ILike(`${prefix}%`) },
@@ -1220,6 +1333,11 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     const foundIds = new Set(grns.map(g => g.id));
     const missingId = ids.find(id => !foundIds.has(id));
     if (missingId) throw new Error(`GRN with ID ${missingId} not found`);
+
+    // Receiving links R10: none of them may already have a counting processing document.
+    for (const id of ids) {
+      await this.receivingGuardService.assertSourceEditable('grn', id);
+    }
 
     const docIds = relatedDocuments.map(d => d.id);
     if (docIds.length) {

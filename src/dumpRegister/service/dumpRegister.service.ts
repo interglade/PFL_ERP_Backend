@@ -30,6 +30,8 @@ import { formatDateTime } from "../../utils/dateUtils";
 import { DumpRegister } from "../entity/dumpRegister.entity";
 import { BulkDeleteResultDto, DeleteResultDto } from "../../global/general.dto";
 import AppError from "../../utils/appError";
+import { ReceivingGuardService } from "../../receiving/service/receivingGuard.service";
+import { DumpProduct } from "../entity/dumpProduct.entity";
 
 
 
@@ -56,6 +58,8 @@ export class DumpRegisterService{
     private readonly dataSource: DataSource,
     @inject(TYPES.CacheService)
     private readonly cacheService: CacheService,
+    @inject(TYPES.ReceivingGuardService)
+    private readonly receivingGuardService: ReceivingGuardService,
     ) {}
 
   // ─── Cache Helpers ────────────────────────────────────────────────────────
@@ -134,11 +138,30 @@ export class DumpRegisterService{
         
         // Create the dump register header
         // Handle both companyId/companyName field names
-        const companyId = data.companyId || data.companyName;
-        const locationId = data.locationId || data.location;
         const grnId = data.grn || data.grnNo;
         const deliveryChallanId = data.deliveryChallanNo || data.deliveryChallan;
         const rbcId = data.rbcNo || data.rbc;
+
+        // Receiving links R1–R6: one COMPLETE source, every product of it once,
+        // net kg within what is still unaccounted for. The source row is locked
+        // inside this transaction so concurrent creates serialise.
+        const sourceRef = ReceivingGuardService.pickSourceRef(
+          { grnId, deliveryChallanId, rbcId },
+          ReceivingGuardService.sourceTypeFromDocKind(data.dumpType),
+        );
+        const resolvedSource = await this.receivingGuardService.resolveAndAssert({
+          docType: 'dump',
+          sourceType: sourceRef?.sourceType,
+          sourceId: sourceRef?.sourceId,
+          lines: data.dumpProducts.map((p) => ({
+            productId: p.productId || p.productName,
+            variantId: p.variantId || p.variant || null,
+            kg: p.netWeight,
+          })),
+          manager: queryRunner.manager,
+        });
+        const companyId = data.companyId || data.companyName || resolvedSource.companyId;
+        const locationId = data.locationId || data.location || resolvedSource.locationId;
 const serialNo = await this.generateSerialNo();
 
         const dumpRegister = queryRunner.manager.create(
@@ -196,8 +219,10 @@ const serialNo = await this.generateSerialNo();
 
           const dumpQty = Number(quantity ?? 0);
           const dumpAmt = Number(amount ?? 0);
+          const netKg = Number(productData.netWeight ?? 0);
 
-          if (dumpQty <= 0) continue;
+          // Rows with nothing to dump (0 kg and 0 count) are not stored.
+          if (dumpQty <= 0 && netKg <= 0) continue;
 
           // Create DumpProduct record
           const dumpProductData: any = {
@@ -206,6 +231,9 @@ const serialNo = await this.generateSerialNo();
             quantity: dumpQty,
             unitPrice: Number(unitPrice ?? 0),
             amount: dumpAmt,
+            grossWeight: productData.grossWeight ?? null,
+            packingMaterialWeight: productData.packingMaterialWeight ?? null,
+            netWeight: productData.netWeight ?? null,
           };
 
           if (variantId) {
@@ -237,6 +265,10 @@ const serialNo = await this.generateSerialNo();
         // Rollback transaction - undo all changes
         await queryRunner.rollbackTransaction();
     logger.error('Error creating Dump Register:', error);
+        // User-facing errors (receiving guard) keep their status code and message.
+        if (error instanceof AppError) {
+          throw error;
+        }
         // Re-throw the original error with more context
         if (error instanceof Error) {
           throw new Error(`Failed to create Dump Register: ${error.message}`);
@@ -377,6 +409,7 @@ const serialNo = await this.generateSerialNo();
         'location.id', 'grn.id', 'deliveryChallanNo.id', 'rbcNo.id',
         'requestedBy.id', 'companyName.id',
         'dumpProducts.id', 'dumpProducts.quantity', 'dumpProducts.unitPrice', 'dumpProducts.amount',
+        'dumpProducts.grossWeight', 'dumpProducts.packingMaterialWeight', 'dumpProducts.netWeight',
         'productName.id', 'variant.id', 'uom.id',
       ])
       .where('dr.id = :id', { id })
@@ -410,6 +443,9 @@ const serialNo = await this.generateSerialNo();
         quantity: p.quantity,
         amount: p.amount,
         unitPrice: p.unitPrice,
+        grossWeight: p.grossWeight ?? null,
+        packingMaterialWeight: p.packingMaterialWeight ?? null,
+        netWeight: p.netWeight ?? null,
       })),
     };
 
@@ -446,6 +482,7 @@ const serialNo = await this.generateSerialNo();
         'companyName.name',
         'requestedBy.firstName', 'requestedBy.lastName',
         'dumpProducts.id', 'dumpProducts.quantity', 'dumpProducts.unitPrice', 'dumpProducts.amount',
+        'dumpProducts.grossWeight', 'dumpProducts.packingMaterialWeight', 'dumpProducts.netWeight',
         'productName.name', 'variant.variantName', 'uom.unit',
       ])
       .where('dr.id = :id', { id })
@@ -487,6 +524,9 @@ const serialNo = await this.generateSerialNo();
         quantity: p.quantity,
         amount: p.amount,
         unitPrice: p.unitPrice,
+        grossWeight: p.grossWeight ?? null,
+        packingMaterialWeight: p.packingMaterialWeight ?? null,
+        netWeight: p.netWeight ?? null,
       })),
     };
 
@@ -613,53 +653,86 @@ public async updateDumpRegister(
   
   const existingDumpRegister = await this.dumpRegisterRepository.findOne({
     where: { id },
-    relations: ["dumpProducts"],
+    relations: [
+      "dumpProducts", "dumpProducts.productName", "dumpProducts.variant",
+      "grn", "deliveryChallanNo", "rbcNo", "companyName", "location",
+    ],
   });
 
   if (!existingDumpRegister) {
     throw new Error("DumpRegister entry not found");
   }
 
-  
   const oldData = { ...existingDumpRegister };
 
- 
   const { dumpProducts, ...updateData } = data;
 
-  
-  Object.assign(existingDumpRegister, updateData);
-
-  
-  if (dumpProducts && Array.isArray(dumpProducts)) {
-    
-    await this.dumpProductRepository.delete({ dumpRegister: { id } });
-
-    // Accept the same field aliases the create path accepts. The edit form
-    // posts back the create payload shape (productId/variantId/uomId); reading
-    // only productName/variant/uom silently dropped the variant, which then
-    // moved stock against a NULL-variant inventory_stock row.
-    const newDumpProducts = dumpProducts.map(product => {
-      const productId = product.productId || product.productName;
-      const variantId = product.variantId || product.variant;
-      const uomId = product.uomId || product.uom;
-
-      return this.dumpProductRepository.create({
-        dumpRegister: existingDumpRegister,
-        productName: productId ? ({ id: productId } as any) : undefined,
-        variant: variantId ? ({ id: variantId } as any) : undefined,
-        uom: uomId ? ({ id: uomId } as any) : undefined,
-        quantity: product.quantity ?? undefined,
-        unitPrice: product.unitPrice ?? undefined,
-        amount: product.amount ?? undefined,
-      });
+  const updatedDumpRegister = await this.dataSource.transaction(async (manager) => {
+    // Receiving links: the edited Dump must still match its source exactly
+    // (lines not sent are validated as they are stored).
+    const sourceRef = ReceivingGuardService.pickSourceRef(
+      {
+        grnId: data.grn !== undefined ? data.grn : existingDumpRegister.grn?.id,
+        deliveryChallanId: data.deliveryChallanNo !== undefined ? data.deliveryChallanNo : existingDumpRegister.deliveryChallanNo?.id,
+        rbcId: data.rbcNo !== undefined ? data.rbcNo : existingDumpRegister.rbcNo?.id,
+      },
+      ReceivingGuardService.sourceTypeFromDocKind(data.dumpType ?? existingDumpRegister.dumpType),
+    );
+    const lines = dumpProducts && Array.isArray(dumpProducts)
+      ? dumpProducts.map((p) => ({ productId: p.productId || p.productName, variantId: p.variantId || p.variant || null, kg: p.netWeight }))
+      : (existingDumpRegister.dumpProducts ?? []).map((p) => ({ productId: p.productName?.id, variantId: p.variant?.id ?? null, kg: p.netWeight }));
+    const resolvedSource = await this.receivingGuardService.resolveAndAssert({
+      docType: 'dump',
+      sourceType: sourceRef?.sourceType,
+      sourceId: sourceRef?.sourceId,
+      lines,
+      excludeDocId: id,
+      manager,
     });
+    if (!updateData.companyName && !existingDumpRegister.companyName && resolvedSource.companyId) {
+      (updateData as Record<string, unknown>).companyName = resolvedSource.companyId;
+    }
+    if (!updateData.location && !existingDumpRegister.location && resolvedSource.locationId) {
+      (updateData as Record<string, unknown>).location = resolvedSource.locationId;
+    }
 
-    await this.dumpProductRepository.save(newDumpProducts as any);
-    existingDumpRegister.dumpProducts = newDumpProducts;
-  }
+    Object.assign(existingDumpRegister, updateData);
 
- 
-  const updatedDumpRegister = await this.dumpRegisterRepository.save(existingDumpRegister);
+    if (dumpProducts && Array.isArray(dumpProducts)) {
+      await manager.delete(DumpProduct, { dumpRegister: { id } });
+
+      // Accept the same field aliases the create path accepts. The edit form
+      // posts back the create payload shape (productId/variantId/uomId); reading
+      // only productName/variant/uom silently dropped the variant, which then
+      // moved stock against a NULL-variant inventory_stock row.
+      // Rows with nothing to dump (0 kg and 0 count) are not stored.
+      const newDumpProducts = dumpProducts
+        .filter((product) => Number(product.quantity ?? 0) > 0 || Number(product.netWeight ?? 0) > 0)
+        .map(product => {
+          const productId = product.productId || product.productName;
+          const variantId = product.variantId || product.variant;
+          const uomId = product.uomId || product.uom;
+
+          return manager.create(DumpProduct, {
+            dumpRegister: existingDumpRegister,
+            productName: productId ? ({ id: productId } as any) : undefined,
+            variant: variantId ? ({ id: variantId } as any) : undefined,
+            uom: uomId ? ({ id: uomId } as any) : undefined,
+            quantity: product.quantity ?? undefined,
+            unitPrice: product.unitPrice ?? undefined,
+            amount: product.amount ?? undefined,
+            grossWeight: product.grossWeight ?? undefined,
+            packingMaterialWeight: product.packingMaterialWeight ?? undefined,
+            netWeight: product.netWeight ?? undefined,
+          });
+        });
+
+      await manager.save(newDumpProducts as any);
+      existingDumpRegister.dumpProducts = newDumpProducts;
+    }
+
+    return manager.save(existingDumpRegister);
+  });
 
 
   await this.auditLogService.logChange(

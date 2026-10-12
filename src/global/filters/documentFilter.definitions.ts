@@ -20,6 +20,7 @@ import { GrnProduct } from '../../grn/entity/grnProduct.entity';
 import { InwardRegister, InwardType } from '../../inwardRegister/entity/inwardRegister.entity';
 import { InwardProduct } from '../../inwardRegister/entity/inwardProduct.entity';
 import { Aqr, AqrFor } from '../../aqr/entity/aqr.entity';
+import { AqrProduct } from '../../aqr/entity/aqrProduct.entity';
 import { DumpRegister, DumpType } from '../../dumpRegister/entity/dumpRegister.entity';
 import { DumpProduct } from '../../dumpRegister/entity/dumpProduct.entity';
 import { Item } from '../../deliveryChallans/deliverychllan/entity/dItem.entity';
@@ -284,15 +285,18 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       location: 'rec.location',
       fromLocation: 'rec.fromLocation',
       challan: 'rec.deliveryChallanNo',
+      grn: 'rec.grn',
+      rbc: 'rec.rbc',
       vendor: 'rec.selectedVendor',
       farmer: 'rec.selectedFarmer',
-      product: 'rec.product',
-      variant: 'rec.variant',
     },
     fields: [
       enumOf('aqrFor', 'rec.aqrFor', AqrFor, 'AQR for'),
       enumOf('source', 'rec.source', Source, 'Source: vendor or farmer'),
-      text('deliveryChallanNo', ['challan.challanNo'], 'Delivery challan number (partial)'),
+      text('grnNo', ['grn.grnNo'], 'Source GRN number (partial)'),
+      text('deliveryChallanNo', ['challan.challanNo'], 'Source transfer delivery challan number (partial)'),
+      text('rbcNo', ['rbc.rbcNo'], 'Source return by customer number (partial)'),
+      text('sourceNo', ['grn.grnNo', 'challan.challanNo', 'rbc.rbcNo'], 'Source document number: GRN, Transfer DC or RBC (partial)'),
       ...companyFields(),
       ...locationFields(['location', 'fromLocation']),
       ...vendorFields(),
@@ -303,8 +307,10 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       { param: 'minQuantity', kind: 'min', exprs: ['rec.totalQty'], description: 'Total quantity >= value' },
       { param: 'maxQuantity', kind: 'max', exprs: ['rec.totalQty'], description: 'Total quantity <= value' },
     ],
-    search: ['challan.challanNo', 'company.name', 'location.name', 'vendor.companyName', farmerFullName('farmer'), 'product.name', 'product.productCode'],
-    headerProduct: { product: 'product', variant: 'variant' },
+    search: ['grn.grnNo', 'challan.challanNo', 'rbc.rbcNo', 'company.name', 'location.name', 'vendor.companyName', farmerFullName('farmer')],
+    // Products live on aqr_product (one line per product of the source); legacy
+    // header-only AQRs get a line from `npm run migrate:aqr-lines`.
+    lineItems: { entity: AqrProduct, parentRelation: 'aqr', product: 'productName', variant: 'variant' },
     sortable: standardSort('aqrNo', 'rec.aqrNo', { arrivalDate: 'rec.arrivalDate' }),
   },
   {

@@ -27,6 +27,8 @@ import { GrnRepository } from "../../grn/repository/grn.repository";
 import { ApprovalAssignment, DocumentbService, DocumentWithRelatedData } from "../../approvalFlow/service/documentb.service";
 import { DocDoubleApproverService } from "../../approvalFlow/service/docDoubleApprover.service";
 import { ReturnToVendor } from "../entity/returnToVendor.entity";
+import { ReceivingGuardService } from "../../receiving/service/receivingGuard.service";
+import { refId } from "../../receiving/receiving.helpers";
 
 @injectable()
 export class ReturnToVendorService {
@@ -43,6 +45,8 @@ export class ReturnToVendorService {
     private readonly cacheService: CacheService,
                     @inject(TYPES.ApprovalFlowService)
     private readonly approvalFlowService: ApprovalFlowService,
+                    @inject(TYPES.ReceivingGuardService)
+    private readonly receivingGuardService: ReceivingGuardService,
         ) {}
 
     private readonly CACHE_PREFIX = 'returnToVendor';
@@ -116,8 +120,26 @@ export class ReturnToVendorService {
       await queryRunner.startTransaction();
 
       try {
-          if (!returnData.grnNo) {
-            throw new Error('GRN number is required');
+          const grnId = refId(returnData.grnNo);
+          // Receiving links R1–R7: a COMPLETE cc-dc GRN, every product of it once,
+          // net kg within what is still unaccounted for. The GRN row is locked
+          // inside this transaction so concurrent creates serialise.
+          const resolvedSource = await this.receivingGuardService.resolveAndAssert({
+            docType: 'rtv',
+            sourceType: 'grn',
+            sourceId: grnId,
+            lines: (returnData.rtvProducts ?? []).map((p: any) => ({
+              productId: refId(p?.productName),
+              variantId: refId(p?.variant),
+              kg: p?.netWeight,
+            })),
+            manager: queryRunner.manager,
+          });
+          returnData.grnNo = grnId as string;
+          if (!returnData.companyName && resolvedSource.companyId) returnData.companyName = resolvedSource.companyId;
+          if (!returnData.location && resolvedSource.locationId) returnData.location = resolvedSource.locationId;
+          if (!returnData.selectedVendor && resolvedSource.partyType === 'vendor' && resolvedSource.partyId) {
+            returnData.selectedVendor = resolvedSource.partyId;
           }
           returnData.isChanged = true;
 
@@ -447,7 +469,7 @@ export class ReturnToVendorService {
 
             const existingRecord = await this.postReturnToVendorRepository.findOne({
                 where: { id },
-                relations: ['rtvProducts', 'rtvProducts.productName', 'rtvProducts.variant', 'companyName', 'location', 'document'],
+                relations: ['rtvProducts', 'rtvProducts.productName', 'rtvProducts.variant', 'companyName', 'location', 'document', 'grnNo'],
             });
 
             if (!existingRecord) {
@@ -476,9 +498,26 @@ export class ReturnToVendorService {
             // there is nothing to re-process — stock is written once, when the
             // document reaches DocumentStatus.COMPLETE.
 
-            Object.assign(existingRecord, updateData);
+            // Receiving links: the edited RTV must still match its GRN exactly
+            // (lines not sent are validated as they are stored).
+            const updatedRecord = await this.dataSource.transaction(async (manager) => {
+                const grnId = updateData.grnNo !== undefined ? refId(updateData.grnNo) : existingRecord.grnNo?.id ?? null;
+                const lines = Array.isArray(updateData.rtvProducts)
+                    ? updateData.rtvProducts.map((p: any) => ({ productId: refId(p?.productName), variantId: refId(p?.variant), kg: p?.netWeight }))
+                    : (existingRecord.rtvProducts ?? []).map((p) => ({ productId: p.productName?.id, variantId: p.variant?.id ?? null, kg: p.netWeight }));
+                await this.receivingGuardService.resolveAndAssert({
+                    docType: 'rtv',
+                    sourceType: 'grn',
+                    sourceId: grnId,
+                    lines,
+                    excludeDocId: id,
+                    manager,
+                });
+                if (updateData.grnNo !== undefined && grnId) updateData.grnNo = grnId;
 
-            const updatedRecord = await this.postReturnToVendorRepository.save(existingRecord);
+                Object.assign(existingRecord, updateData);
+                return manager.save(existingRecord);
+            });
             // Also bust the view cache keyed by documentId
             const rtvWithDoc = await this.postReturnToVendorRepository.findOne({
                 where: { id },

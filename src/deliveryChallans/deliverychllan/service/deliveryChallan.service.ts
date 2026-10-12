@@ -18,6 +18,19 @@ import { formatDateTime } from '../../../utils/dateUtils';
 import { DeleteResultDto } from '../../../global/general.dto';
 import { DocumentTypeEnum as DocDefEnum } from '../../../documentDef/entity/documentdef.entity';
 import { DocumentbRepository } from '../../../approvalFlow/repository/documentb.repository';
+import { DocumentTypeEnum } from '../../../approvalFlow/entity/docuemnt.entity';
+import { StockTransferDeliveryChallan } from '../../stockTransferDC/entity/stockTransferdeliveryChallan.entity';
+import { completeDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../../receiving/receiving.sql';
+
+/** Receiving picker filters for `getDcTypeNumbers` (stock-transfer only). */
+export interface DcReceivingFilter {
+  /** Only COMPLETE, not deleted Transfer DCs. */
+  receivable?: boolean;
+  /** Only Transfer DCs with no counting document of this type (aqr | inward | dump). */
+  missing?: string;
+  /** Receiving (to) location id. */
+  toLocationId?: string;
+}
 
 @injectable()
 export class DeliveryChallanService {
@@ -625,6 +638,7 @@ export class DeliveryChallanService {
     search?: string,
     isReturnByCustomerCreated?: boolean,
     overAllStatus?: string,
+    receiving?: DcReceivingFilter,
   ): Promise<any> {
     const typeMap: Record<string, string> = {
       'stock-transfer': 'stock-transfer-delivery-challan',
@@ -634,6 +648,13 @@ export class DeliveryChallanService {
 
     const type = typeMap[dcType];
     if (!type) throw new AppError(400, `Invalid dcType: ${dcType}. Use 'stock-transfer', 'other', or 'customer'`);
+
+    if (receiving && (receiving.receivable || receiving.missing || receiving.toLocationId)) {
+      if (dcType !== 'stock-transfer') {
+        throw new AppError(400, 'receivable / missing / toLocationId apply to dcType=stock-transfer only');
+      }
+      return this.getReceivableStockTransferNumbers(page, limit, search, overAllStatus, receiving);
+    }
 
     // 1. Fetch all DCs of the given type
     const whereCondition: any = { type, isDeleted: false };
@@ -703,6 +724,91 @@ export class DeliveryChallanService {
       total: filteredResults.length,
       page: currentPage,
       totalPages: Math.ceil(filteredResults.length / currentLimit),
+    };
+  }
+
+  /**
+   * Receiving picker for Transfer DCs, applied in SQL:
+   * - `receivable=true` -> the DC is COMPLETE (via `documents`) and not deleted;
+   * - `missing=<type>`  -> no counting document of that type (aqr | inward | dump) references the DC
+   *                        (counting = not deleted and `documents.status` <> REJECT);
+   * - `toLocationId`    -> receiving (to) location.
+   * `search` matches `challanNo` (ILIKE) or the exact id; `overAllStatus` still filters by the
+   * document status when given. Not cached: the list changes the moment a document is created.
+   */
+  private async getReceivableStockTransferNumbers(
+    page: number | undefined,
+    limit: number | undefined,
+    search: string | undefined,
+    overAllStatus: string | undefined,
+    receiving: DcReceivingFilter,
+  ): Promise<any> {
+    const currentPage = Math.max(1, Number(page) || 1);
+    const currentLimit = Math.min(200, Math.max(1, Number(limit) || 10));
+    if (receiving.missing && !isProcessingDocType(receiving.missing)) {
+      throw new AppError(400, 'missing must be one of aqr, inward, dump, rtv');
+    }
+    if (receiving.missing === 'rtv') {
+      // An RTV can only be raised against a GRN, so no Transfer DC is ever "missing" one.
+      return { data: [], total: 0, page: currentPage, totalPages: 0 };
+    }
+
+    const qb = this.dataSource
+      .getRepository(StockTransferDeliveryChallan)
+      .createQueryBuilder('dc')
+      .select(['dc.id', 'dc.challanNo', 'dc.createdAt'])
+      .where('dc.isDeleted = false');
+
+    if (receiving.receivable) qb.andWhere(completeDocumentExistsSql('dc.id', 'stock-transfer-dc'));
+    if (receiving.missing && isProcessingDocType(receiving.missing)) {
+      qb.andWhere(noCountingDocumentSql('dc.id', 'stock-transfer-dc', receiving.missing));
+    }
+    if (receiving.toLocationId) {
+      qb.leftJoin('dc.toLocation', 'toLocation').andWhere('toLocation.id = :toLocationId', { toLocationId: String(receiving.toLocationId) });
+    }
+    if (overAllStatus && overAllStatus.trim()) {
+      qb.andWhere(
+        `EXISTS (SELECT 1 FROM documents rl_s WHERE rl_s.document_type_id = (dc.id)::text AND rl_s.type::text = '${DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER}' AND LOWER(rl_s.status::text) = LOWER(:overAllStatus) AND rl_s."deletedAt" IS NULL)`,
+        { overAllStatus: overAllStatus.trim() },
+      );
+    }
+    if (search && search.trim()) {
+      const term = search.trim();
+      qb.andWhere('(dc.challanNo ILIKE :search OR dc.id::text = :exact)', { search: `%${term}%`, exact: term });
+    }
+
+    const [challans, total] = await qb
+      .orderBy('dc.createdAt', 'DESC')
+      .skip((currentPage - 1) * currentLimit)
+      .take(currentLimit)
+      .getManyAndCount();
+
+    const docMap = new Map<string, { id: string; status: string | null }>();
+    if (challans.length) {
+      const documents = await this.documentbRepository
+        .createQueryBuilder('doc')
+        .select(['doc.id', 'doc.status', 'doc.document_type_id', 'doc.createdAt'])
+        .where('doc.type = :type', { type: DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER })
+        .andWhere('doc.document_type_id IN (:...ids)', { ids: challans.map((c) => c.id) })
+        .orderBy('doc.createdAt', 'DESC')
+        .getMany();
+      for (const doc of documents) {
+        if (doc.document_type_id && !docMap.has(doc.document_type_id)) {
+          docMap.set(doc.document_type_id, { id: doc.id, status: doc.status ?? null });
+        }
+      }
+    }
+
+    return {
+      data: challans.map((c) => ({
+        id: c.id,
+        challanNo: c.challanNo,
+        documentId: docMap.get(c.id)?.id ?? null,
+        overAllStatus: docMap.get(c.id)?.status ?? null,
+      })),
+      total,
+      page: currentPage,
+      totalPages: Math.ceil(total / currentLimit),
     };
   }
 

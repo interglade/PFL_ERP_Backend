@@ -318,6 +318,33 @@ describe('InventoryMovementService — direction and amounts per document type',
     });
   });
 
+  it('Dump Register moves net kg when the line carries a netWeight (quantity stays a count)', async () => {
+    const document = makeDocument(DocumentTypeEnum.DUMP_REGISTER);
+
+    const harness = buildHarness({
+      lockedDocument: { ...document, inventoryProcessed: false },
+      sourceRecord: Object.assign(new DumpRegister(), {
+        id: 'src-1',
+        dumpNo: 'DMP0002',
+        companyName: COMPANY,
+        location: LOCATION,
+        dumpProducts: [
+          // 3 crates weighing 42.5 kg: stock is kept in kg, so 42.5 moves.
+          { id: 'd1', productName: PRODUCT, variant: VARIANT, quantity: 3, netWeight: '42.500', amount: 425 },
+        ],
+      }),
+    });
+
+    await harness.service.completeDocumentWithInventory(document);
+
+    expect(harness.updates[0]).toMatchObject({
+      qtyDelta: -42.5,
+      amtDelta: -425,
+      dumpQtyDelta: 42.5,
+      dumpAmtDelta: 425,
+    });
+  });
+
   it('Return To Vendor REDUCES stock (value from unitPrice x quantity)', async () => {
     const document = makeDocument(DocumentTypeEnum.RETURN_TO_VENDOR);
 

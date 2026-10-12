@@ -370,6 +370,9 @@ import { StockCorrectionController } from "./stockCorrection/controller/stockCor
 import { GrnProductHistoryRepository } from "./grn/repository/grnProductHistory.repository";
 import { GrnProductHistoryService } from "./grn/service/grnProductHistory.service";
 import { GrnProductHistory } from "./grn/entity/grnProductHistory.entity";
+import { ReceivingStatusService } from "./receiving/service/receivingStatus.service";
+import { ReceivingGuardService } from "./receiving/service/receivingGuard.service";
+import { ReceivingController } from "./receiving/controller/receiving.controller";
 
 const container = new Container();
 //socket server
@@ -1366,6 +1369,11 @@ container.bind<GrnProductHistoryRepository>(TYPES.GrnProductHistoryRepository).t
   return dataSource.getRepository(GrnProductHistory).extend(GrnProductHistoryRepository);
 }).inRequestScope();
 container.bind<GrnProductHistoryService>(TYPES.GrnProductHistoryService).to(GrnProductHistoryService).inSingletonScope();
+
+// Receiving links: live source status, Arrivals worklist and the one-per-source guard
+container.bind<ReceivingStatusService>(TYPES.ReceivingStatusService).to(ReceivingStatusService).inSingletonScope();
+container.bind<ReceivingGuardService>(TYPES.ReceivingGuardService).to(ReceivingGuardService).inSingletonScope();
+container.bind<ReceivingController>(TYPES.ReceivingController).to(ReceivingController).inSingletonScope();
 
 // Admin Control Center dashboard
 container.bind<AccFiltersService>(TYPES.AccFiltersService).to(AccFiltersService).inSingletonScope();

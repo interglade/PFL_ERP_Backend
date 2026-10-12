@@ -1,5 +1,5 @@
 import { ammountStatus, Department, Source } from "../../utils/status.enum";
-import { GrnType, LocationType, PurchaseType } from "../entity/grn.entity";
+import { GrnDeliveryMode, GrnType, LocationType, PurchaseType } from "../entity/grn.entity";
 
 
 export interface GrnProductDto {
@@ -39,6 +39,8 @@ export interface CreateGrnDto {
   requestingDepartment?: Department;
   locationType?: LocationType;
   grnType?: GrnType;
+  /** Where the goods go: `cc-dc` (default, receivable) or `direct-to-customer`. */
+  deliveryMode?: GrnDeliveryMode;
   purchaseType?: PurchaseType;
   dealSlipId?: string;
   rfpaId?: string;
@@ -102,6 +104,7 @@ export interface GrnListItemDto {
   createdTime: string | null;
   companyName: string | null;
   grnType: GrnType | null;
+  deliveryMode: GrnDeliveryMode | null;
   purchaseType: PurchaseType | null;
   locationType: LocationType | null;
   source: Source | null;
@@ -148,6 +151,7 @@ export interface GrnDetailDto {
   grnNo?: string | null;
   locationType?: LocationType | null;
   grnType?: GrnType | null;
+  deliveryMode?: GrnDeliveryMode | null;
   rmn?: string | null;
   createdDate?: string | null;
   createdTime?: string | null;

@@ -450,7 +450,11 @@ export class InventoryMovementService {
       const productId = item.productName?.id;
       if (!productId) continue;
 
-      const qty = Number(item.quantity) || 0;
+      // Receiving links: dump lines are entered in net kg (the unit of
+      // inventory_stock). Pre-change rows have no netWeight and fall back to
+      // `quantity` (a count) exactly as before.
+      const netKg = Number(item.netWeight) || 0;
+      const qty = netKg > 0 ? netKg : Number(item.quantity) || 0;
       const amt = Number(item.amount) || 0;
 
       if (qty <= 0) continue;

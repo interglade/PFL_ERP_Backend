@@ -11,6 +11,8 @@
     "typeorm:migrate": "ts-node --transpile-only ./node_modules/typeorm/cli.js migration:run -d src/utils/data-source.ts",
     "clean:workflow-duplicates": "ts-node src/scripts/cleanDuplicateWorkflowHierarchy.ts",
     "backfill:inventory-processed": "ts-node --transpile-only src/scripts/backfillInventoryProcessed.ts",
+    "migrate:aqr-lines": "ts-node --transpile-only src/scripts/migrateAqrLines.ts",
+    "db:pre-sync-dump-register": "ts-node --transpile-only src/scripts/preSyncDumpRegisterDecimal.ts",
     "postman:build": "ts-node --transpile-only src/scripts/buildPostmanCollection.ts",
     "docs:filters": "ts-node --transpile-only src/scripts/buildFilterApiDocs.ts"
   },

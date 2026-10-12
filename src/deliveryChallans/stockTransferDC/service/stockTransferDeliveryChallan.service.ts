@@ -30,6 +30,8 @@ import { ProductVarientService } from '../../../product/productVarient/service/p
 import { DocumentbRepository } from '../../../approvalFlow/repository/documentb.repository';
 import { CreateSTDeliveryChallanDto, STDeliveryChallanListResponseDto, STDeliveryChallanUpdateFormDto, STDeliveryChallanViewDto, UpdateSTDeliveryChallanDto } from '../dto/stockTransferDeliveryChallan.dto';
 import { StockTransferDeliveryChallan } from '../entity/stockTransferdeliveryChallan.entity';
+import { ReceivingGuardService } from '../../../receiving/service/receivingGuard.service';
+import { refId } from '../../../receiving/receiving.helpers';
 
 
 @injectable()
@@ -63,9 +65,19 @@ export class StockTransferDeliveryChallanService {
         private readonly dataSource: DataSource,
         @inject(TYPES.CacheService)
         private readonly cacheService: CacheService,
+        @inject(TYPES.ReceivingGuardService)
+        private readonly receivingGuardService: ReceivingGuardService,
   ) {}
 
   private readonly CACHE_PREFIX = 'stockTransferChallan';
+
+  /** Receiving links D6: a Transfer DC lists each product + variant once. */
+  private assertNoDuplicateProducts(products: unknown): void {
+    if (!Array.isArray(products)) return;
+    this.receivingGuardService.assertNoDuplicateLines(
+      products.map((p: any) => ({ productId: refId(p?.productName), variantId: refId(p?.variant) })),
+    );
+  }
   private readonly CACHE_TTL = 180;
 
   private async invalidateCache(id?: string): Promise<void> {
@@ -99,6 +111,7 @@ export class StockTransferDeliveryChallanService {
  async create(data: CreateSTDeliveryChallanDto & Record<string, any>, requestedBy: string): Promise<CreatedWithApproval<StockTransferDeliveryChallan>> {
   // Check if approval flow exists for the user
   await this.checkApprovalFlowExists(requestedBy, DocDefEnum.OPERATION);
+  this.assertNoDuplicateProducts(data.deliveryChallanProducts);
 
   const queryRunner = this.dataSource.createQueryRunner();
   await queryRunner.connect();
@@ -283,6 +296,8 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
         failed.push({ id, reason: 'DC for Stock Transfer not found' });
         continue;
       }
+      // Receiving links R10 — a 409 here lands in `failed` with its message.
+      await this.receivingGuardService.assertSourceEditable('stock-transfer-dc', id);
       const relatedDocument = await this.documentbRepository.findOne({
         where: { document_type_id: dcForStockTransfer.id }
       });
@@ -529,6 +544,9 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
   }
 
   async update(id: string, data: UpdateSTDeliveryChallanDto & Record<string, any>): Promise<StockTransferDeliveryChallan | null> {
+    // Receiving links R9 / D6 — outside the try so the 409 / 400 reach the client.
+    await this.receivingGuardService.assertSourceEditable('stock-transfer-dc', id);
+    this.assertNoDuplicateProducts(data.deliveryChallanProducts);
     try {
       const challan = await this.challanRepository.findOne({ where: { id } });
       if (!challan) return null;
@@ -549,6 +567,8 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
    
    const stock=await this.challanRepository.findOne({where:{id}});
     if(!stock) throw new AppError(404,`Stock with Id ${id} not found`);
+    // Receiving links R10: not while an AQR / Inward / Dump counts against it.
+    await this.receivingGuardService.assertSourceEditable('stock-transfer-dc', id);
     try {
       const result = await this.challanRepository.delete(id);
       if (result.affected !== 0) await this.invalidateCache(id);

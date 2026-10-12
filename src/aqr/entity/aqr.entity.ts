@@ -13,9 +13,13 @@ import { Farmer } from "../../farmer/entity/farmer.entity";
 import { Product } from "../../product/createproduct/entity/product.entity";
 import { ProductVarient } from "../../product/productVarient/entity/productVarient.entity";
 import { User } from "../../employee/entity/user.entity";
+import { GRN } from "../../grn/entity/grn.entity";
+import { PostReturnByCustomer } from "../../returnByCustomer/entity/postReturnByCustomer.entity";
+import { AqrProduct } from "./aqrProduct.entity";
 export enum AqrFor {
   purchase = "purchase",
   transfer = "transfer",
+  returnedByCustomer = "returned-by-customer",
 }
 
 @Entity("aqr")
@@ -52,6 +56,16 @@ export class Aqr extends Model {
   @ManyToOne(() => DeliveryChallanPurchase, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "delivery_challan_id" }) // Define the foreign key column
   deliveryChallanNo: DeliveryChallanPurchase;
+
+  /** Source GRN when `aqrFor` = purchase (receiving link). */
+  @ManyToOne(() => GRN, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "grn_id" })
+  grn: GRN;
+
+  /** Source Return By Customer when `aqrFor` = returned-by-customer (receiving link). */
+  @ManyToOne(() => PostReturnByCustomer, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "rbc_id" })
+  rbc: PostReturnByCustomer;
 
 
   @ManyToOne(() => Vendor, {
@@ -148,6 +162,10 @@ export class Aqr extends Model {
   })
   @JoinColumn({ name: "parameter_id" })
   parameters: AqrParameter[];
+
+  /** One line per product of the source (receiving links). Empty on legacy rows. */
+  @OneToMany(() => AqrProduct, (aqrProduct) => aqrProduct.aqr, { cascade: true })
+  products: AqrProduct[];
 }
 
 

@@ -61,9 +61,9 @@ export class DumpRegister extends Model {
   batchNo: string; 
    @Column({ nullable: true })
     dumpNo: string;
-  @Column({ nullable: true })
-  totalQty: number; 
-  @Column({ nullable: true })
+  @Column("decimal", { precision: 12, scale: 3, nullable: true })
+  totalQty: number;
+  @Column("decimal", { precision: 12, scale: 2, nullable: true })
   totalDumpCost: number;
   @Column({ nullable: true })
     totalCostInWords: string;

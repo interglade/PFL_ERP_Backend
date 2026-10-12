@@ -40,6 +40,16 @@ export enum GrnType {
   Purchase = 'purchase',
 }
 
+/**
+ * Where the goods physically go. Only `cc-dc` GRNs are received at a CC/DC
+ * (AQR / Inward / Dump / RTV); `direct-to-customer` GRNs never appear on the
+ * Arrivals worklist or in the receiving pickers.
+ */
+export enum GrnDeliveryMode {
+  CC_DC = 'cc-dc',
+  DIRECT_TO_CUSTOMER = 'direct-to-customer',
+}
+
 @Entity('grns')
 // Dashboard / report filters
 @Index(['createdAt'])
@@ -91,6 +101,14 @@ export class GRN extends Model {
     enum: PurchaseType,
   })
   purchaseType: PurchaseType;
+
+  @Column({
+    type: 'enum',
+    enum: GrnDeliveryMode,
+    default: GrnDeliveryMode.CC_DC,
+    nullable: false,
+  })
+  deliveryMode: GrnDeliveryMode;
 
   @ManyToOne(() => DealSlip, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'deal_slip_id' })

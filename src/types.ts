@@ -471,6 +471,11 @@ RegistrationReportsController:Symbol.for("RegistrationReportsController"),
   DocumentExportService: Symbol.for("DocumentExportService"),
   VouchersController: Symbol.for("VouchersController"),
 
+  // Receiving links (GRN / Transfer DC / RBC -> AQR / Inward / Dump / RTV)
+  ReceivingStatusService: Symbol.for("ReceivingStatusService"),
+  ReceivingGuardService: Symbol.for("ReceivingGuardService"),
+  ReceivingController: Symbol.for("ReceivingController"),
+
   // Admin Control Center dashboard
   AdminControlCenterController: Symbol.for("AdminControlCenterController"),
   AccFiltersService: Symbol.for("AccFiltersService"),

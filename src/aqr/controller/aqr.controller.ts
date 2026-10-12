@@ -76,6 +76,8 @@ public async createAqr(
     return res.status(201).json({ status: "success", message: createdMessage('AQR', 'AQRNo', createdAqr.aqrNo, sentTo) });
   } catch (error) {
     ControllerLogger.logError("AQR creation", error, req, res);
+    // Validation (400) and receiving-guard (400 / 409) errors keep their status and message.
+    if (error instanceof AppError) return next(error);
     if (error instanceof Error) return next(new AppError(400, error.message));
     next(error);
   }
@@ -255,7 +257,9 @@ public async createAqr(
     try {
       const { id } = req.params;
       const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName || ''}`.trim() || res.locals.user.username || 'Unknown User';
-      const updatedAqr = await this.aqrService.updateAqr(id, req.body, res.locals.updatedBy);
+      // The whole body goes to the service: header, source refs and the product lines.
+      const updateData: UpdateAqrDto = req.body;
+      const updatedAqr = await this.aqrService.updateAqr(id, updateData, res.locals.updatedBy ?? res.locals.user.id);
 
       if (!updatedAqr) {
         ControllerLogger.logOperationFailed("Update", "AQR", "not found or could not be updated", req, res);

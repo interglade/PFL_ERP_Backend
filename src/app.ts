@@ -65,10 +65,29 @@ const allowedOrigins = [
 const normalizeOrigin = (origin: string): string =>
   origin.trim().replace(/\/+$/, "").toLowerCase();
 
-const allowedOriginSet = new Set(allowedOrigins.map(normalizeOrigin));
+// Extra origins from the environment (comma separated), e.g. a new ngrok URL
+// or a colleague's LAN address, without editing this file.
+const extraOrigins = (process.env.ADDITIONAL_ORIGINS ?? "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
 
-const isAllowedOrigin = (origin?: string): boolean =>
-  !!origin && allowedOriginSet.has(normalizeOrigin(origin));
+const allowedOriginSet = new Set([...allowedOrigins, ...extraOrigins].map(normalizeOrigin));
+
+// Outside production, any localhost / loopback / private-LAN origin on any
+// port is accepted. Vite moves to 5174, 5175, ... when 5173 is busy and
+// developer machines change LAN address, which used to mean editing the list
+// above and restarting; those origins are not reachable from the internet.
+const isProduction = process.env.NODE_ENV === "production";
+const LOCAL_DEV_ORIGIN =
+  /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d{1,5})?$/i;
+
+const isAllowedOrigin = (origin?: string): boolean => {
+  if (!origin) return false;
+  const normalized = normalizeOrigin(origin);
+  if (allowedOriginSet.has(normalized)) return true;
+  return !isProduction && LOCAL_DEV_ORIGIN.test(normalized);
+};
 
 process.on('unhandledRejection', (reason: any) => {
   logger.error('Unhandled Promise Rejection:', {
