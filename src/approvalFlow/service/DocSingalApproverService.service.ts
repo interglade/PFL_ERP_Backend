@@ -18,6 +18,7 @@ import logger from "../../utils/logger";
 import { DocumentbRepository } from "../repository/documentb.repository";
 import { NotificationService } from "../../notification/service/notification.service";
 import { InventoryMovementService } from "../../inventoryStock/service/inventoryMovement.service";
+import { DealSlipAutoCreateService } from "../../dealSlip/service/dealSlipAutoCreate.service";
 
 
 @injectable()
@@ -38,6 +39,8 @@ export class DocSingalApproverService {
     private cacheService: CacheService,
     @inject(TYPES.InventoryMovementService)
     private inventoryMovementService: InventoryMovementService,
+    @inject(TYPES.DealSlipAutoCreateService)
+    private dealSlipAutoCreateService: DealSlipAutoCreateService,
   ){}
 
   // Convert document type to readable format — moved to src/utils/documentTypeLabel.ts
@@ -246,6 +249,12 @@ export class DocSingalApproverService {
           // single transaction, guarded by documents.inventoryProcessed so a
           // repeated or concurrent approval cannot move stock twice.
           await this.inventoryMovementService.completeDocumentWithInventory(document);
+
+          // A completed RFPA auto-creates its Deal Slip (HOLD + approval flow). Never throws.
+          if (document.type === DocumentTypeEnum.RFPA && document.document_type_id) {
+            await this.dealSlipAutoCreateService.createForCompletedRfpa(document.document_type_id);
+          }
+
           await this.invalidateRelatedCache(document.type, documentId, document.document_type_id ?? undefined);
 
           // 🔔 Actor

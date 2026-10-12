@@ -23,6 +23,8 @@ import {
 
 
 import { PaginationOptions } from '../../utils/pagination';
+import { parseMasterFilters } from '../../global/filters/masterDataFilter';
+import { FARMER_FILTERS } from '../filters/farmer.filters';
 import { upload } from '../../middleware/upload.middleware';
 import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { s3 } from '../../middleware/spaces.config';
@@ -145,8 +147,9 @@ export class FarmerController {
         filters: {},
         sort: (sort as string) || undefined,
         search: (search as string) || '',
+        masterFilters: parseMasterFilters(req.query, FARMER_FILTERS),
       };
-      
+
       const farmers = await this.farmerService.getAllFarmers(queryOptions,userId);
 
       if (!farmers) {
@@ -846,6 +849,7 @@ export class FarmerController {
         filters: {},
         sort: (sort as string) || undefined,
         search: (search as string) || '',
+        masterFilters: parseMasterFilters(req.query, FARMER_FILTERS),
       };
 
       const file = await this.farmerService.exportToExcel(queryOptions, userId);

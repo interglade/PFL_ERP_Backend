@@ -220,6 +220,27 @@ export class NotificationService {
     }
   }
 
+  /**
+   * Notifies every user holding at least one of the given roles, once per user
+   * (a user with several of the roles still gets a single notification).
+   */
+  async createNotiForRoles(message: string, roles: Role[]): Promise<void> {
+    try {
+      // Raw SQL — safe because `roles` are trusted enum values, not user input
+      const rows: Array<{ id: string }> = await this.userRepository.query(
+        `SELECT id FROM employees WHERE roles && $1::employees_roles_enum[]`,
+        [roles],
+      );
+      const userIds = rows.map((r) => r.id);
+      logger.info(`createNotiForRoles: found ${userIds.length} user(s) with roles "${roles.join(', ')}"`);
+      if (userIds.length === 0) return;
+
+      await Promise.all(userIds.map((id) => this.createNoti(message, id)));
+    } catch (error) {
+      logger.error(`createNotiForRoles failed for roles "${roles.join(', ')}":`, error);
+    }
+  }
+
   private async saveBatchNotificationsToDb(message: string, userIds: string[]): Promise<void> {
     const notifications = userIds.map(userId =>
       this.notificationRepository.create({ message, user: { id: userId } as any })

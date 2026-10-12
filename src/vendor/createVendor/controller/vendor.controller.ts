@@ -24,6 +24,8 @@ import { Role } from "../../../employee/entity/user.entity";
 import AppError from "../../../utils/appError";
 import { ControllerLogger } from "../../../utils/controllerLogger";
 import { PaginationOptions } from "../../../utils/pagination";
+import { parseMasterFilters } from "../../../global/filters/masterDataFilter";
+import { VENDOR_FILTERS } from "../filters/vendor.filters";
 import { upload } from "../../../middleware/upload.middleware";
 import { CreateVendorDto, UpdateVendorDto } from "../dto/vendor.dto";
 import { uploadSingle } from "../../../middleware/uploadsingle.middleware";
@@ -189,6 +191,7 @@ public async getAllVendors(
                 filters: {},
                 sort: sort as string || undefined, 
                 search: search as string|| '',
+                masterFilters: parseMasterFilters(req.query, VENDOR_FILTERS),
               };
     //const subcategoryId = req.query.search as string; // Extract subcategoryId from query
     const vendors = await this.vendorService.getAllVendors1(queryOptions,userId); // Correct method name
@@ -668,6 +671,7 @@ public async getAllVendorsWithselectedSub(
         filters: {},
         sort: (sort as string) || undefined,
         search: (search as string) || '',
+        masterFilters: parseMasterFilters(req.query, VENDOR_FILTERS),
       };
 
       const file = await this.vendorService.exportToExcel(queryOptions, userId);

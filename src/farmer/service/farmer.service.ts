@@ -19,6 +19,8 @@ import { parseExcelDate } from '../../utils/excelParser';
 import { UserRepository } from '../../employee/repository/user.repository';
 
 import { Status } from '../../utils/status.enum';
+import { applyMasterFilters } from '../../global/filters/masterDataFilter';
+import { FARMER_FILTERS } from '../filters/farmer.filters';
 import { NotificationService } from '../../notification/service/notification.service';
 import { formatDateTime } from '../../utils/dateUtils';
 import { CreateFarmerDto, FarmerListResponseDto, FarmerListItemDto, AddressDto, CropDto, LandHoldingStatusType, LandStatusType, UpdateFarmerDto, FarmerResponseDto } from '../dto/farmer.dto';
@@ -137,6 +139,8 @@ export class FarmerService {
       { draft: Status.DRAFT, userId },
     );
   }
+
+  applyMasterFilters(queryBuilder, FARMER_FILTERS, options.masterFilters);
 
   const farmers = await buildQuery(queryBuilder, options, 'farmer');
 
@@ -684,9 +688,9 @@ export class FarmerService {
     });
     if (!approver) throw new AppError(404, 'Approver not found');
 
-    // Only VERIFIER role can approve/reject farmers
-    if (!approver.roles || !approver.roles.includes(Role.VERIFIER)) {
-      throw new AppError(403, 'Only a Verifier can approve or reject farmers');
+    // Only ADMIN or VERIFIER role can approve/reject farmers
+    if (!approver.roles || !(approver.roles.includes(Role.ADMIN) || approver.roles.includes(Role.VERIFIER))) {
+      throw new AppError(403, 'Only an Admin or Verifier can approve or reject farmers');
     }
 
     const farmer = await this.farmerRepository.findOne({
@@ -717,7 +721,7 @@ export class FarmerService {
       // Fetch approver name
       const approver = await this.userRepository.findOneBy({ id: approverId });
       const verifierName = `${approver?.firstName || ''} ${approver?.lastName || ''}`.trim()
-        || (approver as any)?.username || 'Verifier';
+        || (approver as any)?.username || (approver?.roles?.includes(Role.ADMIN) ? 'Admin' : 'Verifier');
 
       const farmerFullName = [farmer.farmerfName, farmer.farmermName, farmer.farmerlName]
         .filter(Boolean).join(' ');
@@ -894,9 +898,9 @@ export class FarmerService {
           `Your farmer "${farmerFullName}" has been sent for approval`,
           creatorId,
         );
-        await this.notificationService.createNotiForRole(
+        await this.notificationService.createNotiForRoles(
           `Farmer "${farmerFullName}" is awaiting your approval, created by ${creatorName}`,
-          Role.VERIFIER,
+          [Role.VERIFIER, Role.ADMIN],
         );
       }
     } catch (err) {
@@ -1059,6 +1063,8 @@ export class FarmerService {
     if (isVerifier && !isAdmin) {
       queryBuilder.andWhere('farmer.status != :draft', { draft: Status.DRAFT });
     }
+
+    applyMasterFilters(queryBuilder, FARMER_FILTERS, options.masterFilters);
 
     const { data } = await buildQuery(
       queryBuilder,

@@ -157,6 +157,7 @@ const TYPES = {
   //deal slip
   DealSlipRepository: Symbol.for("DealSlipRepository"),
   DealSlipService: Symbol.for("DealSlipService"),
+  DealSlipAutoCreateService: Symbol.for("DealSlipAutoCreateService"),
   DealSlipController: Symbol.for("DealSlipController"),
 
   //grn

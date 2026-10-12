@@ -18,6 +18,8 @@ import { UserRepository } from "../../../employee/repository/user.repository";
 import { PackingMaterialRepository } from "../../../packingMaterial/repository/packingMaterial.repository";
 
 import { Status } from "../../../utils/status.enum";
+import { applyMasterFilters } from "../../../global/filters/masterDataFilter";
+import { VENDOR_FILTERS } from "../filters/vendor.filters";
 import { formatDateTime } from "../../../utils/dateUtils";
 
 import { NotificationService } from "../../../notification/service/notification.service";
@@ -266,9 +268,9 @@ async createVendor(vendorDto: CreateVendorDto & Record<string, any>): Promise<Ve
           `Your vendor "${vendorName}" has been sent for approval`,
           creatorId,
         );
-        await this.notificationService.createNotiForRole(
+        await this.notificationService.createNotiForRoles(
           `Vendor "${vendorName}" is awaiting your approval, created by ${creatorName}`,
-          Role.VERIFIER,
+          [Role.VERIFIER, Role.ADMIN],
         );
       }
     } catch {
@@ -372,9 +374,9 @@ async approveVendor(vendorId: string, approverId: string, status: Status) {
   const approver = await this.userRepository.findOne({ where: { id: approverId } });
   if (!approver) throw new AppError(404, 'Approver not found');
 
-  // Only VERIFIER role can approve/reject vendors
-  if (!approver.roles || !approver.roles.includes(Role.VERIFIER)) {
-    throw new AppError(403, 'Only a Verifier can approve or reject vendors');
+  // Only ADMIN or VERIFIER role can approve/reject vendors
+  if (!approver.roles || !(approver.roles.includes(Role.ADMIN) || approver.roles.includes(Role.VERIFIER))) {
+    throw new AppError(403, 'Only an Admin or Verifier can approve or reject vendors');
   }
 
   const vendor = await this.vendorRepository.findOne({ where: { id: vendorId } });
@@ -402,7 +404,7 @@ private async notifyVendorApproved(vendor: Vendor, approverId: string, status: S
 
     const approver = await this.userRepository.findOneBy({ id: approverId });
     const verifierName = `${approver?.firstName || ''} ${approver?.lastName || ''}`.trim()
-      || (approver as any)?.username || 'Verifier';
+      || (approver as any)?.username || (approver?.roles?.includes(Role.ADMIN) ? 'Admin' : 'Verifier');
 
     const vendorName = vendor.companyName || 'Vendor';
 
@@ -897,6 +899,8 @@ async getVendorByIdforupdate(id: string): Promise<VendorUpdateFormDto> {
       queryBuilder.andWhere('vendor.status != :draft', { draft: Status.DRAFT });
     }
 
+    applyMasterFilters(queryBuilder, VENDOR_FILTERS, options.masterFilters);
+
     const { data } = await buildQuery(
       queryBuilder,
       { ...options, page: undefined, limit: undefined },
@@ -1365,6 +1369,8 @@ public async getAllVendors1(queryOptions: PaginationOptions, userId: string): Pr
       { draft: Status.DRAFT, userId },
     );
   }
+
+  applyMasterFilters(queryBuilder, VENDOR_FILTERS, queryOptions.masterFilters);
 
   const vendors = await buildQuery(queryBuilder, queryOptions, 'vendor');
 
