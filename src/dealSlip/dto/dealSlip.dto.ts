@@ -24,7 +24,64 @@ export interface CreateDealSlipDto {
 // All fields optional.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface UpdateDealSlipDto extends Partial<CreateDealSlipDto> {}
+export interface UpdateDealSlipProductDto {
+  /** deal_slip_product id; leave out to add a new line (then quantity and unitPrice are required) */
+  id?: string;
+  /** product / variant / uom ids */
+  productName?: string | null;
+  variant?: string | null;
+  uom?: string | null;
+  grade?: string | null;
+  quantity?: number;
+  unitPrice?: number;
+  count?: string | null;
+  size?: string | null;
+  origin?: string | null;
+  variety?: string | null;
+  purchaseDate?: string | null;
+  expectedHarvestDate?: string | null;
+  dispatchDate?: string | null;
+  deliveryDate?: string | null;
+  // `amount` is not accepted: the server recomputes it as quantity x unitPrice.
+}
+
+export interface UpdateDealSlipPaymentInfoDto {
+  paymentMode?: string;
+  paymentDate?: string | null;
+  advancePaidAmt?: number | null;
+  paymentTerms?: number | null;
+  dueDate?: string | null;
+  creditPeriod?: number | null;
+  validityOfQuote?: string | null;
+}
+
+/**
+ * Every deal slip data field can be sent; the frontend decides which are editable.
+ * Not accepted (set by the system / approval flow): id, dealSlipNo, rfpa, createdBy,
+ * approvalStatus, approvalNote, dealSlipApprovedAt, isGrnCreated, isDeleted and timestamps.
+ */
+export interface UpdateDealSlipDto {
+  lotNo?: string;
+  loadingLocation?: string;
+  specialRequest?: string;
+  remark?: string | null;
+  requestingDepartment?: Department | null;
+  otherPurchaseLoc?: string | null;
+  otherPurchaseForSalesLoc?: string | null;
+  deliveryReceivingPerson?: string | null;
+  packingInstruction?: string | null;
+  source?: string | null;
+  /** company / branch / vendor / farmer ids; null clears them */
+  companyName?: string | null;
+  purchaseLocation?: string | null;
+  purchaseForSalesLocation?: string | null;
+  selectedVendor?: string | null;
+  selectedFarmer?: string | null;
+  paymentInfo?: UpdateDealSlipPaymentInfoDto;
+  dealSlipProducts?: UpdateDealSlipProductDto[];
+  /** deal_slip_product ids to remove */
+  deletedDealSlipProductIds?: string[];
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Approve Deal Slip DTO  (PATCH /dealSlip/approve/:dealSlipId)

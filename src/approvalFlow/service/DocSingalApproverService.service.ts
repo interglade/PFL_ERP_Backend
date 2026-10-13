@@ -166,6 +166,10 @@ export class DocSingalApproverService {
     const { approvalFlow, approvalInfo, type } = document;
 
    
+    if (document.status === DocumentStatus.DRAFT) {
+      throw new Error('This document is still a draft and has not been sent for approval');
+    }
+
     //TODO  : 1) Single approval documents
     if (this.isSingleApprovalBasedDocument(type)) {
       logger.info("Inside isSingleApprovalBasedDocument block");
@@ -319,6 +323,13 @@ export class DocSingalApproverService {
               .orWhere('lastActionBy.id = :userId', { userId });
           }),
         );
+        // A draft has not been sent to approvers yet: only its creator sees it (admins see all).
+        queryBuilder.andWhere(
+          new Brackets((qb) => {
+            qb.where('document.status != :draftStatus', { draftStatus: DocumentStatus.DRAFT })
+              .orWhere('lastActionBy.id = :userId', { userId });
+          }),
+        );
       }
 
       // Document filters run here, in SQL, inside the visibility rules above. Callers
@@ -388,6 +399,11 @@ async getSingleApprovalDocumentById(documentId: string, userId: string, isAdmin:
     const isFirstApprover = firstLevelUsers.some((u: any) => u.id === userId);
 
     if (!isAdmin && !isCreator && !isFirstApprover) {
+      return null;
+    }
+
+    // Approvers cannot open a draft; only its creator (and admins) can.
+    if (document.status === DocumentStatus.DRAFT && !isAdmin && !isCreator) {
       return null;
     }
 

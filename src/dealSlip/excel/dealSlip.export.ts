@@ -7,13 +7,13 @@
  *   rfpa_product             -> Deal Slip Items sheet
  *   documents + approval_stage_info -> status columns + Approvals sheet
  *
- * A deal slip has no line-item table of its own: it is raised against an RFPA
- * and deals on that RFPA's products and prices, so the items sheet lists the
- * linked RFPA's lines. Discount and tax are not stored for deal slips.
+ * The items sheet lists the deal slip's own product lines (deal_slip_product),
+ * copied from the RFPA at creation; the RFPA's planned quantity / price are shown
+ * alongside. Discount and tax are not stored for deal slips.
  */
 
 import { DealSlip } from '../entity/dealSlip.entity';
-import { RFPAProduct } from '../../rfpa/entity/rfpaProduct.entity';
+import { DealSlipProduct } from '../entity/dealSlipProduct.entity';
 import { ExportDefinition } from '../../excel/export/exportTypes';
 import {
   BRANCH_COLUMNS,
@@ -37,8 +37,7 @@ import {
 
 type DealSlipRecord = DealSlip & { lineCount?: number; lineTotal?: number | null };
 type Row = DocumentRow<DealSlipRecord>;
-/** An RFPA line attributed to the deal slip raised against its RFPA. */
-type Line = RFPAProduct & { dealSlipId: string; dealSlipNo: string };
+type Line = DealSlipProduct;
 
 export const DEAL_SLIP_EXPORT: ExportDefinition = {
   fileStem: 'Deal_Slip',
@@ -65,10 +64,9 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
         qb.leftJoinAndSelect('rfpa.paymentInfo', 'paymentInfo');
         const records: DealSlipRecord[] = await qb.where('dealSlip.id IN (:...ids)', { ids: ctx.ids }).getMany();
 
-        const rfpaIds = records.map((r) => r.rfpa?.id).filter((id): id is string => Boolean(id));
-        const totals = await aggregateLines(ctx.manager, RFPAProduct, 'rfpa', 'amount', rfpaIds);
+        const totals = await aggregateLines(ctx.manager, DealSlipProduct, 'dealSlip', 'amount', records.map((r) => r.id));
         for (const record of records) {
-          const t = record.rfpa ? totals.get(record.rfpa.id) : undefined;
+          const t = totals.get(record.id);
           record.lineCount = t?.count ?? 0;
           record.lineTotal = t?.total ?? null;
         }
@@ -110,53 +108,35 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
     }),
     {
       name: 'Deal Slip Items',
-      // One row per (deal slip, RFPA line): lines are attributed to every deal slip
-      // in the chunk raised against their RFPA.
-      refId: (line: Line) => line.dealSlipId,
+      // One row per deal slip product line (the deal slip's own copy, so the agreed quantity /
+      // price are exported, with the RFPA's planned quantity alongside for comparison).
+      refId: (line: Line) => line.dealSlip.id,
       load: async (ctx) => {
-        const slips = await ctx.manager
-          .getRepository(DealSlip)
-          .createQueryBuilder('dealSlip')
-          .select(['dealSlip.id', 'dealSlip.dealSlipNo'])
-          .innerJoin('dealSlip.rfpa', 'rfpa')
-          .addSelect(['rfpa.id'])
-          .where('dealSlip.id IN (:...ids)', { ids: ctx.ids })
-          .getMany();
-        const rfpaIds = Array.from(new Set(slips.map((s) => s.rfpa?.id).filter((id): id is string => Boolean(id))));
-        if (!rfpaIds.length) return [];
-
         const qb = ctx.manager
-          .getRepository(RFPAProduct)
+          .getRepository(DealSlipProduct)
           .createQueryBuilder('line')
-          .innerJoin('line.rfpa', 'parent')
-          .addSelect(['parent.id', 'parent.rfpaId']);
+          .innerJoin('line.dealSlip', 'parent')
+          .addSelect(['parent.id', 'parent.dealSlipNo'])
+          .leftJoin('line.rfpaProduct', 'rfpaLine')
+          .addSelect(['rfpaLine.id', 'rfpaLine.quantity', 'rfpaLine.unitPrice']);
         joinProductLine(qb, 'line');
-        const lines = await qb.where('parent.id IN (:...rfpaIds)', { rfpaIds }).orderBy('line.createdAt', 'ASC').getMany();
-
-        const rows: Line[] = [];
-        for (const slip of slips) {
-          for (const line of lines) {
-            if (line.rfpa?.id === slip.rfpa?.id) {
-              rows.push({ ...line, dealSlipId: slip.id, dealSlipNo: slip.dealSlipNo } as Line);
-            }
-          }
-        }
-        return rows;
+        return qb.where('parent.id IN (:...ids)', { ids: ctx.ids }).orderBy('line.createdAt', 'ASC').getMany();
       },
       columns: [
-        { header: 'Deal Slip No', maps: 'deal_slips.dealSlipNo', get: (l: Line) => l.dealSlipNo },
-        { header: 'Deal Slip Record ID', maps: 'deal_slips.id', get: (l: Line) => l.dealSlipId },
-        { header: 'RFPA No', maps: 'rfpa.rfpaId', get: (l: Line) => l.rfpa?.rfpaId },
+        { header: 'Deal Slip No', maps: 'deal_slips.dealSlipNo', get: (l: Line) => l.dealSlip?.dealSlipNo },
+        { header: 'Deal Slip Record ID', maps: 'deal_slips.id', get: (l: Line) => l.dealSlip?.id },
         ...productColumns<Line>((l) => l.productName, (l) => l.variant),
-        { header: 'Grade', maps: 'rfpa_product.grade', get: (l: Line) => l.grade },
-        { header: 'Quantity', maps: 'rfpa_product.quantity', type: 'quantity', get: (l: Line) => l.quantity },
-        uomColumn<Line>('UOM', (l) => l.uom, 'rfpa_product.uom'),
-        { header: 'Unit Price', maps: 'rfpa_product.unitPrice', type: 'amount', get: (l: Line) => l.unitPrice },
-        { header: 'Amount', maps: 'rfpa_product.amount', type: 'amount', get: (l: Line) => l.amount },
-        { header: 'Purchase Date', maps: 'rfpa_product.purchaseDate', type: 'date', get: (l: Line) => l.purchaseDate },
-        { header: 'Expected Harvest Date', maps: 'rfpa_product.expectedHarvestDate', type: 'date', get: (l: Line) => l.expectedHarvestDate },
-        { header: 'Dispatch Date', maps: 'rfpa_product.dispatchDate', type: 'date', get: (l: Line) => l.dispatchDate },
-        { header: 'Delivery Date', maps: 'rfpa_product.deliveryDate', type: 'date', get: (l: Line) => l.deliveryDate },
+        { header: 'Grade', maps: 'deal_slip_product.grade', get: (l: Line) => l.grade },
+        { header: 'RFPA Quantity', maps: 'rfpa_product.quantity', type: 'quantity', get: (l: Line) => l.rfpaProduct?.quantity },
+        { header: 'Quantity', maps: 'deal_slip_product.quantity', type: 'quantity', get: (l: Line) => l.quantity },
+        uomColumn<Line>('UOM', (l) => l.uom, 'deal_slip_product.uom'),
+        { header: 'RFPA Unit Price', maps: 'rfpa_product.unitPrice', type: 'amount', get: (l: Line) => l.rfpaProduct?.unitPrice },
+        { header: 'Unit Price', maps: 'deal_slip_product.unitPrice', type: 'amount', get: (l: Line) => l.unitPrice },
+        { header: 'Amount', maps: 'deal_slip_product.amount', type: 'amount', get: (l: Line) => l.amount },
+        { header: 'Purchase Date', maps: 'deal_slip_product.purchaseDate', type: 'date', get: (l: Line) => l.purchaseDate },
+        { header: 'Expected Harvest Date', maps: 'deal_slip_product.expectedHarvestDate', type: 'date', get: (l: Line) => l.expectedHarvestDate },
+        { header: 'Dispatch Date', maps: 'deal_slip_product.dispatchDate', type: 'date', get: (l: Line) => l.dispatchDate },
+        { header: 'Delivery Date', maps: 'deal_slip_product.deliveryDate', type: 'date', get: (l: Line) => l.deliveryDate },
       ],
     },
     withoutColumns(approvalSheet({ numberHeader: 'Deal Slip No', sources: [{ entity: DealSlip, numberColumn: 'dealSlipNo' }] }), APPROVAL_ID_AND_STAGE_COLUMNS),

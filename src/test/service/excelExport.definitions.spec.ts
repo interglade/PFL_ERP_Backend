@@ -105,7 +105,7 @@ describe.each(DEFINITIONS)('%s export definition', (_name, definition) => {
   it('first sheet identifies each document by number and status, without record ids or audit dates', () => {
     const headers = definition.sheets[0].columns.map((c) => c.header);
     expect(headers.some((h) => / No$/.test(h))).toBe(true);
-    expect(headers).toContain('Overall Status');
+    expect(headers.some((h) => h === 'Overall Status' || h === 'Approval Status')).toBe(true);
     expect(headers.filter((h) => / Record ID$/.test(h))).toEqual([]);
     expect(headers.filter((h) => OMITTED_FIRST_SHEET_COLUMNS.includes(h))).toEqual([]);
   });

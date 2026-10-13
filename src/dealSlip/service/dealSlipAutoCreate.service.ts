@@ -12,6 +12,7 @@ import { DocumentbService } from "../../approvalFlow/service/documentb.service";
 import { ApprovalFlowService } from "../../approvalFlow/service/approvalFlow.service";
 import { DocumentStatus, DocumentTypeEnum } from "../../approvalFlow/entity/docuemnt.entity";
 import { DocumentTypeEnum as DocDefEnum } from "../../documentDef/entity/documentdef.entity";
+import { RFPA_COPY_RELATIONS, copyRfpaPaymentInfo, copyRfpaProducts, dealSlipHeaderFromRfpa } from "./dealSlipRfpaCopy";
 
 /**
  * Creates a Deal Slip automatically once an RFPA document reaches COMPLETE.
@@ -55,13 +56,12 @@ export class DealSlipAutoCreateService {
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
-    let documentId: string;
     let savedDealSlip: DealSlip;
 
     try {
       const rfpa = await queryRunner.manager.findOne(this.rfpaRepository.target, {
         where: { id: rfpaId },
-        relations: ['createdBy'],
+        relations: RFPA_COPY_RELATIONS,
       }) as any;
 
       if (!rfpa) throw new AppError(404, 'RFPA not found');
@@ -86,33 +86,39 @@ export class DealSlipAutoCreateService {
         throw new AppError(400, `Approval flow not configured for the RFPA creator for ${DocDefEnum.PROCUREMENT} documents`);
       }
 
+      const paymentInfo = await copyRfpaPaymentInfo(queryRunner.manager, rfpa);
+
       const dealSlip = queryRunner.manager.create(this.dealSlipRepository.target, {
+        ...dealSlipHeaderFromRfpa(rfpa),
         rfpa,
+        paymentInfo,
         dealSlipNo: await this.generateDealSlipNo(),
         // Left empty on purpose (lotNo, loadingLocation and specialRequest are NOT NULL columns,
-        // so '' is stored); the user fills them in later from the edit screen.
+        // so '' is stored); the RFPA creator fills lot no / loading location in from the edit screen.
         lotNo: '',
         loadingLocation: '',
         specialRequest: '',
         remark: '',
-        requestingDepartment: rfpa.requestingDepartment,
         createdBy: { id: requestedBy },
       } as any) as unknown as DealSlip;
 
       savedDealSlip = await queryRunner.manager.save(dealSlip);
+      await copyRfpaProducts(queryRunner.manager, savedDealSlip, rfpa);
 
-      rfpa.isDealSlipCreated = true;
-      await queryRunner.manager.save(rfpa);
+      // Not rfpa.save(): the RFPA is loaded with its products and parties, and saving it would
+      // cascade over all of them.
+      await queryRunner.manager.update(this.rfpaRepository.target, { id: rfpaId }, { isDealSlipCreated: true });
 
-      const document = await this.documentbService.createDocument({
+      // DRAFT: the document is not sent to approvers (no startApprovalFlow) until lot no and
+      // loading location are filled in; DealSlipService.updateDealSlip then moves it to HOLD.
+      await this.documentbService.createDocument({
         type: DocumentTypeEnum.DEAL_SLIP,
         docDef: DocDefEnum.PROCUREMENT,
-        status: DocumentStatus.HOLD,
-        remarks: 'Document auto-created with Deal Slip',
+        status: DocumentStatus.DRAFT,
+        remarks: 'Deal Slip auto-created as draft; waiting for lot no and loading location',
         lastActionBy: { id: requestedBy },
         document_type_id: savedDealSlip.id,
       });
-      documentId = document.id;
 
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -122,7 +128,6 @@ export class DealSlipAutoCreateService {
       await queryRunner.release();
     }
 
-    await this.documentbService.startApprovalFlow(documentId);
     await this.invalidateCache();
     return savedDealSlip;
   }

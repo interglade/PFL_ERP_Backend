@@ -91,8 +91,35 @@ export interface ExportSheet<TRow = any> {
   refId: (row: TRow) => string | null | undefined;
 }
 
+/** One row of a summary sheet. `types` formats each cell like a column type would. */
+export interface SummaryRow {
+  cells: unknown[];
+  types?: (ExportCellType | undefined)[];
+  /** `title` = large heading, `header` = table header band, `total` = bold total row. */
+  style?: 'title' | 'header' | 'total';
+}
+
+export interface SummaryLoadContext {
+  manager: EntityManager;
+  /** Every document in the export, in list order. */
+  refs: ExportRef[];
+}
+
+/**
+ * A free-form report sheet (title, key/value lines, small tables) that is computed
+ * once over the whole export instead of row by row. Written before the data sheets.
+ */
+export interface ExportSummarySheet {
+  name: string;
+  /** Column widths in characters. */
+  widths: number[];
+  build: (ctx: SummaryLoadContext) => Promise<SummaryRow[]>;
+}
+
 export interface ExportDefinition {
   /** File name stem: `RFPA` becomes `RFPA_2026-09-15.xlsx`. */
   fileStem: string;
+  /** Written first, before `sheets`. */
+  summarySheets?: ExportSummarySheet[];
   sheets: ExportSheet[];
 }

@@ -17,7 +17,8 @@ import { MultiCashVoucherService } from '../multiCashV/service/multiCashVoucher.
 import { LabourPaymentVoucherService } from '../labourPaymentV/service/labourPaymentVoucher.service';
 import { TPVoucherService } from '../tranportPaymentV/service/transportPaymentV.service';
 import { PMPVoucherService } from '../paymentMaterialV/service/pmpvoucher.service';
-import { ALL_VOUCHERS_EXPORT } from '../excel/allVouchers.export';
+import { buildAllVouchersExport, loadVoucherDetailRows, toDetailRecord } from '../excel/allVouchers.export';
+import { personName } from '../../excel/export/exportValue';
 import { VOUCHER_KINDS, VOUCHER_TYPE_LABELS } from '../excel/voucherCommon.export';
 import { isAdminUser } from '../../utils/isAdminUser';
 
@@ -160,21 +161,83 @@ export class VouchersController {
   }
 
   /**
+   * The report's `approvalStatus` filter is the document workflow status (the Approval
+   * Status column), i.e. the `status` filter - not the voucher's own approvalStatus column.
+   */
+  private reportQuery(query: ParsedQs): ParsedQs {
+    const { approvalStatus, ...rest } = query;
+    if (approvalStatus !== undefined && rest.status === undefined) rest.status = approvalStatus;
+    return rest;
+  }
+
+  /**
+   * GET /vouchers/details
+   * The rows of the Details sheet, for the frontend table. Filters, sort and
+   * pagination (`page`, `limit`) as GET /vouchers/export/excel, which has no pagination.
+   * Filters: startDate/endDate (dateFrom/dateTo), paymentMode, minAmount/maxAmount,
+   * voucherType, approvalStatus (or status), locationId/location, companyId/company.
+   */
+  @httpGet('/details')
+  public async getVoucherDetails(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const userId = res.locals.user?.id;
+      if (!userId) throw new AppError(401, 'User not authenticated');
+
+      const rows = await this.loadRows(this.reportQuery(req.query), userId, isAdminUser(res));
+
+      const page = Number(req.query.page) || 0;
+      const limit = Number(req.query.limit) || 0;
+      const total = rows.length;
+      const pageRows = page > 0 && limit > 0 ? rows.slice((page - 1) * limit, page * limit) : rows;
+
+      const refs = pageRows
+        .filter((row) => row.id)
+        .map((row) => ({ id: String(row.id), documentId: row.documentId ?? null, kind: row.voucherType }));
+      const detailRows = await loadVoucherDetailRows({
+        manager: this.dataSource.manager,
+        refs,
+        ids: refs.map((ref) => ref.id),
+        documentIds: refs.map((ref) => ref.documentId).filter((id): id is string => Boolean(id)),
+      });
+      const byId = new Map(detailRows.map((row) => [row.record.id, row]));
+      const data = refs.flatMap((ref) => {
+        const row = byId.get(ref.id);
+        return row ? [toDetailRecord(row)] : [];
+      });
+
+      ControllerLogger.logGetAllRecords('All Vouchers Details', req, res);
+      return res.status(200).json({
+        status: 'success',
+        data,
+        allRecords: total,
+        totalPages: page > 0 && limit > 0 ? Math.ceil(total / limit) : 1,
+        page: page || 1,
+      });
+    } catch (error) {
+      ControllerLogger.logError('All Vouchers details retrieval', error, req, res);
+      next(error);
+    }
+  }
+
+  /**
    * GET /vouchers/export/excel
-   * Same query parameters and rows as GET /vouchers, without pagination.
+   * Workbook of Summary, Details and Approvals. Same filters and rows as
+   * GET /vouchers/details, without pagination.
    */
   @httpGet('/export/excel')
   public async exportToExcel(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    const query = this.reportQuery(req.query);
     return this.documentExportService.export(req, res, next, {
       entityName: 'All Vouchers',
-      definition: ALL_VOUCHERS_EXPORT,
+      definition: buildAllVouchersExport({
+        createdBy: personName(res.locals.user),
+        generatedAt: new Date(),
+        query,
+      }),
       fetchList: async (_options, userId) => {
-        const rows = await this.loadRows(req.query, userId, isAdminUser(res));
+        const rows = await this.loadRows(query, userId, isAdminUser(res));
         return { data: rows.map((row) => ({ id: row.id, documentId: row.documentId, kind: row.voucherType })) };
       },
-      // TEMP: testing only, revert after
-//fetchList: async () => ({ data: [{ id: '00000000-0000-0000-0000-000000000000', documentId: null, kind: 'multi-cash-voucher' }] }),
-
     });
   }
 }
