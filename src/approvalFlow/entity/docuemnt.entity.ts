@@ -16,6 +16,8 @@ import { DocumentApprovalFlow } from './documentApproveBy.entity';
 import { User } from '../../employee/entity/user.entity';
 
 export enum DocumentStatus {
+  /** Created but not yet sent to approvers (e.g. an auto-created Deal Slip awaiting lot no / loading location). */
+  DRAFT = 'draft',
   HOLD = 'hold',
   QUERY = 'query',
   APPROVED = 'approved',

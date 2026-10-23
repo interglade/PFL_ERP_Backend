@@ -11,6 +11,7 @@
     "typeorm:migrate": "ts-node --transpile-only ./node_modules/typeorm/cli.js migration:run -d src/utils/data-source.ts",
     "clean:workflow-duplicates": "ts-node src/scripts/cleanDuplicateWorkflowHierarchy.ts",
     "backfill:inventory-processed": "ts-node --transpile-only src/scripts/backfillInventoryProcessed.ts",
+    "backfill:deal-slip-rfpa-details": "ts-node --transpile-only src/scripts/backfillDealSlipRfpaDetails.ts",
     "migrate:aqr-lines": "ts-node --transpile-only src/scripts/migrateAqrLines.ts",
     "migrate:drivers": "ts-node --transpile-only src/scripts/migrateLegacyDrivers.ts",
     "migrate:dispatch": "ts-node --transpile-only src/scripts/migrateDispatchRegisters.ts",

@@ -455,6 +455,10 @@ export class DocumentbService {
       throw new Error('Document or its approval flow not found');
     }
 
+    if (document.status === DocumentStatus.DRAFT) {
+      throw new Error('This document is still a draft and has not been sent for approval');
+    }
+
     const now = new Date();
     const userName = await this.getCachedUser(userId);
     const docNo = await this.resolveDocumentTypeNo(document);

@@ -302,7 +302,10 @@ export class DealSlipController {
       });
       
       const updatedBy = res.locals.updatedBy;
-      const updatedDealSlip = await this.dealSlipService.updateDealSlip(dealSlipId, dealSlipData, updatedBy);
+      const updatedDealSlip = await this.dealSlipService.updateDealSlip(dealSlipId, dealSlipData, updatedBy, {
+        userId: res.locals.user.id,
+        isAdmin: isAdminUser(res),
+      });
 
       if (!updatedDealSlip) {
         ControllerLogger.logNotFound('Deal Slip', dealSlipId, req, res);
