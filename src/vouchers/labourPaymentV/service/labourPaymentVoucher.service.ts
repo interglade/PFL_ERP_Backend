@@ -1,3 +1,6 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../../global/numbering/documentNumber';
+import { assertGrnFreeForVoucher, resolveVoucherGrn } from '../../voucherGrnLink';
+import { relationIdOf } from '../../../grn/grnLinks.sql';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 import { LPVoucher } from '../entity/labourPaymentVoucher.entity';
@@ -84,6 +87,10 @@ export class LabourPaymentVoucherService {
     await queryRunner.startTransaction();
 
     try {
+
+      // D-6: one live Labour Payment Voucher per GRN.
+      const grnId = relationIdOf(data.grnNo);
+      if (grnId) await assertGrnFreeForVoucher(queryRunner.manager, 'lp', grnId);
 
       const voucherNo = await this.generateVoucherNo();
       data.voucherNo = voucherNo;
@@ -424,13 +431,17 @@ remark : voucher.remark || null,
     updatedData: UpdateLPVoucherDto & Record<string, any>,
     updatedBy: string,
   ): Promise<LPVoucher | null> {
-    const voucher = await this.lpVoucherRepository.findOne({ where: { id } });
+    const voucher = await this.lpVoucherRepository.findOne({ where: { id }, relations: ['grnNo'] });
     if (!voucher) return null;
 
     const originalVoucher = { ...voucher };
 
     if (updatedData.grnNo) {
-      const grn = await this.grnRepository.findOne({ where: { grnNo: updatedData.grnNo as string } });
+      // The edit form sends the GRN id (older callers the GRN number).
+      const grn = await resolveVoucherGrn(this.grnRepository, updatedData.grnNo);
+      if (grn && grn.id !== voucher.grnNo?.id) {
+        await assertGrnFreeForVoucher(this.lpVoucherRepository.manager, 'lp', grn.id, id);
+      }
       if (grn) voucher.grnNo = grn;
       delete updatedData.grnNo;
     }
@@ -459,23 +470,9 @@ remark : voucher.remark || null,
     return {No:voucher.voucherNo};
   }
 
+  /** `LV-yyyyMMdd-00001`, the serial running per day (it used to be missing, so every voucher of a day shared one number); issued by the shared sequence (no COUNT / MAX race, never reused). */
   public async generateVoucherNo(): Promise<string> {
-    const today = new Date();
-    const formattedDate = format(today, 'yyyyMMdd');
-
-    const lastVoucher = await this.lpVoucherRepository
-      .createQueryBuilder('cashVoucher')
-      .where('cashVoucher.voucherNo LIKE :datePattern', { datePattern: `CV-${formattedDate}-%` })
-      .orderBy('cashVoucher.voucherNo', 'DESC')
-      .getOne();
-
-    let newSerialNumber = 1;
-    if (lastVoucher) {
-      const lastSerialNumber = parseInt(lastVoucher.voucherNo.split('-')[2], 10);
-      newSerialNumber = lastSerialNumber + 1;
-    }
-
-    return `LV-${formattedDate}`;
+    return nextDocumentNumber(this.lpVoucherRepository.manager, SERIES.labourVoucher, `LV-${compactDate()}-`, 5);
   }
 
   public async deleteMultipleLPVoucher(ids: string[]): Promise<BulkDeleteResultDto> {

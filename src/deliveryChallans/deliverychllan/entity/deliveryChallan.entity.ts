@@ -13,7 +13,7 @@ import { Company } from '../../../company/entity/company.entity';
 import { OfficesData } from '../../../office/entity/offices.entity';
 import { GRN } from '../../../grn/entity/grn.entity';
 import { Item } from './dItem.entity';
-import { Department, Status } from '../../../utils/status.enum';
+import { Status } from '../../../utils/status.enum';
 import { Invoice } from '../../../invoice/entity/invoice.entity';
 import { PostReturnByCustomer } from '../../../returnByCustomer/entity/postReturnByCustomer.entity';
 import { User } from '../../../employee/entity/user.entity';
@@ -75,21 +75,6 @@ export class DeliveryChallanPurchase extends Model {
   @Column({ name: 'amount in words', nullable: true })
   totalAmtInWords: string;
 
-  @Column({ nullable: true })
-  driverName: string;
-
-  @Column({ nullable: true })
-  contactNo: string;
-
-  @Column({ nullable: true })
-  altContactNo: string;
-
-  @Column({ nullable: true })
-  vehicleNo: string;
-
-  @Column({ nullable: true })
-  licenseNo: string;
-
   @Column({ name: 'rmn', nullable: true })
   rmn: string;
 
@@ -107,13 +92,6 @@ export class DeliveryChallanPurchase extends Model {
     nullable: true,
   })
   approvalStatus: Status;
-
-  @Column({
-    type: 'enum',
-    enum: Department,
-    nullable: true,
-  })
-  requestingDepartment: Department;
 
   @Column({ type: 'text', nullable: true })
   remark: string;

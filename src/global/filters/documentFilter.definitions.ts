@@ -109,14 +109,11 @@ const challanBase = (): { joins: Record<string, string>; fields: FieldFilter[]; 
   fields: [
     ...companyFields(),
     enumOf('approvalStatus', 'rec.approvalStatus', Status, 'Challan approval status'),
-    departmentField(),
     text('grnNo', ['grn.grnNo'], 'Linked GRN number (partial)'),
-    text('vehicleNo', ['rec.vehicleNo'], 'Vehicle number (partial)'),
-    text('driverName', ['rec.driverName'], 'Driver name (partial)'),
     flag('isReturned', 'rec.isReturned', 'Challan has been returned'),
     ...amountRange('rec.totalProductAmount', 'Total product amount'),
   ],
-  search: ['company.name', 'grn.grnNo', 'rec.vehicleNo', 'rec.driverName', 'rec.receiverName'],
+  search: ['company.name', 'grn.grnNo', 'rec.receiverName'],
 });
 
 const challanLines = { entity: Item, parentRelation: 'deliveryChallan', product: 'productName', variant: 'variant' };
@@ -222,7 +219,6 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       enumOf('locationType', 'rec.locationType', LocationType, 'Location type'),
       enumOf('source', 'rec.source', Source, 'Source: vendor or farmer'),
       enumOf('paymentStatus', 'rec.ammountStatus', ammountStatus, 'Payment status'),
-      departmentField(),
       ...companyFields(),
       // Historic GRN list parameter: accepts a company id or a (partial) company name.
       { param: 'companyName', kind: 'id', exprs: ['company.id'], nameExprs: ['company.name'], description: 'Company id or name' },
@@ -230,12 +226,12 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       text('rfpaNo', ['rfpa.rfpaId'], 'RFPA number (partial)'),
       ...vendorFields(),
       ...farmerFields(),
-      ...locationFields(['location', 'purchaseLocation', 'purchaseForSalesLocation'], ['rec.baseLocation']),
-      text('vehicleNo', ['rec.vehicleNo'], 'Vehicle number (partial)'),
+      ...locationFields(['location', 'purchaseLocation', 'purchaseForSalesLocation']),
+      text('batchNo', ['rec.batchNo'], 'Batch number (partial)'),
       text('billNo', ['rec.billNo'], 'Bill number (partial)'),
       ...amountRange('rec.totalAmt', 'GRN total amount'),
     ],
-    search: ['rec.billNo', 'rec.vehicleNo', 'company.name', 'dealSlip.dealSlipNo', 'rfpa.rfpaId', 'vendor.companyName', 'vendor.vendorCode', farmerFullName('farmer'), 'location.name'],
+    search: ['rec.billNo', 'rec.batchNo', 'company.name', 'dealSlip.dealSlipNo', 'rfpa.rfpaId', 'vendor.companyName', 'vendor.vendorCode', farmerFullName('farmer'), 'location.name'],
     lineItems: { entity: GrnProduct, parentRelation: 'grn', product: 'productName', variant: 'variant' },
     sortable: standardSort('grnNo', 'rec.grnNo', { totalAmt: 'rec.totalAmt' }),
   },
@@ -508,13 +504,13 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       { param: 'vehicleType', kind: 'iexact', exprs: ['rec.vehicleType'], description: 'Vehicle type (exact, case-insensitive)' },
       text('vehicleNo', ['rec.vehicleNo'], 'Vehicle number (partial)'),
       text('driverName', ['rec.driverName'], 'Driver name (partial)'),
-      // The client on a dispatch is free text, not a customer record.
-      text('customerName', ['rec.clientName'], 'Client name (partial)'),
+      text('transporterName', ['rec.transporterName'], 'Transporter name (partial)'),
+      text('batchNo', ['rec.batchNo'], 'Batch number (partial)'),
+      // `clientName` holds the customer name (copied from the customer on sales dispatches; free text on old rows).
+      text('customerName', ['rec.clientName'], 'Customer name (partial)'),
       text('deliveryChallanNo', ['challan.challanNo'], 'Delivery challan number (partial)'),
-      text('clientGRNNo', ['rec.clientGRNNo'], 'Client GRN number (partial)'),
-      ...amountRange('rec.transportationBillAmt', 'Transportation bill amount'),
     ],
-    search: ['rec.vehicleNo', 'rec.vehicleType', 'rec.driverName', 'rec.clientName', 'challan.challanNo', 'company.name'],
+    search: ['rec.vehicleNo', 'rec.vehicleType', 'rec.driverName', 'rec.transporterName', 'rec.batchNo', 'rec.clientName', 'challan.challanNo', 'company.name'],
     sortable: standardSort('vehicleDispatchNo', 'rec.vehicleDispatchNo', { date: 'rec.date' }),
   },
   (() => {

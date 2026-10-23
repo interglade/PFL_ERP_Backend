@@ -42,6 +42,7 @@ import { AqrRepository } from '../../aqr/repository/aqr.repository';
 import { PostReturnByCustomerRepository } from '../../returnByCustomer/repository/postReturnByCustomer.repository';
 import { ApproverBlock } from '../entity/approvalBlock.entity';
 import { User } from '../../employee/entity/user.entity';
+import { notifyAutoRejected, rejectDispatchesOfSources } from '../../vehicleDispatch/service/dispatchRules';
 
 export interface DocumentWithRelatedData extends Documentb {
   relatedData?: any;
@@ -142,6 +143,8 @@ export class DocumentbService {
       DocumentTypeEnum.RETURN_BY_CUSTOMER,
       DocumentTypeEnum.SECOND_SALE,
       DocumentTypeEnum.EOD_REPORT,
+      DocumentTypeEnum.STOCK_ADJUSTMENT,
+      DocumentTypeEnum.STOCK_REPACK,
     ].includes(type);
   }
 
@@ -601,6 +604,7 @@ export class DocumentbService {
           if (action === ApproverStatus.REJECTED) {
             document.status = DocumentStatus.REJECT;
             document.remarks = `${document.type} Rejected by Verifier`;
+            await this.rejectDispatchesForRejectedDocument(document);
             await this.documentbRepository.save(document);
             await this.notificationService.createNoti(`You rejected ${docLabel} at Verifier stage`, userId);
             await this.notifyCreator(document, `Your ${docLabel} was rejected at Verifier stage by ${userName}`);
@@ -672,6 +676,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
           if (action === ApproverStatus.REJECTED) {
             document.status = DocumentStatus.REJECT;
             document.remarks = `${document.type} Rejected at Approver Level 1`;
+            await this.rejectDispatchesForRejectedDocument(document);
             await this.documentbRepository.save(document);
             await this.notificationService.createNoti(`You rejected ${docLabel} at Approver Level 1`, userId);
             await this.notifyCreator(document, `Your ${docLabel} was rejected at Approver Level 1 by ${userName}`);
@@ -724,6 +729,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             if (action === ApproverStatus.REJECTED) {
               document.status = DocumentStatus.REJECT;
               document.remarks = `${document.type} Rejected at Approver Level 2`;
+              await this.rejectDispatchesForRejectedDocument(document);
               await this.documentbRepository.save(document);
               await this.notificationService.createNoti(`You rejected ${docLabel} at Approver Level 1`, userId);
               await this.notifyCreator(document, `Your ${docLabel} was rejected at Approver Level 1 by ${userName}`);
@@ -782,6 +788,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             if (action === ApproverStatus.REJECTED) {
               document.status = DocumentStatus.REJECT;
               document.remarks = `${document.type} Rejected at Approver Level 2`;
+              await this.rejectDispatchesForRejectedDocument(document);
               await this.documentbRepository.save(document);
               await this.notificationService.createNoti(`You rejected ${docLabel} at Approver Level 2`, userId);
               await this.notifyCreator(document, `Your ${docLabel} was rejected at Approver Level 2 by ${userName}`);
@@ -841,6 +848,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             if (action === ApproverStatus.REJECTED) {
               document.status = DocumentStatus.REJECT;
               document.remarks = `${document.type} Rejected at Approver Level 3`;
+              await this.rejectDispatchesForRejectedDocument(document);
               await this.documentbRepository.save(document);
               await this.notificationService.createNoti(`You rejected ${docLabel} at Approver Level 1`, userId);
               await this.notifyCreator(document, `Your ${docLabel} was rejected at Approver Level 1 by ${userName}`);
@@ -898,6 +906,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             if (action === ApproverStatus.REJECTED) {
               document.status = DocumentStatus.REJECT;
               document.remarks = `${document.type} Rejected at Approver Level 3`;
+              await this.rejectDispatchesForRejectedDocument(document);
               await this.documentbRepository.save(document);
               await this.notificationService.createNoti(`You rejected ${docLabel} at Approver Level 2`, userId);
               await this.notifyCreator(document, `Your ${docLabel} was rejected at Approver Level 2 by ${userName}`);
@@ -953,6 +962,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             if (action === ApproverStatus.REJECTED) {
               document.status = DocumentStatus.REJECT;
               document.remarks = `${document.type} Rejected at Approver Level 3`;
+              await this.rejectDispatchesForRejectedDocument(document);
               await this.documentbRepository.save(document);
               await this.notificationService.createNoti(`You rejected ${docLabel} at Approver Level 3`, userId);
               await this.notifyCreator(document, `Your ${docLabel} was rejected at Approver Level 3 by ${userName}`);
@@ -1026,6 +1036,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
           if (action === ApproverStatus.REJECTED) {
             document.status = DocumentStatus.REJECT;
             document.remarks = `${document.type} Rejected by First Finalizer`;
+            await this.rejectDispatchesForRejectedDocument(document);
             await this.notificationService.createNoti(`You rejected ${docLabel} at Finalizer Level 1`, userId);
             await this.notifyCreator(document, `Your ${docLabel} was rejected at Finalizer Level 1 by ${userName}`);
             await this.notifyStageParticipants(flow.finalizers.firstFinalizers, userId, `${docLabel} was rejected at Finalizer Level 1 by ${userName}. No action needed from you`);
@@ -1064,6 +1075,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
           if (action === ApproverStatus.REJECTED) {
             document.status = DocumentStatus.REJECT;
             document.remarks = `${document.type} Rejected by Second Finalizer`;
+            await this.rejectDispatchesForRejectedDocument(document);
             await this.documentbRepository.save(document);
             await this.notificationService.createNoti(`You rejected ${docLabel} at Finalizer Level 2`, userId);
             await this.notifyCreator(document, `Your ${docLabel} was rejected at Finalizer Level 2 by ${userName}`);
@@ -1153,10 +1165,52 @@ function isWithinRange(min: number | string | null, max: number | string | null,
     }
   }
 
+  /**
+   * A GRN / Stock Transfer DC / Customer DC that is rejected or deleted takes its
+   * pending vehicle dispatch with it (docs/dispatch-enforcement-plan.md D5): the
+   * dispatch approval is rejected, its creator notified and dispatch caches cleared.
+   * No-op for other document types. Never throws.
+   */
+  public async rejectDispatchesForSource(
+    sourceDocumentType: string,
+    sourceIds: string[],
+    why: 'rejected' | 'deleted',
+    sourceLabel?: string | null,
+  ): Promise<void> {
+    try {
+      const label = sourceLabel || getReadableDocumentType(sourceDocumentType as DocumentTypeEnum);
+      const reason = `${label} was ${why}`;
+      const rejected = await rejectDispatchesOfSources(this.documentbRepository.manager, sourceDocumentType, sourceIds, reason);
+      if (!rejected.length) return;
+      await notifyAutoRejected(rejected, reason, (message, userId) => this.notificationService.createNoti(message, userId));
+      await this.cacheService.invalidatePattern('vehicleDispatch:*');
+      await this.cacheService.invalidatePattern('singledoc:*');
+      await this.cacheService.invalidatePattern('grn:numbers:*');
+    } catch (error) {
+      logger.error('Auto-rejecting vehicle dispatches failed', error);
+    }
+  }
+
+  /** `rejectDispatchesForSource` for a rejected `documents` row. */
+  private async rejectDispatchesForRejectedDocument(document: Documentb): Promise<void> {
+    if (!document.document_type_id) return;
+    const docNo = await this.resolveDocumentTypeNo(document).catch(() => null);
+    const label = `${getReadableDocumentType(document.type)}${docNo ? ` ${docNo}` : ''}`;
+    await this.rejectDispatchesForSource(document.type, [document.document_type_id], 'rejected', label);
+  }
+
   public async resolveDocumentTypeNo(document: any): Promise<string | null> {
     if (!document?.document_type_id) return null;
     try {
       switch (document.type) {
+        case DocumentTypeEnum.STOCK_ADJUSTMENT: {
+          const rows = await this.documentbRepository.manager.query(`SELECT adjustment_no AS no FROM stock_adjustment WHERE id = $1`, [document.document_type_id]);
+          return rows[0]?.no ?? null;
+        }
+        case DocumentTypeEnum.STOCK_REPACK: {
+          const rows = await this.documentbRepository.manager.query(`SELECT repack_no AS no FROM stock_repack WHERE id = $1`, [document.document_type_id]);
+          return rows[0]?.no ?? null;
+        }
         case DocumentTypeEnum.GRN: {
           const doc = await this.grnRepository.findOne({ where: { id: document.document_type_id } });
           return doc?.grnNo ?? null;

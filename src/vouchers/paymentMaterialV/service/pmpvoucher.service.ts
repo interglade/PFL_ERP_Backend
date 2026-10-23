@@ -1,3 +1,6 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../../global/numbering/documentNumber';
+import { assertGrnFreeForVoucher, resolveVoucherGrn } from '../../voucherGrnLink';
+import { relationIdOf } from '../../../grn/grnLinks.sql';
 import { id, inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 
@@ -483,6 +486,10 @@ public async getAllRecycleBinVouchers(queryOptions: PaginationOptions, userId: s
       //   throw new Error('Approval flow not found');
       // }
 
+      // D-6: one live Packing Material Payment Voucher per GRN.
+      const grnId = relationIdOf(voucherData.grnNo);
+      if (grnId) await assertGrnFreeForVoucher(queryRunner.manager, 'pmp', grnId);
+
       voucherData.voucherNo = await this.generatePMPVoucherNo();
 
       const pmpvoucher = queryRunner.manager.create(this.pmpVoucherRepository.target, voucherData as any);
@@ -519,6 +526,7 @@ public async getAllRecycleBinVouchers(queryOptions: PaginationOptions, userId: s
   ): Promise<PMPVoucher | null> {
     const voucher = await this.pmpVoucherRepository.findOne({
       where: { id },
+      relations: ['grnNo'],
     });
 
     if (!voucher) {
@@ -530,8 +538,13 @@ public async getAllRecycleBinVouchers(queryOptions: PaginationOptions, userId: s
     const dataToUpdate = { ...updatedData } as any;
     const grnNo = dataToUpdate.grnNo;
     if (typeof grnNo === 'string' && grnNo.trim()) {
-      const grn = await this.grnRepository.findOne({ where: { grnNo } });
+      // The edit form sends the GRN id (older callers the GRN number).
+      const grn = await resolveVoucherGrn(this.grnRepository, grnNo);
+      if (grn && grn.id !== voucher.grnNo?.id) {
+        await assertGrnFreeForVoucher(this.pmpVoucherRepository.manager, 'pmp', grn.id, id);
+      }
       if (grn) dataToUpdate.grnNo = grn;
+      else delete dataToUpdate.grnNo;
     }
 
     Object.assign(voucher, dataToUpdate);
@@ -566,23 +579,9 @@ public async getAllRecycleBinVouchers(queryOptions: PaginationOptions, userId: s
     return {No:pmpVoucher.voucherNo};
   }
 
+  /** `PMPV-yyyyMMdd-00001`, the serial running per day (it used to be missing, so every voucher of a day shared one number); issued by the shared sequence (no COUNT / MAX race, never reused). */
   public async generatePMPVoucherNo(): Promise<string> {
-    const today = new Date();
-    const formattedDate = format(today, 'yyyyMMdd');
-
-    const lastVoucher = await this.pmpVoucherRepository
-      .createQueryBuilder('pmpVoucher')
-      .where('pmpVoucher.voucherNo LIKE :datePattern', { datePattern: `PMPV-${formattedDate}-%` })
-      .orderBy('pmpVoucher.voucherNo', 'DESC')
-      .getOne();
-
-    let newSerialNumber = 1;
-    if (lastVoucher) {
-      const lastSerialNumber = parseInt(lastVoucher.voucherNo.split('-')[2], 10);
-      newSerialNumber = lastSerialNumber + 1;
-    }
-
-    return `PMPV-${formattedDate}`;
+    return nextDocumentNumber(this.pmpVoucherRepository.manager, SERIES.packingVoucher, `PMPV-${compactDate()}-`, 5);
   }
 
   public async deleteMultiplePMPVoucher(ids: string[]): Promise<BulkDeleteResultDto> {

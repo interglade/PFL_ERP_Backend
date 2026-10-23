@@ -5,6 +5,7 @@ import { DealSlipRepository } from "../dealSlip/repository/dealSlip.repository";
 
 import { InwardRepository } from "../inwardRegister/repository/inwardRegister.repository";
 import { VehicleDispatchRepository } from "../vehicleDispatch/repository/vehicleDispatch.repository";
+import { rejectDispatchesOfSources } from "../vehicleDispatch/service/dispatchRules";
 ;
 import { PackingMaterialRepository } from "../packingMaterial/repository/packingMaterial.repository";
 
@@ -73,6 +74,8 @@ export class SuperAdminService {
   switch (doc.type) {
     case 'grn':
       await this.grnRepo.update(doc.document_type_id, { isDeleted: true, deletedAt: new Date() });
+      // A deleted GRN rejects its pending purchase dispatch.
+      await rejectDispatchesOfSources(this.grnRepo.manager, doc.type, [doc.document_type_id], 'GRN was deleted').catch(() => []);
       break;
     case 'rfpa':
       await this.rfpaRepo.update(doc.document_type_id, { isDeleted: true, deletedAt: new Date() });

@@ -1,3 +1,5 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../../global/numbering/documentNumber';
+import { assertGrnFreeForVoucher, resolveVoucherGrn } from '../../voucherGrnLink';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 import { TYPES } from '../../../types';
@@ -388,6 +390,8 @@ export class MultiCashVoucherService {
         if (!grn) {
           throw new Error(`GRN with ID ${voucherData.grnNo} not found.`);
         }
+        // D-6: one live Multi-Cash Voucher per GRN.
+        await assertGrnFreeForVoucher(queryRunner.manager, 'mc', grn.id);
         voucherData.grnNo = grn;
       } else {
         voucherData.grnNo = null;
@@ -532,13 +536,19 @@ public async getAllRecycleBinVouchers(
     updatedData: UpdateMultiCashVoucherDto,
     updatedBy: string,
   ): Promise<CashVoucher | null> {
-    const voucher = await this.cashVoucherRepository.findOne({ where: { id } });
+    const voucher = await this.cashVoucherRepository.findOne({ where: { id }, relations: ['grnNo'] });
     if (!voucher) return null;
 
     const originalVoucher = { ...voucher };
 
-    const grn = await this.grnRepository.findOne({ where: { grnNo: updatedData.grnNo } });
+    // The edit form sends the GRN id (older callers the GRN number). A blank value used to
+    // match the first GRN of the table; now it leaves the GRN unchanged.
+    const grn = await resolveVoucherGrn(this.grnRepository, updatedData.grnNo);
+    if (grn && grn.id !== voucher.grnNo?.id) {
+      await assertGrnFreeForVoucher(this.cashVoucherRepository.manager, 'mc', grn.id, id);
+    }
     if (grn) updatedData.grnNo = grn;
+    else delete updatedData.grnNo;
 
     Object.assign(voucher, updatedData);
     await this.cashVoucherRepository.save(voucher);
@@ -563,30 +573,9 @@ public async getAllRecycleBinVouchers(
     return {No:voucher?.voucherNo};
   }
 
+  /** `CV-yyyyMMdd-00001`, the serial running per day (it used to be missing, so every voucher of a day shared one number); issued by the shared sequence (no COUNT / MAX race, never reused). */
   public async generateVoucherNo(): Promise<string> {
-    const today = new Date();
-    const formattedDate = format(today, 'yyyyMMdd');
-
-    const lastVoucher = await this.cashVoucherRepository
-      .createQueryBuilder('cashVoucher')
-      .where('cashVoucher.voucherNo LIKE :datePattern', {
-        datePattern: `CV-${formattedDate}-%`,
-      })
-      .orderBy('cashVoucher.voucherNo', 'DESC')
-      .getOne();
-
-    let newSerialNumber = 1;
-
-    if (lastVoucher) {
-      const lastSerialNumber = parseInt(
-        lastVoucher.voucherNo.split('-')[2],
-        10,
-      );
-      newSerialNumber = lastSerialNumber + 1;
-    }
-
-    const voucherNo = `CV-${formattedDate}`;
-    return voucherNo;
+    return nextDocumentNumber(this.cashVoucherRepository.manager, SERIES.multiCashVoucher, `CV-${compactDate()}-`, 5);
   }
 
 

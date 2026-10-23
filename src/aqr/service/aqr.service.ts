@@ -1,3 +1,4 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from "inversify";
 import { TYPES } from "../../types";
 import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
@@ -39,7 +40,7 @@ import { AqrProduct } from "../entity/aqrProduct.entity";
 import { AqrParameter, QualityParameterType } from "../entity/aqrQuality.entity";
 import { ReceivingGuardService } from "../../receiving/service/receivingGuard.service";
 import { ReceivingSourceType, ResolvedSource } from "../../receiving/receiving.types";
-import { productKey } from "../../receiving/receiving.helpers";
+import { isKgCounted, matchSourceKey, productKey, transitLoss } from "../../receiving/receiving.helpers";
 import {
   AqrLineInput,
   AqrSourceRef,
@@ -126,22 +127,9 @@ export class AqrService {
 
   // ─── Serial Number ────────────────────────────────────────────────────────
 
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateSerialNo(): Promise<string> {
-    const now = new Date();
-    const datePrefix = `AQR${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
-
-    const result = await this.aqrRepo
-      .createQueryBuilder("aqr")
-      .select("MAX(aqr.aqrNo)", "maxNo")
-      .where("aqr.aqrNo LIKE :prefix", { prefix: `${datePrefix}%` })
-      .getRawOne();
-
-    let nextSeq = 1;
-    if (result?.maxNo) {
-      const lastSeq = parseInt(result.maxNo.replace(datePrefix, ""), 10);
-      if (!isNaN(lastSeq)) nextSeq = lastSeq + 1;
-    }
-    return `${datePrefix}${nextSeq.toString().padStart(5, "0")}`;
+    return nextDocumentNumber(this.aqrRepo.manager, SERIES.aqr, `AQR${compactDate()}`, 5);
   }
 
   // ─── Shared mapping helpers ───────────────────────────────────────────────
@@ -267,8 +255,38 @@ export class AqrService {
     return lines.map((line) => ({
       productId: refIdOf(line.product),
       variantId: refIdOf(line.variant),
+      uomId: refIdOf(line.uom),
+      batchNo: line.batchNo ?? null,
       kg: parseQuantity(line.arrivedQty) ?? 0,
     }));
+  }
+
+  /** The source line an AQR line belongs to (product + variant + unit, with the legacy fallback). */
+  private sourceLineFor(resolved: ResolvedSource, productId: string, variantId: string | null, uomId: string | null, batchNo?: string | null) {
+    const byKey = new Map(resolved.products.map((p) => [p.key, p]));
+    return byKey.get(matchSourceKey(byKey, productId, variantId, uomId, batchNo ?? null));
+  }
+
+  /**
+   * What was sent, what arrived and the transit loss of one line. Arrived
+   * units are kept only for lines counted in units (boxes, crates …).
+   */
+  private arrivalFields(sourceLine: ResolvedSource['products'][number] | undefined, arrivedKg: number, arrivedUnitsInput: unknown) {
+    if (!sourceLine) {
+      return { receivedQty: null, sentUnits: null, arrivedUnits: null, lossKg: null, lossUnits: null, lossValue: null };
+    }
+    const counted = !isKgCounted(sourceLine);
+    const parsed = parseQuantity(arrivedUnitsInput);
+    const arrivedUnits = counted && parsed !== undefined && Number.isFinite(parsed) ? parsed : null;
+    const loss = transitLoss(sourceLine, arrivedKg, arrivedUnits);
+    return {
+      receivedQty: sourceLine.receivedKg,
+      sentUnits: sourceLine.receivedQty,
+      arrivedUnits,
+      lossKg: loss.lossKg,
+      lossUnits: loss.lossQty,
+      lossValue: loss.lossValue,
+    };
   }
 
   private buildParameters(line: AqrLineInput, samplingQty: number): DeepPartial<AqrParameter>[] {
@@ -291,14 +309,15 @@ export class AqrService {
       const productId = refIdOf(line.product)!;
       const variantId = refIdOf(line.variant);
       const uomId = refIdOf(line.uom);
-      const sourceLine = resolved.products.find((p) => p.key === productKey(productId, variantId));
+      const sourceLine = this.sourceLineFor(resolved, productId, variantId, uomId, line.batchNo);
       const arrived = parseQuantity(line.arrivedQty) ?? 0;
       const sampling = parseQuantity(line.samplingQty) ?? 0;
       return {
+        batchNo: sourceLine?.batchNo ?? null,
         productName: { id: productId },
         variant: variantId ? { id: variantId } : null,
-        uom: uomId ? { id: uomId } : sourceLine?.uomId ? { id: sourceLine.uomId } : null,
-        receivedQty: sourceLine ? sourceLine.receivedKg : null,
+        uom: sourceLine?.uomId ? { id: sourceLine.uomId } : uomId ? { id: uomId } : null,
+        ...this.arrivalFields(sourceLine, arrived, line.arrivedUnits),
         arrivedQty: arrived,
         samplingQty: sampling,
         totalQty: num(line.totalQty),
@@ -354,6 +373,7 @@ export class AqrService {
       grn: source.sourceType === "grn" ? { id: source.sourceId } : null,
       deliveryChallanNo: source.sourceType === "stock-transfer-dc" ? { id: source.sourceId } : null,
       rbc: source.sourceType === "rbc" ? { id: source.sourceId } : null,
+      batchNo: resolved.batchNo ?? null,
     } as DeepPartial<Aqr>;
   }
 
@@ -1057,7 +1077,7 @@ export class AqrService {
    */
   private async applyLineUpdate(aqr: Aqr, lines: AqrLineInput[], resolved: ResolvedSource, manager: EntityManager): Promise<void> {
     const existingLines = aqr.products ?? [];
-    const byKey = new Map(existingLines.map((l) => [productKey(l.productName?.id ?? '', l.variant?.id ?? null), l]));
+    const byKey = new Map(existingLines.map((l) => [productKey(l.productName?.id ?? '', l.variant?.id ?? null, l.uom?.id ?? null, l.batchNo ?? null), l]));
     const byId = new Map(existingLines.map((l) => [l.id, l]));
     const kept = new Set<string>();
     const next: AqrProduct[] = [];
@@ -1065,7 +1085,8 @@ export class AqrService {
     for (const input of lines) {
       const productId = refIdOf(input.product)!;
       const variantId = refIdOf(input.variant);
-      const key = productKey(productId, variantId);
+      const uomId = refIdOf(input.uom);
+      const key = productKey(productId, variantId, uomId, input.batchNo ?? null);
       const inputId = typeof input.id === 'string' && input.id ? input.id : null;
 
       let line = byKey.get(key) ?? (inputId ? byId.get(inputId) : undefined) ?? null;
@@ -1078,15 +1099,21 @@ export class AqrService {
         line = manager.create(AqrProduct, { aqr: { id: aqr.id } } as DeepPartial<AqrProduct>);
       }
 
-      const sourceLine = resolved.products.find((p) => p.key === key);
-      const uomId = refIdOf(input.uom);
+      const sourceLine = this.sourceLineFor(resolved, productId, variantId, uomId, input.batchNo);
       const arrived = parseQuantity(input.arrivedQty) ?? 0;
       const sampling = parseQuantity(input.samplingQty) ?? 0;
 
       line.productName = { id: productId } as AqrProduct['productName'];
       line.variant = (variantId ? { id: variantId } : null) as AqrProduct['variant'];
-      line.uom = (uomId ? { id: uomId } : line.uom?.id ? { id: line.uom.id } : sourceLine?.uomId ? { id: sourceLine.uomId } : null) as AqrProduct['uom'];
-      line.receivedQty = (sourceLine ? sourceLine.receivedKg : num(line.receivedQty)) as number;
+      line.uom = (sourceLine?.uomId ? { id: sourceLine.uomId } : uomId ? { id: uomId } : line.uom?.id ? { id: line.uom.id } : null) as AqrProduct['uom'];
+      const arrival = this.arrivalFields(sourceLine, arrived, input.arrivedUnits);
+      line.receivedQty = (sourceLine ? arrival.receivedQty : num(line.receivedQty)) as number;
+      line.sentUnits = arrival.sentUnits;
+      line.arrivedUnits = arrival.arrivedUnits;
+      line.lossKg = arrival.lossKg;
+      line.lossUnits = arrival.lossUnits;
+      line.lossValue = arrival.lossValue;
+      line.batchNo = sourceLine?.batchNo ?? null;
       line.arrivedQty = arrived;
       line.samplingQty = sampling;
       line.totalQty = num(input.totalQty) as number;

@@ -13,6 +13,7 @@
  */
 
 import { DealSlip } from '../entity/dealSlip.entity';
+import { liveGrnForDealSlipExistsSql } from '../dealSlipGrnLink';
 import { RFPAProduct } from '../../rfpa/entity/rfpaProduct.entity';
 import { ExportDefinition } from '../../excel/export/exportTypes';
 import {
@@ -35,7 +36,7 @@ import {
   vendorColumns,
 } from '../../excel/export/commonColumns';
 
-type DealSlipRecord = DealSlip & { lineCount?: number; lineTotal?: number | null };
+type DealSlipRecord = DealSlip & { lineCount?: number; lineTotal?: number | null; grnCreated?: boolean };
 type Row = DocumentRow<DealSlipRecord>;
 /** An RFPA line attributed to the deal slip raised against its RFPA. */
 type Line = RFPAProduct & { dealSlipId: string; dealSlipNo: string };
@@ -67,10 +68,19 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
 
         const rfpaIds = records.map((r) => r.rfpa?.id).filter((id): id is string => Boolean(id));
         const totals = await aggregateLines(ctx.manager, RFPAProduct, 'rfpa', 'amount', rfpaIds);
+        // D-6: "GRN created" is derived (a live, non-rejected GRN references the slip).
+        const usedRows: Array<{ id: string }> = records.length
+          ? await ctx.manager.query(
+              `SELECT ds.id FROM deal_slips ds WHERE ds.id = ANY($1::uuid[]) AND ${liveGrnForDealSlipExistsSql('ds.id')}`,
+              [records.map((r) => r.id)],
+            )
+          : [];
+        const usedIds = new Set(usedRows.map((r) => r.id));
         for (const record of records) {
           const t = record.rfpa ? totals.get(record.rfpa.id) : undefined;
           record.lineCount = t?.count ?? 0;
           record.lineTotal = t?.total ?? null;
+          record.grnCreated = usedIds.has(record.id);
         }
         return records;
       },
@@ -85,7 +95,7 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
         { header: 'Remark', maps: 'deal_slips.remark', get: (r) => r.record.remark },
         { header: 'Deal Slip Created At', maps: 'deal_slips.dealSlipCreatedAt', type: 'datetime', get: (r) => r.record.dealSlipCreatedAt },
         { header: 'Deal Slip Approved At', maps: 'deal_slips.dealSlipApprovedAt', type: 'datetime', get: (r) => r.record.dealSlipApprovedAt },
-        { header: 'GRN Created', maps: 'deal_slips.isGrnCreated', type: 'boolean', get: (r) => r.record.isGrnCreated },
+        { header: 'GRN Created', maps: 'EXISTS(grns live, not rejected)', type: 'boolean', get: (r) => r.record.grnCreated },
         { header: 'Source', maps: 'rfpa.source', get: (r) => r.record.rfpa?.source },
         ...companyColumns<Row>((r) => r.record.rfpa?.companyName, 'rfpa.companyName -> company'),
         ...vendorColumns<Row>((r) => r.record.rfpa?.selectedVendor, 'rfpa.selectedVendor -> vendor'),

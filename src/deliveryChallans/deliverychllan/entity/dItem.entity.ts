@@ -62,6 +62,10 @@ export class Item extends Model {
 
   @Column('decimal', { precision: 20, scale: 3, nullable: true })
   packingMaterialQuantity: number;
+  /** 'per_unit' (quantity × unit price) or 'per_kg' (net kg × unit price). */
+  @Column({ type: 'varchar', length: 10, default: 'per_unit' })
+  pricingBasis: 'per_unit' | 'per_kg';
+
   @Column('decimal', { precision: 20, scale: 4, nullable: true })
   amount: number;
 

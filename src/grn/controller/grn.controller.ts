@@ -143,11 +143,8 @@ console.log(req.body);
 
       const requestedBy = res.locals.user.id;
 
-      //const baseLocation = res.locals.user.relocationPlace;
       grnData.createdBy = requestedBy;
       grnData.requestedBy = requestedBy;
-      // grnData.baseLocation = baseLocation;
-      grnData.requestingDepartment = res.locals.user.selectDepartment;
       //if (grnData === '')
         if (grnData.source === Source.VENDOR && !grnData.selectedParty) {
           
@@ -269,7 +266,8 @@ console.log(req.body);
       res.status(201).json({
         status: 'success',
         message: createdMessage('GRN', 'GRNNo', newGrn.grnNo, sentTo),
-        //data: newGrn,
+        // id + number only: the post-save dialog opens the purchase dispatch form for this GRN.
+        data: { id: newGrn.id, grnNo: newGrn.grnNo },
       });
     } catch (error) {
       ControllerLogger.logError('GRN creation', error, req, res);
@@ -534,6 +532,7 @@ console.log(req.body);
     const isTPVoucherCreated = req.query.isTPVoucherCreated === 'true' ? true : req.query.isTPVoucherCreated === 'false' ? false : undefined;
     const isPMPVoucherCreated = req.query.isPMPVoucherCreated === 'true' ? true : req.query.isPMPVoucherCreated === 'false' ? false : undefined;
     const isLPVoucherCreated = req.query.isLPVoucherCreated === 'true' ? true : req.query.isLPVoucherCreated === 'false' ? false : undefined;
+    const isVehicleDispatchCreated = req.query.isVehicleDispatchCreated === 'true' ? true : req.query.isVehicleDispatchCreated === 'false' ? false : undefined;
 
     // Receiving picker params (see GrnService.getReceivableGrnNumbers)
     const receivable = req.query.receivable === 'true' ? true : req.query.receivable === 'false' ? false : undefined;
@@ -542,7 +541,7 @@ console.log(req.body);
 
     const userId = res.locals.user.id;
 
-      const grns = await this.grnService.getAllGrnNumbers({...req.query, isAQRCreated, isInwardCreated, isDumpCreated, isDCForCustomerCreated, isMCVoucherCreated, isTPVoucherCreated, isPMPVoucherCreated, isLPVoucherCreated, receivable, missing, locationId}, userId); // Call the service method
+      const grns = await this.grnService.getAllGrnNumbers({...req.query, isAQRCreated, isInwardCreated, isDumpCreated, isDCForCustomerCreated, isMCVoucherCreated, isTPVoucherCreated, isPMPVoucherCreated, isLPVoucherCreated, isVehicleDispatchCreated, receivable, missing, locationId}, userId); // Call the service method
       if (!grns || grns.length === 0) {
         return next(new AppError(404, 'No GRNs found'));
       }

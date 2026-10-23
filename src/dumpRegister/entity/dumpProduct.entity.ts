@@ -39,6 +39,10 @@ export class DumpProduct extends Model {
 
     @Column("decimal", { precision: 12, scale: 3, nullable: true })
     netWeight: number;
+
+    /** Batch of the source line (transfer lines carry the batch the Transfer DC took). */
+    @Column({ type: 'varchar', length: 100, nullable: true })
+    batchNo: string | null;
   //   @Column("character varying", { name: "count", nullable: true, length: 100 })
   // count: string;
 

@@ -1,5 +1,5 @@
 import { inject } from 'inversify';
-import { controller, httpGet, next, request, requestParam, response } from 'inversify-express-utils';
+import { controller, httpDelete, httpGet, httpPost, next, request, requestParam, response } from 'inversify-express-utils';
 import { NextFunction, Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { format } from 'date-fns';
@@ -8,8 +8,20 @@ import { TYPES } from '../../types';
 import AppError from '../../utils/appError';
 import logger from '../../utils/logger';
 import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
-import { ReceivingStatusService } from '../service/receivingStatus.service';
-import { ArrivalRow, ArrivalsFilter, RECEIVING_STATES, ReceivingSourceType, ReceivingState } from '../receiving.types';
+import { ARRIVALS_EXPORT_BATCH_SIZE, ARRIVALS_EXPORT_MAX_ROWS, ReceivingStatusService } from '../service/receivingStatus.service';
+import {
+  ARRIVAL_READINESS,
+  ArrivalReadiness,
+  ArrivalRow,
+  ArrivalsFilter,
+  DISPATCH_STATES,
+  DispatchState,
+  RECEIVING_STATES,
+  ReceivingSourceType,
+  ReceivingState,
+  SKIPPABLE_DOC_TYPES,
+  SkippableDocType,
+} from '../receiving.types';
 import { isReceivingSourceType } from '../receiving.sql';
 
 const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -38,11 +50,24 @@ const ARRIVAL_COLUMNS: ArrivalColumn[] = [
   { header: 'Products', width: 10, get: (r) => r.productCount, numFmt: '0' },
   { header: 'Received kg', width: 14, get: (r) => r.receivedKg, numFmt: '#,##0.000' },
   { header: 'Difference kg', width: 14, get: (r) => r.differenceKg, numFmt: '#,##0.000' },
+  { header: 'Transit Loss kg', width: 15, get: (r) => r.transitLossKg, numFmt: '#,##0.000' },
+  { header: 'Transit Loss Rs', width: 15, get: (r) => r.transitLossValue, numFmt: '#,##0.00' },
   { header: 'AQR', width: 11, get: (r) => r.slots.aqr },
   { header: 'Inward', width: 11, get: (r) => r.slots.inward },
   { header: 'Dump', width: 11, get: (r) => r.slots.dump },
   { header: 'RTV', width: 11, get: (r) => r.slots.rtv ?? 'n/a' },
   { header: 'State', width: 13, get: (r) => r.state },
+  { header: 'Dispatch', width: 12, get: (r) => r.dispatchState },
+  { header: 'Can Receive', width: 12, get: (r) => (r.canReceive ? 'Yes' : 'No') },
+  { header: 'Blocked By', width: 40, get: (r) => r.blockers.join('; ') || null },
+  { header: 'Dispatch No', width: 18, get: (r) => r.dispatch?.dispatchNo ?? null },
+  { header: 'Vehicle No', width: 14, get: (r) => r.dispatch?.vehicleNo ?? null },
+  { header: 'Driver', width: 20, get: (r) => r.dispatch?.driverName ?? null },
+  { header: 'Driver Mobile', width: 14, get: (r) => r.dispatch?.driverMobNo ?? null },
+  { header: 'Transporter', width: 22, get: (r) => r.dispatch?.transporterName ?? null },
+  { header: 'Out Time', width: 10, get: (r) => r.dispatch?.outTime ?? null },
+  { header: 'Reaching Time', width: 12, get: (r) => r.dispatch?.reachingTime ?? null },
+  { header: 'Arrived At', width: 20, get: (r) => (r.dispatch?.arrivedAt ? new Date(r.dispatch.arrivedAt) : null), numFmt: 'dd-mm-yyyy hh:mm' },
 ];
 
 function firstString(value: unknown): string | undefined {
@@ -52,25 +77,61 @@ function firstString(value: unknown): string | undefined {
   return text ? text : undefined;
 }
 
+/** Comma-separated and / or repeated query values. */
+function manyStrings(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : value !== undefined && value !== null ? [value] : [];
+  return raw
+    .flatMap((v) => String(v).split(','))
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parseSkipBody(body: unknown): { sourceType: ReceivingSourceType; sourceId: string; docType: SkippableDocType } {
+  const input = (body ?? {}) as Record<string, unknown>;
+  const sourceType = input.sourceType;
+  const sourceId = typeof input.sourceId === 'string' ? input.sourceId.trim() : '';
+  const docType = input.docType;
+  if (!isReceivingSourceType(sourceType)) throw new AppError(400, 'sourceType must be one of grn, stock-transfer-dc, rbc');
+  if (!UUID.test(sourceId)) throw new AppError(400, 'sourceId must be a uuid');
+  if (!SKIPPABLE_DOC_TYPES.includes(docType as SkippableDocType)) {
+    throw new AppError(400, `docType must be one of ${SKIPPABLE_DOC_TYPES.join(', ')}`);
+  }
+  return { sourceType, sourceId, docType: docType as SkippableDocType };
+}
+
 function parseArrivalsFilter(query: Request['query']): ArrivalsFilter {
   const filter: ArrivalsFilter = {};
 
   const locationId = firstString(query.locationId);
   if (locationId) filter.locationId = locationId;
 
-  const state = firstString(query.state);
-  if (state) {
-    if (!RECEIVING_STATES.includes(state as ReceivingState)) {
-      throw new AppError(400, `state must be one of ${RECEIVING_STATES.join(', ')}`);
-    }
-    filter.state = state as ReceivingState;
+  // One or more states: `state=open`, `state=not-started,open` or `state=open&state=legacy`.
+  const states = manyStrings(query.state);
+  if (states.length) {
+    const invalid = states.find((s) => !RECEIVING_STATES.includes(s as ReceivingState));
+    if (invalid) throw new AppError(400, `state must be one or more of ${RECEIVING_STATES.join(', ')}`);
+    filter.state = Array.from(new Set(states)) as ReceivingState[];
   }
 
-  const rawTypes = Array.isArray(query.sourceType) ? query.sourceType : query.sourceType ? [query.sourceType] : [];
-  const types = rawTypes
-    .flatMap((v) => String(v).split(','))
-    .map((v) => v.trim())
-    .filter(Boolean);
+  const dispatchState = firstString(query.dispatchState);
+  if (dispatchState) {
+    if (!DISPATCH_STATES.includes(dispatchState as DispatchState)) {
+      throw new AppError(400, `dispatchState must be one of ${DISPATCH_STATES.join(', ')}`);
+    }
+    filter.dispatchState = dispatchState as DispatchState;
+  }
+
+  const readiness = firstString(query.readiness);
+  if (readiness) {
+    if (!ARRIVAL_READINESS.includes(readiness as ArrivalReadiness)) {
+      throw new AppError(400, `readiness must be one of ${ARRIVAL_READINESS.join(', ')}`);
+    }
+    filter.readiness = readiness as ArrivalReadiness;
+  }
+
+  const types = manyStrings(query.sourceType);
   if (types.length) {
     const invalid = types.find((t) => !isReceivingSourceType(t));
     if (invalid) throw new AppError(400, 'sourceType must be one of grn, stock-transfer-dc, rbc');
@@ -123,7 +184,13 @@ export class ReceivingController {
     }
   }
 
-  /** Arrivals worklist as .xlsx (same filters and columns as the list, no pagination). */
+  /**
+   * Arrivals worklist as .xlsx (same filters and columns as the list, no
+   * pagination, at most ARRIVALS_EXPORT_MAX_ROWS rows). The matching keys are
+   * resolved first (cheap), then rows are built and streamed in batches, so
+   * the statuses are never all held in memory. `X-Export-Truncated: true`
+   * when the cap cut the result.
+   */
   @httpGet('/arrivals/excel')
   public async exportArrivals(
     @request() req: Request,
@@ -132,15 +199,17 @@ export class ReceivingController {
   ) {
     try {
       const filter = parseArrivalsFilter(req.query);
-      const rows = await this.receivingStatusService.listArrivalsForExport(filter);
+      const plan = await this.receivingStatusService.planArrivalsExport(filter);
 
       const fileName = `arrivals-${format(new Date(), 'yyyyMMdd')}.xlsx`;
       res.status(200);
       res.setHeader('Content-Type', XLSX_CONTENT_TYPE);
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, X-Export-Record-Count');
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, X-Export-Record-Count, X-Export-Total-Count, X-Export-Truncated');
       res.setHeader('Cache-Control', 'no-store');
-      res.setHeader('X-Export-Record-Count', String(rows.length));
+      res.setHeader('X-Export-Record-Count', String(plan.keys.length));
+      res.setHeader('X-Export-Total-Count', String(plan.total));
+      if (plan.truncated) res.setHeader('X-Export-Truncated', 'true');
 
       const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
         stream: res,
@@ -167,10 +236,21 @@ export class ReceivingController {
       });
       header.commit();
 
-      for (const row of rows) {
-        sheet.addRow(ARRIVAL_COLUMNS.map((column) => column.get(row) ?? null)).commit();
+      let written = 0;
+      for (let start = 0; start < plan.keys.length; start += ARRIVALS_EXPORT_BATCH_SIZE) {
+        const rows = await this.receivingStatusService.arrivalRowsFor(plan.keys.slice(start, start + ARRIVALS_EXPORT_BATCH_SIZE));
+        for (const row of rows) {
+          sheet.addRow(ARRIVAL_COLUMNS.map((column) => column.get(row) ?? null)).commit();
+          written += 1;
+        }
       }
-      sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: rows.length + 1, column: ARRIVAL_COLUMNS.length } };
+      sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: written + 1, column: ARRIVAL_COLUMNS.length } };
+      if (plan.truncated) {
+        sheet.addRow([]).commit();
+        sheet
+          .addRow([`Only the first ${ARRIVALS_EXPORT_MAX_ROWS} of ${plan.total} rows were exported. Narrow the filters to export the rest.`])
+          .commit();
+      }
       sheet.commit();
       await workbook.commit();
     } catch (error) {
@@ -179,6 +259,54 @@ export class ReceivingController {
         res.end();
         return;
       }
+      nextFn(error);
+    }
+  }
+
+  /** Number of Arrivals matching the filters (sidebar badge: `?readiness=ready&state=not-started`). */
+  @httpGet('/arrivals/count')
+  public async countArrivals(
+    @request() req: Request,
+    @response() res: Response,
+    @next() nextFn: NextFunction,
+  ) {
+    try {
+      const filter = parseArrivalsFilter(req.query);
+      const count = await this.receivingStatusService.countArrivals(filter);
+      res.status(200).json({ status: 'success', data: { count } });
+    } catch (error) {
+      nextFn(error);
+    }
+  }
+
+  /** Marks the Dump / RTV step of a source as not needed. Body: `{ sourceType, sourceId, docType }`. */
+  @httpPost('/skip')
+  public async skipStep(
+    @request() req: Request,
+    @response() res: Response,
+    @next() nextFn: NextFunction,
+  ) {
+    try {
+      const input = parseSkipBody({ ...req.query, ...(req.body ?? {}) });
+      const skipped = await this.receivingStatusService.setSkip(input, true, res.locals.user?.id ?? null);
+      res.status(200).json({ status: 'success', data: { skipped } });
+    } catch (error) {
+      nextFn(error);
+    }
+  }
+
+  /** Removes the "not needed" mark. Body or query: `{ sourceType, sourceId, docType }` (query works where proxies drop DELETE bodies). */
+  @httpDelete('/skip')
+  public async unskipStep(
+    @request() req: Request,
+    @response() res: Response,
+    @next() nextFn: NextFunction,
+  ) {
+    try {
+      const input = parseSkipBody({ ...req.query, ...(req.body ?? {}) });
+      const skipped = await this.receivingStatusService.setSkip(input, false, res.locals.user?.id ?? null);
+      res.status(200).json({ status: 'success', data: { skipped } });
+    } catch (error) {
       nextFn(error);
     }
   }

@@ -12,8 +12,10 @@ import {
   buildProductRows,
   deriveState,
   findDuplicateLines,
+  matchSourceKey,
   isCountingDocument,
   pickSlotAndLegacy,
+  priceLineFromSource,
   productKey,
   productLabel,
   refId,
@@ -36,15 +38,19 @@ const GRN_LINES: SourceLineInput[] = [
 ];
 
 const sourceAgg = () => aggregateSourceLines(GRN_LINES);
-const docAgg = (lines: { productId: string; variantId?: string | null; kg: number; legacy?: boolean }[]) => aggregateDocLines(lines);
+/** Key of a GRN-00012 line (all in kg). */
+const K = (productId: string, variantId?: string | null) => productKey(productId, variantId, 'u-kg');
+/** Document lines carry no unit here: they are matched to the only source line of their product + variant. */
+const docAgg = (lines: { productId: string; variantId?: string | null; kg: number; legacy?: boolean }[]) => aggregateDocLines(lines, sourceAgg());
 const none = () => new Map<string, number>();
 
 describe('productKey / productLabel / round3 / refId', () => {
-  it('keys a product with and without a variant', () => {
-    expect(productKey(TOMATO, GRADE_A)).toBe('p-tomato:v-grade-a');
-    expect(productKey(ONION, null)).toBe('p-onion:null');
-    expect(productKey(ONION)).toBe('p-onion:null');
-    expect(productKey(ONION, '')).toBe('p-onion:null');
+  it('keys a product by product + variant + unit', () => {
+    expect(productKey(TOMATO, GRADE_A)).toBe('p-tomato:v-grade-a:null');
+    expect(productKey(TOMATO, GRADE_A, 'u-kg')).toBe('p-tomato:v-grade-a:u-kg');
+    expect(productKey(ONION, null)).toBe('p-onion:null:null');
+    expect(productKey(ONION)).toBe('p-onion:null:null');
+    expect(productKey(ONION, '', '')).toBe('p-onion:null:null');
   });
 
   it('labels a product with its variant in brackets', () => {
@@ -73,7 +79,7 @@ describe('aggregateSourceLines', () => {
   it('sums received kg per product + variant and keeps the first names, uom and price', () => {
     const agg = sourceAgg();
     expect(agg.size).toBe(3);
-    const tomato = agg.get(productKey(TOMATO, GRADE_A)) as AggregatedSourceLine;
+    const tomato = agg.get(K(TOMATO, GRADE_A)) as AggregatedSourceLine;
     expect(tomato).toMatchObject({
       productId: TOMATO,
       productName: 'Tomato',
@@ -140,7 +146,7 @@ describe('buildProductRows', () => {
       docAgg([]),
     );
 
-    expect(rows.map((r) => r.key)).toEqual([productKey(TOMATO, GRADE_A), productKey(ONION), productKey(POTATO)]);
+    expect(rows.map((r) => r.key)).toEqual([K(TOMATO, GRADE_A), K(ONION), K(POTATO)]);
 
     const tomato = rows[0];
     expect(tomato).toMatchObject({
@@ -202,9 +208,9 @@ describe('buildProductRows', () => {
     const rows = buildProductRows(
       aggregateSourceLines([{ productId: ONION, kg: 0.3 }]),
       null,
-      docAgg([{ productId: ONION, kg: 0.1 }]),
-      docAgg([{ productId: ONION, kg: 0.2 }]),
-      docAgg([]),
+      aggregateDocLines([{ productId: ONION, kg: 0.1 }]),
+      aggregateDocLines([{ productId: ONION, kg: 0.2 }]),
+      aggregateDocLines([]),
     );
     expect(rows[0].differenceKg).toBe(0);
     expect(rows[0].suggested.rtvKg).toBe(0);
@@ -351,7 +357,7 @@ describe('validateLinesAgainstSource', () => {
 
   it('R5: per product kg + other counting documents ≤ received kg, with the spec wording', () => {
     // Inward already took 850 of the 1000 kg tomato; a dump of 160 exceeds the 150 left.
-    const consumed = new Map<string, number>([[productKey(TOMATO, GRADE_A), 850]]);
+    const consumed = new Map<string, number>([[K(TOMATO, GRADE_A), 850]]);
     expect(validateLinesAgainstSource('dump', sourceAgg(), fullLines(160, 0, 0), consumed, ctx)).toEqual([
       'Only 150 kg of Tomato (Grade A) is unaccounted for GRN-00012; you entered 160 kg',
     ]);
@@ -359,17 +365,17 @@ describe('validateLinesAgainstSource', () => {
   });
 
   it('R5: a product already fully consumed reports 0 kg left, never a negative figure', () => {
-    const consumed = new Map<string, number>([[productKey(ONION), 520]]);
+    const consumed = new Map<string, number>([[K(ONION), 520]]);
     expect(validateLinesAgainstSource('rtv', sourceAgg(), fullLines(0, 1, 0), consumed, ctx)).toEqual([
       'Only 0 kg of Onion is unaccounted for GRN-00012; you entered 1 kg',
     ]);
   });
 
   it('R5 for AQR: arrived kg may not exceed the received kg and is never consumed', () => {
-    const consumed = new Map<string, number>([[productKey(TOMATO, GRADE_A), 1000]]);
+    const consumed = new Map<string, number>([[K(TOMATO, GRADE_A), 1000]]);
     expect(validateLinesAgainstSource('aqr', sourceAgg(), fullLines(1000, 500, 800), consumed, ctx)).toEqual([]);
     expect(validateLinesAgainstSource('aqr', sourceAgg(), fullLines(1100, 500, 800), none(), ctx)).toEqual([
-      'Only 1000 kg of Tomato (Grade A) arrived on GRN-00012; you entered 1100 kg',
+      'Only 1000 kg of Tomato (Grade A) was sent on GRN-00012; you entered 1100 kg arrived',
     ]);
   });
 
@@ -403,10 +409,145 @@ describe('findDuplicateLines (R11)', () => {
         { productId: TOMATO, variantId: GRADE_A },
         { productId: ONION, variantId: '' },
       ]),
-    ).toBe('The same product and variant is listed more than once (rows 1 and 3, rows 2 and 4); merge the rows');
+    ).toBe('The same product, variant and unit is listed more than once (rows 1 and 3, rows 2 and 4); merge the rows');
   });
 
   it('ignores lines without a product', () => {
     expect(findDuplicateLines([{ productId: null }, { productId: undefined }, { productId: ONION }])).toBeNull();
+  });
+});
+
+describe('receiving units and pricing (quantity in the source unit, not kg)', () => {
+  // GRN line: Mango · Hapus · Box · 50 boxes · ₹1,250 per box · 255 kg gross · 250 kg net
+  const mangoLines = [
+    { productId: 'mango', productName: 'Mango', variantId: 'hapus', variantName: 'Hapus', uomId: 'box', uomName: 'Box', unitPrice: '1250.00', qty: '50.00', grossKg: '255.000', kg: '250.000' },
+  ];
+
+  it('aggregates units and gross kg next to net kg', () => {
+    const agg = aggregateSourceLines(mangoLines);
+    expect(agg.get(productKey('mango', 'hapus', 'box'))).toMatchObject({
+      uomId: 'box',
+      unitPrice: 1250,
+      receivedQty: 50,
+      receivedGrossKg: 255,
+      receivedKg: 250,
+    });
+  });
+
+  it('prices a line per box from the source: 47 boxes × ₹1,250', () => {
+    const products = Array.from(aggregateSourceLines(mangoLines).values());
+    const { line, error } = priceLineFromSource(products, { productId: 'mango', variantId: 'hapus', uomId: 'kg', unitPrice: 999, quantity: 47 }, 'GRN-1');
+    expect(error).toBeNull();
+    // the unit and price the client sent are replaced by the source's
+    expect(line).toEqual({ uomId: 'box', batchNo: null, unitPrice: 1250, quantity: 47, amount: 58750 });
+  });
+
+  it('rejects a quantity above the source quantity (kg typed into the box field)', () => {
+    const products = Array.from(aggregateSourceLines(mangoLines).values());
+    const { error } = priceLineFromSource(products, { productId: 'mango', variantId: 'hapus', quantity: 250 }, 'GRN-1');
+    expect(error).toBe('Mango (Hapus): quantity 250 Box is more than the 50 Box on GRN-1');
+  });
+
+  it('keeps the line values when the product is not on the source (legacy rows)', () => {
+    const { line, error } = priceLineFromSource([], { productId: 'x', uomId: 'kg', unitPrice: '10', quantity: '3' });
+    expect(error).toBeNull();
+    expect(line).toEqual({ uomId: 'kg', batchNo: null, unitPrice: 10, quantity: 3, amount: 30 });
+  });
+});
+
+describe('unit-aware lines, arrived basis and transit loss', () => {
+  // GRN: Mango Hapus in Box (50 boxes, 250 kg, ₹1,250 per box) and in kg (100 kg, ₹200 per kg).
+  const MANGO_LINES: SourceLineInput[] = [
+    { productId: 'mango', productName: 'Mango', variantId: 'hapus', variantName: 'Hapus', uomId: 'box', uomName: 'Box', unitPrice: 1250, qty: 50, grossKg: 255, kg: 250 },
+    { productId: 'mango', productName: 'Mango', variantId: 'hapus', variantName: 'Hapus', uomId: 'kg', uomName: 'kg', unitPrice: 200, qty: 100, grossKg: 100, kg: 100 },
+  ];
+  const mango = () => aggregateSourceLines(MANGO_LINES);
+
+  it('keeps the same product in two units as two lines and does not flag them as duplicates', () => {
+    expect(mango().size).toBe(2);
+    expect(findDuplicateLines([
+      { productId: 'mango', variantId: 'hapus', uomId: 'box' },
+      { productId: 'mango', variantId: 'hapus', uomId: 'kg' },
+    ])).toBeNull();
+  });
+
+  it('matches a line without a unit to the only source line of its product + variant, else keeps it apart', () => {
+    const single = aggregateSourceLines([MANGO_LINES[0]]);
+    expect(matchSourceKey(single, 'mango', 'hapus', null)).toBe(productKey('mango', 'hapus', 'box'));
+    expect(matchSourceKey(mango(), 'mango', 'hapus', null)).toBe(productKey('mango', 'hapus', null));
+    expect(matchSourceKey(mango(), 'mango', 'hapus', 'kg')).toBe(productKey('mango', 'hapus', 'kg'));
+  });
+
+  it('uses the arrived kg as the basis and values the transit loss in units', () => {
+    const src = mango();
+    // AQR: 49 boxes / 245 kg arrived; 98 kg of the loose mango arrived.
+    const aqr = aggregateDocLines([
+      { productId: 'mango', variantId: 'hapus', uomId: 'box', qty: 49, kg: 245 },
+      { productId: 'mango', variantId: 'hapus', uomId: 'kg', kg: 98 },
+    ], src);
+    const inward = aggregateDocLines([
+      { productId: 'mango', variantId: 'hapus', uomId: 'box', qty: 47, kg: 235 },
+      { productId: 'mango', variantId: 'hapus', uomId: 'kg', qty: 98, kg: 98 },
+    ], src);
+    const dump = aggregateDocLines([{ productId: 'mango', variantId: 'hapus', uomId: 'box', qty: 2, kg: 10 }], src);
+    const [box, loose] = buildProductRows(src, aqr, inward, dump, aggregateDocLines([], src));
+    expect(box).toMatchObject({
+      arrivedKg: 245, arrivedQty: 49, basisKg: 245, differenceKg: 0,
+      transitLossKg: 5, transitLossQty: 1, transitLossValue: 1250,
+    });
+    expect(loose).toMatchObject({
+      arrivedKg: 98, basisKg: 98, differenceKg: 0,
+      transitLossKg: 2, transitLossQty: 2, transitLossValue: 400,
+    });
+  });
+
+  it('caps Inward / Dump / RTV at the arrived kg and an AQR at what Inward / Dump / RTV already record', () => {
+    const src = mango();
+    src.forEach((line) => { line.arrivedKg = line.uomId === 'box' ? 245 : 98; });
+    const over = validateLinesAgainstSource('inward', src, [
+      { productId: 'mango', variantId: 'hapus', uomId: 'box', kg: 246 },
+      { productId: 'mango', variantId: 'hapus', uomId: 'kg', kg: 98 },
+    ], none(), { sourceType: 'grn', sourceNo: 'GRN-7' });
+    expect(over).toEqual(['Only 245 kg of the 245 kg of Mango (Hapus) that arrived on GRN-7 is unaccounted for; you entered 246 kg']);
+
+    const aqrErrors = validateLinesAgainstSource('aqr', mango(), [
+      { productId: 'mango', variantId: 'hapus', uomId: 'box', kg: 200 },
+      { productId: 'mango', variantId: 'hapus', uomId: 'kg', kg: 100 },
+    ], new Map([[productKey('mango', 'hapus', 'box'), 235]]), { sourceType: 'grn', sourceNo: 'GRN-7' });
+    expect(aqrErrors).toEqual(['Inward / Dump / RTV already account for 235 kg of Mango (Hapus) on GRN-7; arrived kg cannot be lower']);
+  });
+
+  it('caps the quantity of a line at the arrived units', () => {
+    const src = Array.from(mango().values());
+    src[0].arrivedQty = 49;
+    const { error } = priceLineFromSource(src, { productId: 'mango', variantId: 'hapus', uomId: 'box', quantity: 50 }, 'GRN-7');
+    expect(error).toBe('Mango (Hapus): quantity 50 Box is more than the 49 Box that arrived');
+  });
+});
+
+describe('transfer lines per batch (C5)', () => {
+  // Transfer DC: 10 Box of Mango took 6 from batch MNG-0815 and 4 from MNG-0820.
+  const TRANSFER_LINES: SourceLineInput[] = [
+    { productId: 'mango', productName: 'Mango', variantId: 'hapus', uomId: 'box', uomName: 'Box', batchNo: 'MNG-0815', unitPrice: 1250, qty: 6, kg: 30 },
+    { productId: 'mango', productName: 'Mango', variantId: 'hapus', uomId: 'box', uomName: 'Box', batchNo: 'MNG-0820', unitPrice: 1300, qty: 4, kg: 20 },
+  ];
+
+  it('keeps each batch as its own receiving line with its own cost', () => {
+    const agg = aggregateSourceLines(TRANSFER_LINES);
+    expect(agg.size).toBe(2);
+    expect(agg.get(productKey('mango', 'hapus', 'box', 'MNG-0815'))).toMatchObject({ batchNo: 'MNG-0815', unitPrice: 1250, receivedQty: 6, receivedKg: 30 });
+    expect(agg.get(productKey('mango', 'hapus', 'box', 'MNG-0820'))).toMatchObject({ batchNo: 'MNG-0820', unitPrice: 1300, receivedQty: 4 });
+  });
+
+  it('matches a document line to its batch, and refuses to guess when the batch is missing', () => {
+    const agg = aggregateSourceLines(TRANSFER_LINES);
+    expect(matchSourceKey(agg, 'mango', 'hapus', 'box', 'mng-0820')).toBe(productKey('mango', 'hapus', 'box', 'MNG-0820'));
+    expect(matchSourceKey(agg, 'mango', 'hapus', 'box', null)).toBe(productKey('mango', 'hapus', 'box'));
+  });
+
+  it('prices an Inward line of a batch at that batch cost and returns the batch', () => {
+    const products = Array.from(aggregateSourceLines(TRANSFER_LINES).values());
+    const { line } = priceLineFromSource(products, { productId: 'mango', variantId: 'hapus', uomId: 'box', batchNo: 'MNG-0820', quantity: 4 });
+    expect(line).toEqual({ uomId: 'box', batchNo: 'MNG-0820', unitPrice: 1300, quantity: 4, amount: 5200 });
   });
 });

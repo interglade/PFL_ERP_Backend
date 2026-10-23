@@ -12,9 +12,15 @@
     "clean:workflow-duplicates": "ts-node src/scripts/cleanDuplicateWorkflowHierarchy.ts",
     "backfill:inventory-processed": "ts-node --transpile-only src/scripts/backfillInventoryProcessed.ts",
     "migrate:aqr-lines": "ts-node --transpile-only src/scripts/migrateAqrLines.ts",
+    "migrate:drivers": "ts-node --transpile-only src/scripts/migrateLegacyDrivers.ts",
+    "migrate:dispatch": "ts-node --transpile-only src/scripts/migrateDispatchRegisters.ts",
     "db:pre-sync-dump-register": "ts-node --transpile-only src/scripts/preSyncDumpRegisterDecimal.ts",
     "postman:build": "ts-node --transpile-only src/scripts/buildPostmanCollection.ts",
-    "docs:filters": "ts-node --transpile-only src/scripts/buildFilterApiDocs.ts"
+    "docs:filters": "ts-node --transpile-only src/scripts/buildFilterApiDocs.ts",
+    "db:dedupe-uoms": "ts-node --transpile-only src/scripts/dedupeUoms.ts",
+    "db:fix-rtv-key": "ts-node --transpile-only src/scripts/fixRtvDocumentKey.ts",
+    "db:unique-doc-numbers": "ts-node --transpile-only src/scripts/addDocumentNumberIndexes.ts",
+    "db:receiving-indexes": "ts-node --transpile-only src/scripts/addReceivingIndexes.ts"
   },
   "keywords": [],
   "author": "",

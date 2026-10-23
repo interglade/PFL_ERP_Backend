@@ -1,3 +1,4 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from "inversify";
 import { DataSource } from "typeorm";
 import { TYPES } from "../../types";
@@ -136,17 +137,9 @@ export class DealSlipAutoCreateService {
   }
 
   // Same scheme as DealSlipService.generateDealSlipId (DLyyyymmddNNNNN).
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateDealSlipNo(): Promise<string> {
-    const prefix = `DL${this.datePrefix()}`;
-    const result = await this.dealSlipRepository
-      .createQueryBuilder('ds')
-      .select('MAX(ds.dealSlipNo)', 'maxId')
-      .where('ds.dealSlipNo LIKE :prefix', { prefix: `${prefix}%` })
-      .getRawOne();
-
-    const parsed = result?.maxId ? parseInt(result.maxId.replace(prefix, ''), 10) : NaN;
-    const nextSeq = isNaN(parsed) ? 1 : parsed + 1;
-    return `${prefix}${nextSeq.toString().padStart(5, '0')}`;
+    return nextDocumentNumber(this.dealSlipRepository.manager, SERIES.dealSlip, `DL${this.datePrefix()}`, 5);
   }
 
   private async invalidateCache(): Promise<void> {

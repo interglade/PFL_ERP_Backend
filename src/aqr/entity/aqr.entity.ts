@@ -152,6 +152,10 @@ export class Aqr extends Model {
   @Column({ type: "text", nullable: true })
   remark: string;
 
+  /** Batch number of the source GRN, set by the server. */
+  @Column({ type: "varchar", length: 100, nullable: true })
+  batchNo: string | null;
+
 
 
 

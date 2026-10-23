@@ -19,6 +19,8 @@ import { DocumentbRepository } from "../repository/documentb.repository";
 import { NotificationService } from "../../notification/service/notification.service";
 import { InventoryMovementService } from "../../inventoryStock/service/inventoryMovement.service";
 import { DealSlipAutoCreateService } from "../../dealSlip/service/dealSlipAutoCreate.service";
+import { syncGrnVehicleDispatchFlagForDispatch } from "../../vehicleDispatch/service/dispatchSource";
+import { prepareDispatchApproval } from "../../vehicleDispatch/service/dispatchRules";
 
 
 @injectable()
@@ -200,6 +202,11 @@ export class DocSingalApproverService {
         // "already acted" guard would block a second attempt.
         if (action === 'approved') {
           await this.inventoryMovementService.assertMovementIsApplicable(document);
+          // A vehicle dispatch is approved only after its source document is COMPLETE;
+          // its product lines are re-copied from the final source here.
+          if (document.type === DocumentTypeEnum.VEHICLE_DISPATCH_REGISTER && document.document_type_id) {
+            await prepareDispatchApproval(this.documentbRepository.manager, document.document_type_id);
+          }
         }
 
         // Create and save stage info
@@ -225,6 +232,11 @@ export class DocSingalApproverService {
           document.status = DocumentStatus.REJECT;
           document.remarks = remark;
           await this.documentbRepository.save(document);
+          // A rejected purchase dispatch frees its GRN again.
+          if (document.type === DocumentTypeEnum.VEHICLE_DISPATCH_REGISTER && document.document_type_id) {
+            await syncGrnVehicleDispatchFlagForDispatch(this.documentbRepository.manager, document.document_type_id);
+            await this.cacheService.invalidatePattern('grn:numbers:*');
+          }
           await this.invalidateRelatedCache(document.type, documentId, document.document_type_id ?? undefined);
           // 🔔 Creator
           if (document.lastActionBy?.id) {

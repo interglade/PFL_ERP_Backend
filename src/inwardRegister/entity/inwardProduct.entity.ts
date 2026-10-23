@@ -39,6 +39,10 @@ export class InwardProduct extends Model {
   @Column({ nullable: true, type: 'decimal', precision: 100, scale: 3 })
   netWeight: number;
 
+  /** Batch of this line when it differs per line (stock transfer / return receipts); else the header batch. */
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  batchNo: string | null;
+
   @Column({ nullable: true, type: 'decimal', precision: 100, scale: 3 })
   grossWeight: number;
   @ManyToOne(

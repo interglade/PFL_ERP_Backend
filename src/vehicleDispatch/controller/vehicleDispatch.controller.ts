@@ -54,7 +54,6 @@ export class VehicleDispatchController {
     try {
       const dispatchData: CreateVehicleDispatchDto = {
         ...req.body,
-        dcNo: req.body.dcNo || null,
         requestedBy: res.locals.user.id,
       };
 
@@ -108,6 +107,8 @@ export class VehicleDispatchController {
         error: err,
       });
       ControllerLogger.logError('Vehicle Dispatch creation', err, req, res);
+      // Keep the status of deliberate errors (409 duplicate dispatch, 404 source, ...).
+      if (err instanceof AppError) return next(err);
       if (err instanceof Error) {
                return next(new AppError(400, err.message)); // ← sends 400 with real message
              }
@@ -148,7 +149,7 @@ export class VehicleDispatchController {
           search: (search as string) || '',
         };
     
-        const vehicalDispatch = await this.vehicleDispatchService.getAllRecycleBinVehicalDispatch(queryOptions, userId);
+        const vehicalDispatch = await this.vehicleDispatchService.getAllRecycleBinVehicalDispatch(queryOptions, userId, req.query.dispatchType);
     
         if (!vehicalDispatch || vehicalDispatch.data.length === 0) {
           logger.warn('No Vehical Dispatch found for this user.');
@@ -241,7 +242,7 @@ export class VehicleDispatchController {
       res.status(200).json({
         status: "success",
         message: "Vehicle Dispatch updated successfully",
-        data: updatedDispatch,
+        data: { id: updatedDispatch.id },
       });
     } catch (err) {
       logger.error("Error occurred while updating vehicle dispatch", {
@@ -327,7 +328,8 @@ export class VehicleDispatchController {
       entityName: 'Vehicle Dispatch',
       definition: VEHICLE_DISPATCH_EXPORT,
       list: { documentType: FilterDocumentType.VEHICLE_DISPATCH_REGISTER, searchFields: ['vehicleType vehicleNo'], filterKeys: ['vehicleType', 'vehicleNo'] },
-      fetchList: (queryOptions, userId) => this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res)),
+      fetchList: (queryOptions, userId) =>
+        this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res), req.query.dispatchType),
     });
   }
 
@@ -367,7 +369,7 @@ export class VehicleDispatchController {
     
         // Same filters as the Excel export: validated, applied in SQL before pagination.
         applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.VEHICLE_DISPATCH_REGISTER);
-        const vehicalDispatch = await this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res));
+        const vehicalDispatch = await this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res), req.query.dispatchType);
     
         if (!vehicalDispatch || vehicalDispatch.data.length === 0) {
           logger.warn('No Vehical Dispatch found for this user.');
@@ -420,7 +422,7 @@ export class VehicleDispatchController {
           if (!vehicalDispatch) {
             return res.status(403).json({
             status: 'fail',
-            message: 'You do not have permission to view this Inward Register',
+            message: 'You do not have permission to view this Vehicle Dispatch',
           });
             //return next(new AppError(404, 'dealSlip not found'));
           }
@@ -438,6 +440,125 @@ export class VehicleDispatchController {
           next(error);
         }
       }
+  /** Dispatch status of many sources of one register: `{ dispatchType, sourceIds }` → map of sourceId → status. */
+  @httpPost('/statuses')
+  public async getSourceStatuses(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const data = await this.vehicleDispatchService.getSourceStatuses(req.body?.dispatchType, req.body?.sourceIds);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch statuses', err, req, res);
+      next(err);
+    }
+  }
+
+  /** Per register: sources created since go-live that still have no dispatch. */
+  @httpGet('/pending-count')
+  public async getPendingCounts(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const data = await this.vehicleDispatchService.getPendingCounts();
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch pending count', err, req, res);
+      next(err);
+    }
+  }
+
+  /** GRNs / DCs of the register that are not rejected and do not have a live dispatch yet. */
+  @httpGet('/sources/:dispatchType')
+  public async getDispatchableSources(
+    @requestParam('dispatchType') dispatchType: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      const data = await this.vehicleDispatchService.getDispatchableSources(dispatchType, search);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch sources', err, req, res);
+      next(err);
+    }
+  }
+
+  /** The source (GRN / DC) as the form shows it, with its product lines and any dispatch already raised. */
+  @httpGet('/source/:dispatchType/:sourceId')
+  public async getSource(
+    @requestParam('dispatchType') dispatchType: string,
+    @requestParam('sourceId') sourceId: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const data = await this.vehicleDispatchService.getSource(dispatchType, sourceId);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch source', err, req, res);
+      next(err);
+    }
+  }
+
+  /** The live dispatch of a GRN / DC (Dispatch tab), or `data: null`. */
+  @httpGet('/by-source/:dispatchType/:sourceId')
+  public async getBySource(
+    @requestParam('dispatchType') dispatchType: string,
+    @requestParam('sourceId') sourceId: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const data = await this.vehicleDispatchService.getBySource(dispatchType, sourceId);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch by source', err, req, res);
+      next(err);
+    }
+  }
+
+  /** Current values for the edit form. */
+  @httpGet('/update/:id')
+  public async getForUpdate(
+    @requestParam('id') id: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const data = await this.vehicleDispatchService.getForUpdate(id);
+      if (!data) return next(new AppError(404, 'Vehicle Dispatch not found'));
+      ControllerLogger.logView('Vehicle Dispatch (for update)', id, req, res);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch for update', err, req, res);
+      next(err);
+    }
+  }
+
+  /** Gate signal: the vehicle reached the CC / DC (purchase and stock transfer only). */
+  @httpPost('/:id/arrive')
+  public async markArrived(
+    @requestParam('id') id: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const dispatch = await this.vehicleDispatchService.markArrived(id, res.locals.user.id);
+      ControllerLogger.logSuccess('Vehicle Dispatch marked arrived', id, req, res);
+      res.status(200).json({
+        status: 'success',
+        message: 'Vehicle marked as arrived',
+        data: { id: dispatch.id, arrivedAt: dispatch.arrivedAt, reachingTime: dispatch.reachingTime },
+      });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch mark arrived', err, req, res);
+      next(err);
+    }
+  }
+
 @httpDelete('/delete/multiple')
     public async deleteMultipleVehicleDispatch(
       @request() req: Request,

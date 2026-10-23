@@ -1,8 +1,10 @@
+import { sourceDispatchStatuses } from '../../vehicleDispatch/service/dispatchRules';
+import { DispatchType } from '../../vehicleDispatch/entity/vehicleDispatch.entity';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 import { TYPES } from '../../types';
 
-import { ILike, In, LessThan, MoreThanOrEqual, DataSource } from 'typeorm';
+import { ILike, In, LessThan, MoreThanOrEqual, DataSource, EntityManager } from 'typeorm';
 
 import AppError from '../../utils/appError';
 import { ammountStatus } from '../../utils/status.enum';
@@ -32,6 +34,9 @@ import { CreateGrnDto, GrnDetailDto, GrnListItemDto, UpdateGrnDto } from '../dto
 import { GRN, GrnDeliveryMode } from '../entity/grn.entity';
 import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
 import { completeDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../receiving/receiving.sql';
+import { assertDealSlipUsableForGrn, syncDealSlipGrnFlags, syncDealSlipGrnFlagsForGrns } from '../../dealSlip/dealSlipGrnLink';
+import { isVoucherKind, liveVoucherForGrnExistsSql, VoucherKind, voucherKindFromLegacyFlags } from '../../vouchers/voucherGrnLink';
+import { isUuid, latestDocumentStatusSql, liveRowSql, relationIdOf } from '../grnLinks.sql';
 
 interface SourceMetrics {
   totalPurchases: number;
@@ -69,6 +74,8 @@ export class GrnService {
       this.cacheService.invalidatePattern(`${this.CACHE_PREFIX}:all:*`),
       this.cacheService.invalidatePattern(`${this.CACHE_PREFIX}:recycle:*`),
       this.cacheService.invalidatePattern(`${this.CACHE_PREFIX}:numbers:*`),
+      // D-6: the deal slip number list derives "GRN created" from the GRNs.
+      this.cacheService.invalidatePattern('dealslip:nos:*'),
     ];
     if (id) {
       tasks.push(
@@ -216,6 +223,59 @@ public async getAllRecycleBinGrns(queryOptions: PaginationOptions, userId: strin
     }
   }
 
+  /** Trims the typed batch no; blank means "none". Rejects anything that is not letters and digits. */
+  private normalizeBatchNo(value: unknown): string | null {
+    if (value === undefined || value === null) return null;
+    const text = String(value).trim();
+    if (!text) return null;
+    if (!/^[A-Za-z0-9]{1,100}$/.test(text)) {
+      throw new AppError(400, 'Batch no must contain only letters and digits (max 100 characters)');
+    }
+    return text;
+  }
+
+  /**
+   * A batch no may be used by one live GRN per company (case-insensitive). A
+   * deleted or rejected GRN releases its batch no, so the purchase can be
+   * entered again under the same label. Creates of the same company + batch
+   * serialise on an advisory lock held until the caller's transaction ends.
+   */
+  private async assertBatchNoUnique(
+    manager: EntityManager,
+    batchNo: string | null,
+    companyId: string | null | undefined,
+    excludeGrnId?: string,
+  ): Promise<void> {
+    if (!batchNo) return;
+    const scope = `${companyId ?? ''}|${batchNo.toLowerCase()}`;
+    await manager.query(`SELECT pg_advisory_xact_lock(hashtext('grn-batch'), hashtext($1))`, [scope]);
+    const rows: Array<{ grn_no: string | null }> = await manager.query(
+      `SELECT g."grnNo" AS grn_no FROM grns g
+        WHERE LOWER(g."batchNo") = LOWER($1)
+          AND g.company_id IS NOT DISTINCT FROM $2
+          AND COALESCE(g."isDeleted", false) = false AND g."deletedAt" IS NULL
+          AND ($3::uuid IS NULL OR g.id <> $3::uuid)
+          AND COALESCE((SELECT d.status::text FROM documents d
+                         WHERE d.document_type_id = g.id::text AND d.type::text = $4
+                         ORDER BY d."createdAt" DESC LIMIT 1), '') <> $5
+        LIMIT 1`,
+      [batchNo, companyId ?? null, excludeGrnId ?? null, DocumentTypeEnum.GRN, DocumentStatus.REJECT],
+    );
+    if (rows.length) {
+      throw new AppError(409, `Batch no ${batchNo} is already used by GRN ${rows[0].grn_no ?? ''} of this company`.replace(/\s+of/, ' of'));
+    }
+  }
+
+  /** Σ gross and Σ net weight of the lines (kg, 3 decimals); lines without a value count as 0. */
+  private sumLineWeights(products: Array<{ grossWeight?: unknown; netWeight?: unknown }> | undefined | null): {
+    totalGrossWeight: number;
+    totalNetWeight: number;
+  } {
+    const sum = (pick: (p: { grossWeight?: unknown; netWeight?: unknown }) => unknown) =>
+      Math.round((products ?? []).reduce((acc, p) => acc + (Number(pick(p)) || 0), 0) * 1000) / 1000;
+    return { totalGrossWeight: sum((p) => p.grossWeight), totalNetWeight: sum((p) => p.netWeight) };
+  }
+
   public async createGrn(grnData: CreateGrnDto): Promise<CreatedWithApproval<any>> {
     // Check if approval flow exists for the user
     if (!grnData.createdBy) {
@@ -225,9 +285,12 @@ public async getAllRecycleBinGrns(queryOptions: PaginationOptions, userId: strin
     this.assertDeliveryMode(grnData.deliveryMode);
     // Receiving links D6: a GRN lists each product + variant once.
     this.receivingGuardService.assertNoDuplicateLines(
-      (grnData.grnProducts ?? []).map((p) => ({ productId: p.productName ?? null, variantId: p.variant ?? null })),
+      (grnData.grnProducts ?? []).map((p) => ({ productId: p.productName ?? null, variantId: p.variant ?? null, uomId: p.uom ?? null })),
     );
-    
+    const batchNo = this.normalizeBatchNo(grnData.batchNo);
+    // The batch no is the stock lot label carried to AQR / Inward / Dump / RTV and stock.
+    if (!batchNo) throw new AppError(400, 'Batch no is required');
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -261,19 +324,29 @@ public async getAllRecycleBinGrns(queryOptions: PaginationOptions, userId: strin
       });
       const productIds = variants.map(v => v.product?.id).filter(Boolean);
 
-      const { variants: _discardVariants, ...grnPayload } = grnData as any;
+      const { variants: _discardVariants, ammountStatus: _discardPaymentStatus, ...grnPayload } = grnData as any;
+      await this.assertBatchNoUnique(queryRunner.manager, batchNo, (grnData as { companyName?: string | null }).companyName ?? null);
+      // D-6: the deal slip must be approved and not used by another live GRN.
+      const dealSlipId = relationIdOf(grnPayload.dealSlipId);
+      if (dealSlipId) await assertDealSlipUsableForGrn(queryRunner.manager, dealSlipId);
       const createPayload = {
         ...grnPayload,
+        dealSlipId: dealSlipId ? { id: dealSlipId } : null,
+        batchNo,
+        // Totals are always derived from the lines; whatever the client sent is ignored.
+        ...this.sumLineWeights(grnPayload.grnProducts),
         grnProducts: grnPayload.grnProducts?.map((product: any) => ({
           ...product,
           productName: product.productName ? { id: product.productName } : undefined,
           variant: product.variant ? { id: product.variant } : undefined,
           uom: product.uom ? { id: product.uom } : undefined,
+          packagingMaterial: product.packagingMaterial ? { id: product.packagingMaterial } : null,
         })),
       };
 
       const grn = queryRunner.manager.create(this.grnRepository.target, createPayload as any);
       const savedGrn = await queryRunner.manager.save(grn) as GRN | GRN[];
+      await syncDealSlipGrnFlags(queryRunner.manager, [dealSlipId]);
         console.log('totalAmt ', grnData.requestedBy);
 
         const document = await this.documentbService.createDocument({
@@ -366,16 +439,17 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
           amtWords: related.amtWords || null,
           cratesIn: related.cratesIn || null,
           purchasedBy: related.purchasedBy || null,
-          receivedThrough: related.receivedThrough || null,
-          vehicleNo: related.vehicleNo || null,
           timeIn: related.timeIn || null,
           remark: related.remark || null,
           securityPerson: related.securityPerson || null,
-          deliveryReceivingPerson: related.deliveryReceivingPerson || null,
+          receivingPerson: related.receivingPerson || null,
           rmn: related.rmn || null,
           purchaseLocation: related.purchaseLocation?.name || null,
           purchaseForSalesLocation: related.purchaseForSalesLocation?.name || null,
           grnNo: related.grnNo || null,
+          batchNo: related.batchNo || null,
+          totalGrossWeight: related.totalGrossWeight ?? null,
+          totalNetWeight: related.totalNetWeight ?? null,
           paymentInfo: {
             id: related.paymentInfo?.id || null,
             paymentTerms: related.paymentInfo?.paymentTerms || null,
@@ -457,6 +531,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
           'grnProducts.productName',
           'grnProducts.uom',
           'grnProducts.variant',
+          'grnProducts.packagingMaterial',
           'selectedFarmer',
           'selectedVendor',
           'purchaseInstructionsBy',
@@ -504,6 +579,9 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
         otherPurchaseForSalesLoc: grn.otherPurchaseForSalesLoc || null,
         otherPurchaseLoc: grn.otherPurchaseLoc || null,
         grnNo: grn.grnNo,
+        batchNo: grn.batchNo ?? null,
+        totalGrossWeight: grn.totalGrossWeight ?? null,
+        totalNetWeight: grn.totalNetWeight ?? null,
         locationType: grn.locationType,
         grnType: grn.grnType,
         deliveryMode: grn.deliveryMode ?? null,
@@ -511,7 +589,6 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
         createdDate: createdDate,
         createdTime: createdTime,
         createdBy:`${grn.createdBy.firstName} ${grn.createdBy.lastName}`.trim() || null,
-        requestingDepartment: grn.requestingDepartment,
         purchaseLocation: grn.purchaseLocation?.name ?? null,
         purchaseForSalesLocation: grn.purchaseForSalesLocation?.name ?? null,
         selectedParty: selectedPartyId,
@@ -524,12 +601,9 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
         totalAmt: grn.totalAmt,
         amtWords: grn.amtWords,
         purchasedBy: grn.purchasedBy,
-        receivedThrough: grn.receivedThrough,
-        vehicleNo: grn.vehicleNo,
         timeIn: grn.timeIn,
         cratesIn: grn.cratesIn,
-        deliveryReceivingPerson: grn.deliveryReceivingPerson,
-        baseLocation: grn.baseLocation,
+        receivingPerson: grn.receivingPerson,
         specialReq: grn.specialReq,
         securityPerson: grn.securityPerson,
         approvalNote: grn.approvalNote,
@@ -559,6 +633,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
           productName: product.productName?.name ?? null,
           variant: product.variant?.variantName || null,
           uom: product.uom?.unit ?? null,
+          packagingMaterial: product.packagingMaterial?.packagingMaterialName ?? null,
           amount: product.amount,
           rtv: product.rtv,
           netWeight: product.netWeight,
@@ -596,6 +671,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
         'grnProducts.productName',
         'grnProducts.uom',
         'grnProducts.variant',
+        'grnProducts.packagingMaterial',
         'selectedFarmer',
         'selectedVendor',
        'purchaseInstructionsBy',
@@ -637,13 +713,15 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
       otherPurchaseForSalesLoc: grn.otherPurchaseForSalesLoc || null,
       otherPurchaseLoc: grn.otherPurchaseLoc || null,
       grnNo: grn.grnNo,
+      batchNo: grn.batchNo ?? null,
+      totalGrossWeight: grn.totalGrossWeight ?? null,
+      totalNetWeight: grn.totalNetWeight ?? null,
       locationType: grn.locationType,
       grnType: grn.grnType,
       deliveryMode: grn.deliveryMode ?? null,
       rmn: grn.rmn,
       createdDate: createdDate,
       createdTime: createdTime,
-      requestingDepartment: grn.requestingDepartment,
       purchaseLocation: grn.purchaseLocation?.id ?? null,
       purchaseForSalesLocation: grn.purchaseForSalesLocation?.id ?? null,
       selectedParty: selectedPartyId,
@@ -656,12 +734,9 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
       totalAmt: grn.totalAmt,
       amtWords: grn.amtWords,
       purchasedBy: grn.purchasedBy,
-      receivedThrough: grn.receivedThrough,
-      vehicleNo: grn.vehicleNo,
       timeIn: grn.timeIn,
       cratesIn: grn.cratesIn,
-      deliveryReceivingPerson: grn.deliveryReceivingPerson,
-      baseLocation: grn.baseLocation,
+      receivingPerson: grn.receivingPerson,
       specialReq: grn.specialReq,
       securityPerson: grn.securityPerson,
       approvalNote: grn.approvalNote,
@@ -693,6 +768,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
         productName: product.productName?.id ?? null,
         variant: product.variant?.id || null,
         uom: product.uom?.id ?? null,
+        packagingMaterial: product.packagingMaterial?.id ?? null,
 
         amount: product.amount,
         rtv: product.rtv,
@@ -722,7 +798,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
   this.assertDeliveryMode(grnData.deliveryMode);
   if (grnData.grnProducts) {
     this.receivingGuardService.assertNoDuplicateLines(
-      grnData.grnProducts.map((p) => ({ productId: p.productName ?? null, variantId: p.variant ?? null })),
+      grnData.grnProducts.map((p) => ({ productId: p.productName ?? null, variantId: p.variant ?? null, uomId: p.uom ?? null })),
     );
   }
   const queryRunner = this.dataSource.createQueryRunner();
@@ -732,6 +808,10 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
   try {
     // Receiving links R9: a GRN that already has an AQR / Inward / Dump / RTV cannot change.
     await this.receivingGuardService.assertSourceEditable('grn', id, queryRunner.manager);
+    // D-5: once its purchase dispatch is approved the goods have left on that vehicle.
+    await this.assertNoApprovedDispatch(queryRunner.manager, id, 'edited');
+    // A GRN can be edited only until its approval process is complete.
+    await this.assertApprovalNotComplete(queryRunner.manager, id);
 
     // Fetch the current GRN with its products inside the transaction
     const grn = await queryRunner.manager.findOne(this.grnRepository.target, {
@@ -802,7 +882,13 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     if (payload.purchaseInstructionsBy) relatedFields.purchaseInstructionsBy = { id: payload.purchaseInstructionsBy };
     if (payload.purchaseLocation) relatedFields.purchaseLocation = { id: payload.purchaseLocation };
     if (payload.purchaseForSalesLocation) relatedFields.purchaseForSalesLocation = { id: payload.purchaseForSalesLocation };
-    if (payload.dealSlipId) relatedFields.dealSlipId = { id: payload.dealSlipId };
+    // D-6: pointing the GRN at a different deal slip re-checks that slip (approved, unused).
+    const previousDealSlipId = grn.dealSlipId?.id ?? null;
+    const nextDealSlipId = relationIdOf(payload.dealSlipId);
+    if (nextDealSlipId && nextDealSlipId !== previousDealSlipId) {
+      await assertDealSlipUsableForGrn(queryRunner.manager, nextDealSlipId, id);
+    }
+    if (nextDealSlipId) relatedFields.dealSlipId = { id: nextDealSlipId };
     if (payload.selectedVendor) {
       relatedFields.selectedVendor =
         typeof payload.selectedVendor === 'string'
@@ -838,6 +924,9 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
         productName: product.productName ? { id: product.productName } : undefined,
         variant: product.variant ? { id: product.variant } : undefined,
         uom: product.uom ? { id: product.uom } : undefined,
+        // The edit form sends every line in full and omits blank values, so an absent
+        // packaging material means "none selected".
+        packagingMaterial: product.packagingMaterial ? { id: product.packagingMaterial } : null,
         amount: product.amount,
         rtv: product.rtv,
         netWeight: product.netWeight,
@@ -853,6 +942,21 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     }
 
     const scalarPayload = { ...payload };
+    // Payment status changes only through its own action (after approval and receipt).
+    delete (scalarPayload as Record<string, unknown>).ammountStatus;
+    // Totals are derived from the lines, never taken from the client.
+    delete scalarPayload.totalGrossWeight;
+    delete scalarPayload.totalNetWeight;
+    if ('batchNo' in payload || payload.companyName) {
+      const nextBatchNo = 'batchNo' in payload ? this.normalizeBatchNo(payload.batchNo) : (grn.batchNo ?? null);
+      // Once a GRN has a batch no it cannot be removed (older GRNs without one may stay without).
+      if (!nextBatchNo && grn.batchNo) throw new AppError(400, 'Batch no is required');
+      if ('batchNo' in payload) scalarPayload.batchNo = nextBatchNo;
+      await this.assertBatchNoUnique(queryRunner.manager, nextBatchNo, payload.companyName ?? grn.companyName?.id ?? null, id);
+    }
+    if (payload.grnProducts) {
+      Object.assign(scalarPayload, this.sumLineWeights(payload.grnProducts));
+    }
     [
       'companyName',
       'purchaseInstructionsBy',
@@ -869,6 +973,9 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     Object.assign(grn, scalarPayload, relatedFields);
 
     const updatedGrn = await queryRunner.manager.save(this.grnRepository.target, grn);
+    if (nextDealSlipId && nextDealSlipId !== previousDealSlipId) {
+      await syncDealSlipGrnFlags(queryRunner.manager, [previousDealSlipId, nextDealSlipId]);
+    }
 
     // If document is approved and GRN is edited, reset status back to hold
     // Use queryRunner.manager to stay within the same transaction
@@ -970,6 +1077,56 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     }));
   }
 
+  /** Newest approval status of the GRN. */
+  private async grnApprovalStatus(manager: EntityManager, grnId: string): Promise<string | null> {
+    const rows: Array<{ status: string | null }> = await manager.query(
+      `SELECT d.status::text AS status FROM documents d WHERE d.document_type_id = $1 AND d.type::text = $2 ORDER BY d."createdAt" DESC LIMIT 1`,
+      [grnId, DocumentTypeEnum.GRN],
+    );
+    return rows[0]?.status ?? null;
+  }
+
+  /** A GRN can be edited only until its approval process is complete. */
+  private async assertApprovalNotComplete(manager: EntityManager, grnId: string): Promise<void> {
+    if ((await this.grnApprovalStatus(manager, grnId)) === DocumentStatus.COMPLETE) {
+      const no = await manager.query(`SELECT "grnNo" AS no FROM grns WHERE id = $1`, [grnId]);
+      throw new AppError(409, `GRN ${no[0]?.no ?? ''} has completed its approval, so it can no longer be edited`.replace(/\s+/g, ' '));
+    }
+  }
+
+  /**
+   * Why the payment status cannot change yet, or null: the approval must be
+   * complete and the goods received (an approved Inward Register of the GRN).
+   */
+  private async paymentStatusBlockedReason(manager: EntityManager, grnId: string, grnNo: string): Promise<string | null> {
+    if ((await this.grnApprovalStatus(manager, grnId)) !== DocumentStatus.COMPLETE) {
+      return `GRN ${grnNo} has not completed its approval yet, so its payment status cannot change`;
+    }
+    const received: Array<{ n: string }> = await manager.query(
+      `SELECT COUNT(*) AS n FROM inward_register ir
+        WHERE ir.grn_id = $1 AND COALESCE(ir."isDeleted", false) = false AND ir."deletedAt" IS NULL
+          AND (SELECT d.status::text FROM documents d WHERE d.document_type_id = ir.id::text AND d.type::text = $2
+                ORDER BY d."createdAt" DESC LIMIT 1) = $3`,
+      [grnId, DocumentTypeEnum.INWARD_REGISTER, DocumentStatus.COMPLETE],
+    );
+    if (Number(received[0]?.n ?? 0) === 0) {
+      return `The goods of GRN ${grnNo} are not received yet (no approved Inward Register), so its payment status cannot change`;
+    }
+    return null;
+  }
+
+  /** D-5: a GRN whose purchase dispatch is approved cannot be edited or deleted (the goods have left). */
+  private async assertNoApprovedDispatch(manager: EntityManager, grnId: string, action: 'edited' | 'deleted'): Promise<void> {
+    const status = (await sourceDispatchStatuses(manager, DispatchType.PURCHASE, [grnId]))[grnId];
+    if (status?.status === 'approved') {
+      const no = await manager.query(`SELECT "grnNo" AS no FROM grns WHERE id = $1`, [grnId]);
+      throw new AppError(
+        409,
+        `GRN ${no[0]?.no ?? ''} has an approved purchase dispatch (${status.vehicleDispatchNo ?? ''}), so it cannot be ${action}`.replace(/\s+/g, ' '),
+      );
+    }
+  }
+
   public async deleteGrn(id: string): Promise<DeleteResultDto | null> {
     const exists = await this.grnRepository.count({ where: { id } });
     if (!exists) throw new AppError(404, `GRN with ID ${id} not found`);
@@ -981,11 +1138,14 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     }
     // Receiving links R10: not while a processing document counts against it.
     await this.receivingGuardService.assertSourceEditable('grn', id);
+    await this.assertNoApprovedDispatch(this.dataSource.manager, id, 'deleted');
     const sixMonthsFromNow = new Date();
     sixMonthsFromNow.setMonth(sixMonthsFromNow.getMonth() + 6);
     sixMonthsFromNow.setHours(0, 0, 0, 0);
 
     await this.grnRepository.update({ id }, { deletionScheduledAt: sixMonthsFromNow } as any);
+    // D-5: its pending purchase dispatch is rejected, as on the bulk delete.
+    await this.documentbService.rejectDispatchesForSource(DocumentTypeEnum.GRN, [id], 'deleted', `GRN ${grn.grnNo ?? ''}`.trim());
     await this.invalidateCache(id);
     return {No:grn.grnNo};
   }
@@ -997,9 +1157,15 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     id: string,
     status: ammountStatus,
   ): Promise<{ id: string; ammountStatus: ammountStatus }> {
-    console.log(id)
-    const grn = await this.grnRepository.findOne({ where: { id }, withDeleted: true });
-    if (!grn) throw new AppError(404, `GRN with ID ${id} not found`);
+    if (!Object.values(ammountStatus).includes(status)) {
+      throw new AppError(400, `Payment status must be one of ${Object.values(ammountStatus).join(', ')}`);
+    }
+    const grn = await this.grnRepository.findOne({ where: { id } });
+    if (!grn || grn.isDeleted) throw new AppError(404, `GRN with ID ${id} not found`);
+
+    // Payment status changes only after the approval is complete and the goods are received.
+    const blocked = await this.paymentStatusBlockedReason(this.dataSource.manager, id, grn.grnNo ?? '');
+    if (blocked) throw new AppError(409, blocked);
 
     grn.ammountStatus = status;
     await this.grnRepository.save(grn);
@@ -1039,6 +1205,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     isTPVoucherCreated?: boolean;
     isPMPVoucherCreated?: boolean;
     isLPVoucherCreated?: boolean;
+    isVehicleDispatchCreated?: boolean;
     employeeBaseHirechey?: boolean;
     page?: number;
     limit?: number;
@@ -1049,12 +1216,27 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     missing?: string;
     /** Receiving picker: purchase-for (receiving) location id. */
     locationId?: string;
+    /** Voucher picker (D-6): only GRNs with no live, non-rejected voucher of this type (mc | tp | pmp | lp). */
+    missingVoucher?: string;
+    /** Voucher picker: always list this GRN (the voucher being edited keeps its own GRN). */
+    includeId?: string;
   },
   loginUserId: string
 ): Promise<any> {
 
   if (filter?.receivable || filter?.missing || filter?.locationId) {
     return this.getReceivableGrnNumbers(filter);
+  }
+
+  if (filter?.missingVoucher !== undefined && filter.missingVoucher !== '' && !isVoucherKind(filter.missingVoucher)) {
+    throw new AppError(400, 'missingVoucher must be one of mc, tp, pmp, lp');
+  }
+  // The legacy `is*VoucherCreated=false` flags were never written; they now mean `missingVoucher`.
+  const missingVoucher = isVoucherKind(filter?.missingVoucher)
+    ? filter.missingVoucher
+    : voucherKindFromLegacyFlags(filter as Record<string, unknown>);
+  if (missingVoucher) {
+    return this.getVoucherableGrnNumbers({ ...filter, missingVoucher });
   }
 
   const hash = createHash('md5').update(`${loginUserId}:${JSON.stringify(filter)}`).digest('hex');
@@ -1075,6 +1257,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
   if (typeof filter?.isTPVoucherCreated === "boolean") where.isTPVoucherCreated = filter.isTPVoucherCreated;
   if (typeof filter?.isPMPVoucherCreated === "boolean") where.isPMPVoucherCreated = filter.isPMPVoucherCreated;
   if (typeof filter?.isLPVoucherCreated === "boolean") where.isLPVoucherCreated = filter.isLPVoucherCreated;
+  if (typeof filter?.isVehicleDispatchCreated === "boolean") where.isVehicleDispatchCreated = filter.isVehicleDispatchCreated;
 
   const grns = await this.grnRepository.find({
     select: [
@@ -1087,7 +1270,8 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
       "isMCVoucherCreated",
       "isTPVoucherCreated",
       "isPMPVoucherCreated",
-      "isLPVoucherCreated"
+      "isLPVoucherCreated",
+      "isVehicleDispatchCreated"
     ],
     where,
     relations: ["createdBy"],
@@ -1307,6 +1491,77 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     };
   }
 
+  /**
+   * GRN picker of the voucher forms (D-6), all in SQL: live GRNs (not deleted)
+   * with no live, non-rejected voucher of `missingVoucher` referencing them;
+   * `overAllStatus` matches the GRN's latest document status; `includeId` is
+   * always listed (edit mode). `search` matches `grnNo` (ILIKE) or the exact id.
+   * Not cached: the list changes the moment a voucher is created or rejected.
+   */
+  private async getVoucherableGrnNumbers(filter: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    overAllStatus?: string;
+    missingVoucher: VoucherKind;
+    includeId?: string;
+  }): Promise<any> {
+    const page = Math.max(1, Number(filter.page) || 1);
+    const limit = Math.min(200, Math.max(1, Number(filter.limit) || 10));
+
+    const qb = this.grnRepository
+      .createQueryBuilder('grn')
+      .select(['grn.id', 'grn.grnNo', 'grn.createdAt'])
+      .where(liveRowSql('grn'));
+
+    const conditions: string[] = [`NOT ${liveVoucherForGrnExistsSql('grn.id', filter.missingVoucher)}`];
+    const params: Record<string, unknown> = {};
+    if (filter.overAllStatus) {
+      conditions.push(`${latestDocumentStatusSql('grn.id', DocumentTypeEnum.GRN, 'grn_d')} = :overAllStatus`);
+      params.overAllStatus = String(filter.overAllStatus);
+    }
+    const eligible = conditions.join(' AND ');
+    const includeId = relationIdOf(filter.includeId);
+    if (isUuid(includeId)) {
+      qb.andWhere(`((${eligible}) OR grn.id = :includeId)`, { ...params, includeId });
+    } else {
+      qb.andWhere(`(${eligible})`, params);
+    }
+    if (filter.search && String(filter.search).trim()) {
+      const term = String(filter.search).trim();
+      qb.andWhere('(grn.grnNo ILIKE :search OR grn.id::text = :exact)', { search: `%${term}%`, exact: term });
+    }
+
+    // The included GRN comes first so the edit form finds it on page 1.
+    if (isUuid(includeId)) qb.orderBy(`CASE WHEN grn.id = :includeId THEN 0 ELSE 1 END`, 'ASC').addOrderBy('grn.createdAt', 'DESC');
+    else qb.orderBy('grn.createdAt', 'DESC');
+
+    const [grns, total] = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    const documentMap = new Map<string, string>();
+    if (grns.length) {
+      const documents = await this.documentbRepository
+        .createQueryBuilder('doc')
+        .select(['doc.id', 'doc.document_type_id', 'doc.createdAt'])
+        .where('doc.type = :type', { type: DocumentTypeEnum.GRN })
+        .andWhere('doc.document_type_id IN (:...ids)', { ids: grns.map((g) => g.id) })
+        .orderBy('doc.createdAt', 'DESC')
+        .getMany();
+      for (const doc of documents) {
+        if (doc.document_type_id && !documentMap.has(doc.document_type_id)) documentMap.set(doc.document_type_id, doc.id);
+      }
+    }
+
+    const totalPages = Math.ceil(total / limit);
+    return {
+      data: grns.map((g) => ({ id: g.id, grnNo: g.grnNo, documentId: documentMap.get(g.id) ?? null })),
+      pagination: { total, page, limit, totalPages, pages: totalPages },
+    };
+  }
+
   private async generateSerialNo(prefix: string): Promise<string> {
     const count = await this.grnRepository.count({
       where: { grnNo: ILike(`${prefix}%`) },
@@ -1337,6 +1592,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     // Receiving links R10: none of them may already have a counting processing document.
     for (const id of ids) {
       await this.receivingGuardService.assertSourceEditable('grn', id);
+      await this.assertNoApprovedDispatch(this.dataSource.manager, id, 'deleted');
     }
 
     const docIds = relatedDocuments.map(d => d.id);
@@ -1351,8 +1607,14 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
       this.grnRepository.softDelete(ids),
       this.grnRepository.createQueryBuilder().update().set({ isDeleted: true } as any).whereInIds(ids).execute(),
     ]);
+    // D-6: their deal slips become available again.
+    await syncDealSlipGrnFlagsForGrns(this.dataSource.manager, ids);
 
     await Promise.all(ids.map(id => this.invalidateCache(id)));
+    // Their pending purchase dispatches are rejected automatically.
+    for (const grn of grns) {
+      await this.documentbService.rejectDispatchesForSource(DocumentTypeEnum.GRN, [grn.id], 'deleted', `GRN ${grn.grnNo ?? ''}`.trim());
+    }
     grns.map((v)=>{
       success.push({ id:v.id, No: v.grnNo });
     })

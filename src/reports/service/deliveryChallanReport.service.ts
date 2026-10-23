@@ -243,32 +243,6 @@ Total Amount Filter using Operator
       });
     }
 
-    // have multiple Driver Name
-    if (filter.driverName) {
-      const diverName = normalizeArray(filter.driverName);
-      qb.andWhere(`LOWER(dc.driverName) IN (:...driver)`, {
-        driver: diverName.map((d) => d.trim().toLowerCase()),
-      });
-    }
-
-    
-
-    if (filter.driverLicenseNumber) {
-      const values = normalizeArray(filter.driverLicenseNumber);
-
-      qb.andWhere(`LOWER(dc.licenseNo) IN (:...lic)`, {
-        lic: values,
-      });
-    }
-
-    
-    if (filter.vehicleNumber) {
-      const values = normalizeArray(filter.vehicleNumber);
-
-      qb.andWhere(`LOWER(dc.vehicleNo) IN (:...veh)`, {
-        veh: values,
-      });
-    }
 
 
     if (filter.receiverName) {
@@ -494,12 +468,6 @@ FILTER VALUES
           : 'All',
       ],
 
-      ['Driver Name', formatFilterValue(filter.driverName) || 'All'],
-      [
-        "Driver's License Number",
-        formatFilterValue(filter.driverLicenseNumber) || 'All',
-      ],
-      ['Vehicle Number', formatFilterValue(filter.vehicleNumber) || 'All'],
       ['Receiver Name', formatFilterValue(filter.receiverName) || 'All'],
       ['RM Name', formatFilterValue(filter.rmName) || 'All'],
       ['Approved By', approvedByNames || 'All'],
@@ -593,10 +561,6 @@ SUMMARY VALUES
       { header: 'Total Packing Amount', key: 'totalPackingAmount', width: 20 },
       { header: 'Total Net Product', key: 'totalNetProduct', width: 18 },
       { header: 'Total Product', key: 'totalProduct', width: 18 },
-      { header: 'Driver Name', key: 'driverName', width: 18 },
-      { header: 'License No', key: 'licenseNo', width: 18 },
-      { header: 'Contact No', key: 'contactNo', width: 18 },
-      { header: 'Vehicle No', key: 'vehicleNo', width: 15 },
       { header: 'Receiver Name', key: 'receiverName', width: 18 },
       { header: 'RM Name', key: 'rmName', width: 18 },
       { header: 'Approved By', key: 'approvedBy', width: 18 },
@@ -717,14 +681,6 @@ totalPackingAmount: to2Decimal(dc.totalPackagingMaterialAmount),
 totalNetProduct: to2Decimal(dc.netProductWeight),
 totalProduct: to2Decimal(dc.totalProductAmount),
 
-          driverName: dc.driverName,
-         // licenseNo: dc.licenseNo,
-
-          licenseNo: dc.licenseNo ? dc.licenseNo.toUpperCase() : '',
-          contactNo: dc.contactNo,
-          vehicleNo: dc.vehicleNo ? dc.vehicleNo.toUpperCase() : '',
-
-        //  vehicleNo: dc.vehicleNo,
           receiverName: dc.receiverName,
           rmName: dc.rmn,
           approvedBy: approvedBy,
@@ -833,9 +789,6 @@ export interface DeliveryChallanReportFilter {
   totalQuantityOperator?: '>' | '<' | '=' | '>=' | '<=' | '!=';
   totalAmount?: number;
   totalAmountOperator?: '>' | '<' | '=' | '>=' | '<=' | '!=';
-  driverName?: string;
-  driverLicenseNumber?: string ;
-  vehicleNumber?: string ;
   receiverName?: string ;
   status?: string ;
   rmName?: string[];

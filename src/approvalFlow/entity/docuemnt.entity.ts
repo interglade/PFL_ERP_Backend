@@ -47,7 +47,10 @@ export enum DocumentTypeEnum {
   PACKAGING_MATERIAL_VOUCHER = 'packaging-material-voucher',
   DC_TYPE_CUSTOMER = "DC_TYPE_CUSTOMER",
   DC_TYPE_STOCK_TRANSFER = "DC_TYPE_STOCK_TRANSFER",
-  DC_TYPE_OTHER="DC_TYPE_OTHER"
+  DC_TYPE_OTHER="DC_TYPE_OTHER",
+  // Batch stock (Phase C9 / C10): approved through the Operation flow, like the Dump Register.
+  STOCK_ADJUSTMENT = 'stock-adjustment',
+  STOCK_REPACK = 'stock-repack',
 }
 
 @Entity('documents')

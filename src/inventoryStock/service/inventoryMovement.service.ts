@@ -1,3 +1,5 @@
+import { applyApprovedAdjustment, applyApprovedRepack } from '../adjustment/stockAdjustment.apply';
+import { consumeDcStock, consumeSecondSaleStock, isDcType, postInwardToBatches } from '../batch/batchDocuments';
 import { inject, injectable } from 'inversify';
 import { DataSource, EntityManager } from 'typeorm';
 
@@ -16,13 +18,14 @@ import { InwardRegister } from '../../inwardRegister/entity/inwardRegister.entit
 import { CustomerDeliveryChallan } from '../../deliveryChallans/customerDeliveryChllan/entity/customerDeliveryChallan.entity';
 import { StockTransferDeliveryChallan } from '../../deliveryChallans/stockTransferDC/entity/stockTransferdeliveryChallan.entity';
 import { DumpRegister } from '../../dumpRegister/entity/dumpRegister.entity';
-import { ReturnToVendor } from '../../returnToVendor/entity/returnToVendor.entity';
+import { OtherDeliveryChallan } from '../../deliveryChallans/otherDeliveryChallan/entity/otherDeliveryChallan.entity';
+import { GrnDeliveryMode } from '../../grn/entity/grn.entity';
 
 /**
  * One movement to apply against a single inventory_stock row.
  * Deltas are signed: negative reduces stock, positive increases it.
  */
-interface StockMovement {
+export interface StockMovement {
   companyId: string;
   locationId: string;
   productId: string;
@@ -33,6 +36,12 @@ interface StockMovement {
   dumpAmtDelta?: number;
   /** Used only for readable error messages when stock is insufficient. */
   label?: string;
+  /**
+   * 'average': the value taken out is the row's average cost (inwardAmt /
+   * inwardQty) × the quantity, computed by the UPDATE itself; `amtDelta` is
+   * ignored. Used by the delivery challans, which carry sale prices, not cost.
+   */
+  costBasis?: 'average';
 }
 
 /** What a document intends to do to inventory, before anything is written. */
@@ -149,6 +158,38 @@ export class InventoryMovementService {
   }
 
   // ---------------------------------------------------------------------
+  // Manual adjustments (Stock Correction, etc.)
+  // ---------------------------------------------------------------------
+
+  /**
+   * Applies manually-approved stock movements (e.g. an approved Stock
+   * Correction) through the same atomic, column-relative UPDATE used for
+   * approval documents, creating the inventory_stock row when it is missing.
+   *
+   * Must be called with the caller's transactional EntityManager so the
+   * adjustment commits or rolls back together with the caller's own writes.
+   *
+   * When `options.validateAvailability` is true, every stock row the
+   * movements would reduce is locked (SELECT ... FOR UPDATE) and the call is
+   * refused if the row's inwardQty would drop below 0.
+   */
+  public async applyManualAdjustment(
+    movements: StockMovement[],
+    manager: EntityManager,
+    options: { validateAvailability?: boolean } = {},
+  ): Promise<void> {
+    if (!movements || movements.length === 0) return;
+
+    if (options.validateAvailability) {
+      await this.validateAvailability(movements, manager, true);
+    }
+
+    for (const movement of movements) {
+      await this.adjustStock(movement, manager);
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // Dispatcher
   // ---------------------------------------------------------------------
 
@@ -157,14 +198,29 @@ export class InventoryMovementService {
     manager: EntityManager,
   ): Promise<void> {
     const plan = await this.planForDocument(document, manager);
-    if (!plan) return;
+    if (plan) {
+      if (plan.validateAvailability) {
+        await this.validateAvailability(plan.movements, manager);
+      }
 
-    if (plan.validateAvailability) {
-      await this.validateAvailability(plan.movements, manager);
+      for (const movement of plan.movements) {
+        await this.adjustStock(movement, manager);
+      }
     }
 
-    for (const movement of plan.movements) {
-      await this.adjustStock(movement, manager);
+    // Batch stock (Phase C): the batch rows and the ledger are the source of
+    // truth; `inventory_stock` above stays as the per-product roll-up.
+    if (!document.document_type_id) return;
+    if (document.type === DocumentTypeEnum.INWARD_REGISTER) {
+      await postInwardToBatches(manager, document.document_type_id, document.lastActionBy?.id ?? null);
+    } else if (isDcType(document.type)) {
+      await consumeDcStock(manager, document.type, document.document_type_id, document.lastActionBy?.id ?? null);
+    } else if (document.type === DocumentTypeEnum.SECOND_SALE) {
+      await consumeSecondSaleStock(manager, document.document_type_id, document.lastActionBy?.id ?? null);
+    } else if (document.type === DocumentTypeEnum.STOCK_ADJUSTMENT) {
+      await applyApprovedAdjustment(manager, this, document.document_type_id, document.lastActionBy?.id ?? null);
+    } else if (document.type === DocumentTypeEnum.STOCK_REPACK) {
+      await applyApprovedRepack(manager, this, document.document_type_id, document.lastActionBy?.id ?? null);
     }
   }
 
@@ -191,22 +247,27 @@ export class InventoryMovementService {
         return this.planInwardRegister(sourceId, manager);
 
       case DocumentTypeEnum.DC_TYPE_CUSTOMER:
-        return this.planCustomerDeliveryChallan(sourceId, manager);
+        return this.planDeliveryChallan(CustomerDeliveryChallan, 'Customer Delivery Challan', sourceId, manager);
 
       case DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER:
-        return this.planStockTransferDeliveryChallan(sourceId, manager);
+        return this.planDeliveryChallan(StockTransferDeliveryChallan, 'Stock Transfer Challan', sourceId, manager);
 
       case DocumentTypeEnum.DUMP_REGISTER:
         return this.planDumpRegister(sourceId, manager);
 
       case DocumentTypeEnum.RETURN_TO_VENDOR:
-        return this.planReturnToVendor(sourceId, manager);
+        // Return To Vendor records goods sent back from what arrived, before
+        // they were inwarded: they never entered stock, so nothing moves.
+        // Stock increases only through the Inward Register.
+        return null;
+
+      case DocumentTypeEnum.SECOND_SALE:
+        // Second Sale sells returned stock at its location (C8).
+        return this.planSecondSale(sourceId, manager);
 
       case DocumentTypeEnum.DC_TYPE_OTHER:
-        // Other Delivery Challan has never moved stock in this project.
-        // Behaviour intentionally unchanged. To make it reduce stock at
-        // fromLocation, mirror planCustomerDeliveryChallan() here.
-        return null;
+        // Every DC type takes stock out (client rule; Phase B).
+        return this.planDeliveryChallan(OtherDeliveryChallan, 'Other Delivery Challan', sourceId, manager);
 
       default:
         // Every other document type is not inventory-bearing.
@@ -275,27 +336,45 @@ export class InventoryMovementService {
   }
 
   // ---------------------------------------------------------------------
-  // Customer Delivery Challan — STOCK OUT at `fromLocation`
+  // Delivery Challans (Customer / Stock Transfer / Other) — STOCK OUT at
+  // `fromLocation`, in net kg (the measure the Inward Register adds), valued
+  // at the stock row's average cost — the DC line amount is a sale price.
+  // Availability is re-checked at approval: pending DCs are already accounted
+  // for when each DC is created (dcStock.ts), so this only fails when stock
+  // really went away meanwhile.
+  //
+  // A Customer DC raised from a GRN delivered direct to the customer moves
+  // nothing: those goods never entered a CC's stock.
+  //
+  // The TO-location increase of a stock transfer comes from the Inward
+  // Register raised against the challan at the destination.
   // ---------------------------------------------------------------------
 
-  private async planCustomerDeliveryChallan(
+  private async planDeliveryChallan(
+    entity: typeof CustomerDeliveryChallan | typeof StockTransferDeliveryChallan | typeof OtherDeliveryChallan,
+    label: string,
     challanId: string,
     manager: EntityManager,
-  ): Promise<MovementPlan> {
-    const challan = await manager.findOne(CustomerDeliveryChallan, {
+  ): Promise<MovementPlan | null> {
+    const challan = (await manager.findOne(entity as typeof CustomerDeliveryChallan, {
       where: { id: challanId },
       relations: [
         'companyName',
         'fromLocation',
+        'grnNo',
         'deliveryChallanProducts',
         'deliveryChallanProducts.productName',
         'deliveryChallanProducts.variant',
         'deliveryChallanProducts.variant.product',
       ],
-    });
+    })) as CustomerDeliveryChallan | null;
 
     if (!challan) {
-      throw new AppError(404, `Customer Delivery Challan ${challanId} not found`);
+      throw new AppError(404, `${label} ${challanId} not found`);
+    }
+
+    if (entity === CustomerDeliveryChallan && challan.grnNo?.deliveryMode === GrnDeliveryMode.DIRECT_TO_CUSTOMER) {
+      return null;
     }
 
     const companyId = challan.companyName?.id;
@@ -304,15 +383,14 @@ export class InventoryMovementService {
     if (!companyId || !locationId) {
       throw new AppError(
         400,
-        `Customer Delivery Challan ${challan.challanNo ?? challanId} is missing company or from-location; cannot move stock`,
+        `${label} ${challan.challanNo ?? challanId} is missing company or from-location; cannot move stock`,
       );
     }
 
     const movements: StockMovement[] = [];
 
     for (const item of challan.deliveryChallanProducts ?? []) {
-      // Same resolution order as the original create(): when a variant exists
-      // the product is taken from the variant, otherwise from the line itself.
+      // When a variant exists the product is taken from the variant.
       const variantId = item.variant?.id ?? null;
       const productId = variantId
         ? item.variant?.product?.id ?? item.productName?.id
@@ -321,7 +399,7 @@ export class InventoryMovementService {
       if (!productId) continue;
 
       const qty = Number(item.netWeight) || 0;
-      const amt = Number(item.amount) || 0;
+      if (qty <= 0) continue;
 
       movements.push({
         companyId,
@@ -329,90 +407,59 @@ export class InventoryMovementService {
         productId,
         variantId,
         qtyDelta: -qty,
-        amtDelta: -amt,
+        amtDelta: 0,
+        costBasis: 'average',
         label: item.productName?.name ?? productId,
       });
     }
 
-    // Stock availability is validated at DC creation time (customerDeliveryChallan.service.ts).
-    // Re-checking here at approve time is redundant and causes false failures when
-    // other DCs are created concurrently. Deduct without a second availability check.
-    return { movements, validateAvailability: false };
+    return { movements, validateAvailability: true };
   }
 
   // ---------------------------------------------------------------------
-  // Stock Transfer Delivery Challan — STOCK OUT at `fromLocation`
-  //
-  // Covers all four StockTransferType values (CC->DC, DC->CC, CC->CC, DC->DC):
-  // they share one entity and one flow.
-  //
-  // The TO-location increase is intentionally NOT done here — it comes from a
-  // separate Inward Register raised against this challan, exactly as before.
+  // Second Sale — STOCK OUT at `location` (returned goods), net kg at
+  // average cost, like the delivery challans.
   // ---------------------------------------------------------------------
 
-  private async planStockTransferDeliveryChallan(
-    challanId: string,
-    manager: EntityManager,
-  ): Promise<MovementPlan> {
-    const challan = await manager.findOne(StockTransferDeliveryChallan, {
-      where: { id: challanId },
-      relations: [
-        'companyName',
-        'fromLocation',
-        'deliveryChallanProducts',
-        'deliveryChallanProducts.productName',
-        'deliveryChallanProducts.variant',
-        'deliveryChallanProducts.variant.product',
-      ],
-    });
-
-    if (!challan) {
-      throw new AppError(404, `Stock Transfer Delivery Challan ${challanId} not found`);
-    }
-
-    const companyId = challan.companyName?.id;
-    const locationId = challan.fromLocation?.id;
-
+  private async planSecondSale(secondSaleId: string, manager: EntityManager): Promise<MovementPlan | null> {
+    const head: Array<{ no: string | null; company_id: string | null; location_id: string | null }> = await manager.query(
+      `SELECT "secondSaleNo" AS no, company_id::text AS company_id, branch_id::text AS location_id FROM second_sale_document WHERE id = $1`,
+      [secondSaleId],
+    );
+    if (!head[0]) throw new AppError(404, `Second Sale ${secondSaleId} not found`);
+    const { company_id: companyId, location_id: locationId } = head[0];
     if (!companyId || !locationId) {
-      throw new AppError(
-        400,
-        `Stock Transfer Challan ${challan.challanNo ?? challanId} is missing company or from-location; cannot move stock`,
-      );
+      throw new AppError(400, `Second Sale ${head[0].no ?? secondSaleId} is missing company or location; cannot move stock`);
     }
-
+    const lines: Array<{ product_id: string | null; variant_id: string | null; variant_product_id: string | null; kg: string | null; name: string | null }> =
+      await manager.query(
+        `SELECT l.product_id::text AS product_id, l.varient_id::text AS variant_id, v.product_id::text AS variant_product_id,
+                l."netWeight" AS kg, p.product_name AS name
+           FROM second_sale_product l
+           LEFT JOIN "productVarient" v ON v.id = l.varient_id
+           LEFT JOIN product p ON p.id = l.product_id
+          WHERE l.second_sale_register_id = $1`,
+        [secondSaleId],
+      );
     const movements: StockMovement[] = [];
-
-    for (const item of challan.deliveryChallanProducts ?? []) {
-      const variantId = item.variant?.id ?? null;
-      const productId = variantId
-        ? item.variant?.product?.id ?? item.productName?.id
-        : item.productName?.id;
-
-      if (!productId) continue;
-
-      const qty = Number(item.netWeight) || 0;
-      const amt = Number(item.amount) || 0;
-
+    for (const line of lines) {
+      const productId = line.variant_product_id ?? line.product_id;
+      const qty = Number(line.kg) || 0;
+      if (!productId || qty <= 0) continue;
       movements.push({
-        companyId,
-        locationId,
-        productId,
-        variantId,
-        qtyDelta: -qty,
-        amtDelta: -amt,
-        label: item.productName?.name ?? productId,
+        companyId, locationId, productId, variantId: line.variant_id,
+        qtyDelta: -qty, amtDelta: 0, costBasis: 'average', label: line.name ?? productId,
       });
     }
-
-    // Unchanged from the original create(): no availability check, a negative
-    // balance is allowed to be created.
-    return { movements, validateAvailability: false };
+    return { movements, validateAvailability: true };
   }
 
   // ---------------------------------------------------------------------
-  // Dump Register — STOCK OUT + dump counters at `location`
-  // Applies to every DumpType (purchase / transferred / returned-by-customer);
-  // the original code did not branch on dumpType either.
+  // Dump Register — dump counters only at `location` (record of wastage)
+  // A dump records wastage found in what arrived, before it was inwarded
+  // (receiving: inward + dump + rtv = received). That kg never entered stock,
+  // so the stock quantity and value are not reduced; only the dump counters
+  // move. Applies to every DumpType (purchase / transferred / returned).
   // ---------------------------------------------------------------------
 
   private async planDumpRegister(
@@ -464,67 +511,10 @@ export class InventoryMovementService {
         locationId,
         productId,
         variantId: item.variant?.id ?? null,
-        qtyDelta: -qty,
-        amtDelta: -amt,
+        qtyDelta: 0,
+        amtDelta: 0,
         dumpQtyDelta: qty,
         dumpAmtDelta: amt,
-      });
-    }
-
-    return { movements, validateAvailability: false };
-  }
-
-  // ---------------------------------------------------------------------
-  // Return To Vendor — STOCK OUT at `location`
-  // ---------------------------------------------------------------------
-
-  private async planReturnToVendor(
-    rtvId: string,
-    manager: EntityManager,
-  ): Promise<MovementPlan> {
-    const rtv = await manager.findOne(ReturnToVendor, {
-      where: { id: rtvId },
-      relations: [
-        'companyName',
-        'location',
-        'rtvProducts',
-        'rtvProducts.productName',
-        'rtvProducts.variant',
-      ],
-    });
-
-    if (!rtv) {
-      throw new AppError(404, `Return To Vendor ${rtvId} not found`);
-    }
-
-    const companyId = rtv.companyName?.id;
-    const locationId = rtv.location?.id;
-
-    if (!companyId || !locationId) {
-      throw new AppError(
-        400,
-        `Return To Vendor ${rtv.rtvNo ?? rtvId} is missing company or location; cannot move stock`,
-      );
-    }
-
-    const movements: StockMovement[] = [];
-
-    for (const item of rtv.rtvProducts ?? []) {
-      const productId = item.productName?.id;
-      if (!productId) continue;
-
-      // Preserves the original basis: quantity from netWeight, value from
-      // unitPrice x quantity.
-      const qty = Number(item.netWeight) || 0;
-      const amt = +(((Number(item.unitPrice) || 0) * (Number(item.quantity) || 0))).toFixed(2);
-
-      movements.push({
-        companyId,
-        locationId,
-        productId,
-        variantId: item.variant?.id ?? null,
-        qtyDelta: -(+qty.toFixed(2)),
-        amtDelta: -amt,
       });
     }
 
@@ -543,6 +533,7 @@ export class InventoryMovementService {
   private async validateAvailability(
     movements: StockMovement[],
     manager: EntityManager,
+    lockRows = false,
   ): Promise<void> {
     if (movements.length === 0) return;
 
@@ -560,7 +551,7 @@ export class InventoryMovementService {
     }
 
     for (const { movement, qty } of required.values()) {
-      const available = await this.readAvailableQty(movement, manager);
+      const available = await this.readAvailableQty(movement, manager, lockRows);
       if (available < qty) {
         throw new AppError(
           400,
@@ -577,6 +568,7 @@ export class InventoryMovementService {
   private async readAvailableQty(
     movement: StockMovement,
     manager: EntityManager,
+    lockRow = false,
   ): Promise<number> {
     const qb = manager
       .createQueryBuilder(InventoryStock, 'stock')
@@ -590,6 +582,10 @@ export class InventoryMovementService {
     } else {
       qb.andWhere('"stock"."variant_id" IS NULL');
     }
+
+    // Only manual adjustments ask for the lock (they run inside the caller's
+    // transaction); document approvals keep their existing behaviour.
+    if (lockRow) qb.setLock('pessimistic_write');
 
     const row = await qb.getRawOne();
     return Number(row?.inwardQty ?? 0);
@@ -622,7 +618,11 @@ export class InventoryMovementService {
         // qtyDelta/amtDelta/dumpQtyDelta/dumpAmtDelta are already coerced with
         // Number() above, so interpolating them here cannot inject SQL.
         inwardQty: () => `COALESCE("inwardQty", 0) + (${qtyDelta})`,
-        inwardAmt: () => `COALESCE("inwardAmt", 0) + (${amtDelta})`,
+        // Average cost: every expression reads the row's values before this UPDATE.
+        inwardAmt: () =>
+          movement.costBasis === 'average'
+            ? `COALESCE("inwardAmt", 0) - (CASE WHEN COALESCE("inwardQty", 0) > 0 THEN COALESCE("inwardAmt", 0) / "inwardQty" ELSE 0 END) * (${-qtyDelta})`
+            : `COALESCE("inwardAmt", 0) + (${amtDelta})`,
         dumpQty: () => `COALESCE("dumpQty", 0) + (${dumpQtyDelta})`,
         dumpAmt: () => `COALESCE("dumpAmt", 0) + (${dumpAmtDelta})`,
       })

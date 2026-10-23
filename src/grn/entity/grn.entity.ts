@@ -15,7 +15,7 @@ import { parse, format } from 'date-fns';
 import Model from '../../global/model.entity';
 import { Company } from '../../company/entity/company.entity';
 import { User } from '../../employee/entity/user.entity';
-import { ammountStatus, Department, Source } from '../../utils/status.enum';
+import { ammountStatus, Source } from '../../utils/status.enum';
 import { DealSlip } from '../../dealSlip/entity/dealSlip.entity';
 import { RFPA } from '../../rfpa/entity/rfpa.entity';
 import { Branches } from '../../branch/entity/branches.entity';
@@ -56,6 +56,10 @@ export enum GrnDeliveryMode {
 @Index(['companyName'])
 @Index(['location'])
 @Index(['createdBy'])
+// Batch no lookups per company. Uniqueness (one live, non-rejected GRN per
+// company + batch no) is enforced by GrnService.assertBatchNoUnique: a rejected
+// GRN must release its batch no, which a partial index cannot express.
+@Index('IDX_grns_company_batch_no', ['companyName', 'batchNo'])
 export class GRN extends Model {
   @ManyToOne(() => Company, {
     cascade: true,
@@ -71,15 +75,20 @@ export class GRN extends Model {
   @JoinColumn({ name: 'purchaseInstructionsBy_id' })
   purchaseInstructionsBy: User;
 
-  @Column({
-    type: 'enum',
-    enum: Department,
-    nullable: true,
-  })
-  requestingDepartment: Department;
-
   @Column({ nullable: true })
   grnNo: string;
+
+  /** Typed by the user (alphanumeric); required on new GRNs; unique per company among live, non-rejected GRNs. */
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  batchNo: string | null;
+
+  /** Σ line gross weight (kg). Calculated by the backend on create / update. */
+  @Column('decimal', { precision: 12, scale: 3, nullable: true })
+  totalGrossWeight: number | null;
+
+  /** Σ line net weight (kg). Calculated by the backend on create / update. */
+  @Column('decimal', { precision: 12, scale: 3, nullable: true })
+  totalNetWeight: number | null;
 
   @Column({
     type: 'enum',
@@ -188,12 +197,6 @@ export class GRN extends Model {
   @Column({ nullable: true })
   approvalNote: string;
 
-  @Column({ nullable: true })
-  receivedThrough: string;
-
-  @Column({ nullable: true })
-  vehicleNo: string;
-
 @Column({
   type: 'timestamp',
   nullable: true,
@@ -262,11 +265,9 @@ timeIn: string | null;
   @Column('int', { nullable: true })
   cratesIn: number;
 
-  @Column('character varying', {
-    name: 'delivery_receiving_person',
-    nullable: true,
-  })
-  deliveryReceivingPerson: string;
+  /** Person who received the delivery. (Formerly `delivery_receiving_person`.) */
+  @Column({ type: 'varchar', nullable: true })
+  receivingPerson: string;
 
   @Column({ name: 'rmn', nullable: true })
   rmn: string;
@@ -278,9 +279,6 @@ timeIn: string | null;
   })
   @JoinColumn({ name: 'grnProduct_id' })
   grnProducts: GrnProduct[];
-
-  @Column({ nullable: true })
-  baseLocation: string;
 
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'purchase_id' })
@@ -337,6 +335,14 @@ timeIn: string | null;
 
    @Column({ default: false })
     isLPVoucherCreated: boolean;
+
+  /**
+   * A live Purchase vehicle dispatch (not deleted, approval not rejected) exists for
+   * this GRN. Maintained by VehicleDispatchService / the approval engine through
+   * `syncGrnVehicleDispatchFlag`; the dispatch table stays the source of truth.
+   */
+  @Column({ default: false })
+  isVehicleDispatchCreated: boolean;
 
     @Column( {
          type: 'enum',

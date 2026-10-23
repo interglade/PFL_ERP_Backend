@@ -19,6 +19,8 @@ const DOCUMENT_TYPE_LABEL_MAP: Record<string, string> = {
   'final-invoice': 'Final Invoice',
   'eod-report': 'EOD Report',
   'proforma-invoice': 'Proforma Invoice',
+  'stock-adjustment': 'Stock Adjustment',
+  'stock-repack': 'Repack',
 };
 
 export function getReadableDocumentType(type: string): string {

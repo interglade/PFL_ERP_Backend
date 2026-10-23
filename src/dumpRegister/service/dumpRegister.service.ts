@@ -1,3 +1,4 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from "inversify";
 import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 
@@ -31,6 +32,8 @@ import { DumpRegister } from "../entity/dumpRegister.entity";
 import { BulkDeleteResultDto, DeleteResultDto } from "../../global/general.dto";
 import AppError from "../../utils/appError";
 import { ReceivingGuardService } from "../../receiving/service/receivingGuard.service";
+import { priceLineFromSource, round2 } from "../../receiving/receiving.helpers";
+import { ResolvedSource } from "../../receiving/receiving.types";
 import { DumpProduct } from "../entity/dumpProduct.entity";
 
 
@@ -84,18 +87,9 @@ export class DumpRegisterService{
     await Promise.all(tasks);
   }
 
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateSerialNo(): Promise<string> {
-    const now = new Date();
-    const yyyy = now.getFullYear().toString();
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const datePrefix = `DPR${yyyy}${mm}${dd}`;
-
-    const count = await this.dumpRegisterRepository.count({
-      where: { dumpNo: ILike(`${datePrefix}%`) },
-    });
-
-    return `${datePrefix}${(count + 1).toString().padStart(5, '0')}`;
+    return nextDocumentNumber(this.dumpRegisterRepository.manager, SERIES.dump, `DPR${compactDate()}`, 5);
   }
 
 
@@ -110,6 +104,41 @@ export class DumpRegisterService{
       if (!approvalFlow) {
         throw new AppError(400, `Approval flow not configured for user. Please configure approval flow for ${documentType} type documents before creating.`);
       }
+    }
+
+    /**
+     * Unit and unit price of every line come from the source line; the amount is
+     * recomputed as quantity (in that unit) × unit price. Returns the total cost.
+     */
+    private priceLinesFromSource(
+      lines: Array<{ productId?: string | null; productName?: string | null; variantId?: string | null; variant?: string | null; uomId?: string | null; uom?: string | null; batchNo?: string | null; quantity?: number | null; unitPrice?: number | null; amount?: number | null }>,
+      resolved: ResolvedSource,
+    ): number {
+      const errors: string[] = [];
+      for (const item of lines) {
+        const { line, error } = priceLineFromSource(
+          resolved.products,
+          {
+            productId: item.productId || item.productName,
+            variantId: item.variantId || item.variant || null,
+            uomId: item.uomId || item.uom,
+            batchNo: item.batchNo ?? null,
+            unitPrice: item.unitPrice,
+            quantity: item.quantity,
+          },
+          resolved.sourceNo,
+        );
+        if (error) errors.push(error);
+        const uomId = line.uomId ?? item.uomId ?? item.uom ?? null;
+        item.uomId = uomId;
+        item.uom = uomId;
+        item.batchNo = line.batchNo ?? null;
+        item.unitPrice = line.unitPrice;
+        item.quantity = line.quantity;
+        item.amount = line.amount;
+      }
+      if (errors.length > 0) throw new AppError(400, errors.join('; '));
+      return round2(lines.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
     }
 
     async createDumpRegister(data: CreateDumpRegisterDto): Promise<CreatedWithApproval<any>> {
@@ -156,12 +185,17 @@ export class DumpRegisterService{
           lines: data.dumpProducts.map((p) => ({
             productId: p.productId || p.productName,
             variantId: p.variantId || p.variant || null,
+            uomId: p.uomId || p.uom || null,
+            batchNo: p.batchNo ?? null,
             kg: p.netWeight,
           })),
           manager: queryRunner.manager,
         });
-        const companyId = data.companyId || data.companyName || resolvedSource.companyId;
+        // Company and batch belong to the source; unit, unit price and amount of every line too.
+        const companyId = resolvedSource.companyId || data.companyId || data.companyName;
         const locationId = data.locationId || data.location || resolvedSource.locationId;
+        const batchNo = resolvedSource.batchNo ?? data.batchNo ?? null;
+        const totalDumpCost = this.priceLinesFromSource(data.dumpProducts, resolvedSource);
 const serialNo = await this.generateSerialNo();
 
         const dumpRegister = queryRunner.manager.create(
@@ -176,9 +210,9 @@ const serialNo = await this.generateSerialNo();
             requestedBy: data.requestedBy ? { id: data.requestedBy } : undefined,
             date: data.date,
             dumpType: data.dumpType || undefined,
-            batchNo: data.batchNo,
+            batchNo,
             totalQty: data.totalQty,
-            totalDumpCost: data.totalDumpCost,
+            totalDumpCost,
             totalCostInWords: data.totalCostInWords,
             remark: data.remark,
           } as any,
@@ -234,6 +268,7 @@ const serialNo = await this.generateSerialNo();
             grossWeight: productData.grossWeight ?? null,
             packingMaterialWeight: productData.packingMaterialWeight ?? null,
             netWeight: productData.netWeight ?? null,
+            batchNo: productData.batchNo ?? null,
           };
 
           if (variantId) {
@@ -409,7 +444,7 @@ const serialNo = await this.generateSerialNo();
         'location.id', 'grn.id', 'deliveryChallanNo.id', 'rbcNo.id',
         'requestedBy.id', 'companyName.id',
         'dumpProducts.id', 'dumpProducts.quantity', 'dumpProducts.unitPrice', 'dumpProducts.amount',
-        'dumpProducts.grossWeight', 'dumpProducts.packingMaterialWeight', 'dumpProducts.netWeight',
+        'dumpProducts.grossWeight', 'dumpProducts.packingMaterialWeight', 'dumpProducts.netWeight', 'dumpProducts.batchNo',
         'productName.id', 'variant.id', 'uom.id',
       ])
       .where('dr.id = :id', { id })
@@ -446,6 +481,7 @@ const serialNo = await this.generateSerialNo();
         grossWeight: p.grossWeight ?? null,
         packingMaterialWeight: p.packingMaterialWeight ?? null,
         netWeight: p.netWeight ?? null,
+        batchNo: p.batchNo ?? null,
       })),
     };
 
@@ -482,7 +518,7 @@ const serialNo = await this.generateSerialNo();
         'companyName.name',
         'requestedBy.firstName', 'requestedBy.lastName',
         'dumpProducts.id', 'dumpProducts.quantity', 'dumpProducts.unitPrice', 'dumpProducts.amount',
-        'dumpProducts.grossWeight', 'dumpProducts.packingMaterialWeight', 'dumpProducts.netWeight',
+        'dumpProducts.grossWeight', 'dumpProducts.packingMaterialWeight', 'dumpProducts.netWeight', 'dumpProducts.batchNo',
         'productName.name', 'variant.variantName', 'uom.unit',
       ])
       .where('dr.id = :id', { id })
@@ -527,6 +563,7 @@ const serialNo = await this.generateSerialNo();
         grossWeight: p.grossWeight ?? null,
         packingMaterialWeight: p.packingMaterialWeight ?? null,
         netWeight: p.netWeight ?? null,
+        batchNo: p.batchNo ?? null,
       })),
     };
 
@@ -654,7 +691,7 @@ public async updateDumpRegister(
   const existingDumpRegister = await this.dumpRegisterRepository.findOne({
     where: { id },
     relations: [
-      "dumpProducts", "dumpProducts.productName", "dumpProducts.variant",
+      "dumpProducts", "dumpProducts.productName", "dumpProducts.variant", "dumpProducts.uom",
       "grn", "deliveryChallanNo", "rbcNo", "companyName", "location",
     ],
   });
@@ -679,8 +716,8 @@ public async updateDumpRegister(
       ReceivingGuardService.sourceTypeFromDocKind(data.dumpType ?? existingDumpRegister.dumpType),
     );
     const lines = dumpProducts && Array.isArray(dumpProducts)
-      ? dumpProducts.map((p) => ({ productId: p.productId || p.productName, variantId: p.variantId || p.variant || null, kg: p.netWeight }))
-      : (existingDumpRegister.dumpProducts ?? []).map((p) => ({ productId: p.productName?.id, variantId: p.variant?.id ?? null, kg: p.netWeight }));
+      ? dumpProducts.map((p) => ({ productId: p.productId || p.productName, variantId: p.variantId || p.variant || null, uomId: p.uomId || p.uom || null, batchNo: p.batchNo ?? null, kg: p.netWeight }))
+      : (existingDumpRegister.dumpProducts ?? []).map((p) => ({ productId: p.productName?.id, variantId: p.variant?.id ?? null, uomId: p.uom?.id ?? null, batchNo: p.batchNo ?? null, kg: p.netWeight }));
     const resolvedSource = await this.receivingGuardService.resolveAndAssert({
       docType: 'dump',
       sourceType: sourceRef?.sourceType,
@@ -689,8 +726,14 @@ public async updateDumpRegister(
       excludeDocId: id,
       manager,
     });
-    if (!updateData.companyName && !existingDumpRegister.companyName && resolvedSource.companyId) {
+    if (resolvedSource.companyId) {
       (updateData as Record<string, unknown>).companyName = resolvedSource.companyId;
+    }
+    if (resolvedSource.batchNo) {
+      (updateData as Record<string, unknown>).batchNo = resolvedSource.batchNo;
+    }
+    if (dumpProducts && Array.isArray(dumpProducts)) {
+      (updateData as Record<string, unknown>).totalDumpCost = this.priceLinesFromSource(dumpProducts, resolvedSource);
     }
     if (!updateData.location && !existingDumpRegister.location && resolvedSource.locationId) {
       (updateData as Record<string, unknown>).location = resolvedSource.locationId;
@@ -724,6 +767,7 @@ public async updateDumpRegister(
             grossWeight: product.grossWeight ?? undefined,
             packingMaterialWeight: product.packingMaterialWeight ?? undefined,
             netWeight: product.netWeight ?? undefined,
+            batchNo: product.batchNo ?? null,
           });
         });
 

@@ -3,6 +3,8 @@ import { InwardType } from "../entity/inwardRegister.entity";
 
 
 export interface CreateInwardProductDto {
+  /** Batch of the line (transfer / return receipts); set from the source by the server. */
+  batchNo?: string | null;
   productName: string;
   variant?: string;
   uom: string;
@@ -166,6 +168,8 @@ export interface InwardRegisterViewDto {
 // ─── Update (Edit) DTOs ───────────────────────────────────────────────────────
 
 export interface InwardUpdateProductDto {
+  /** Batch of the line (transfer / return receipts). */
+  batchNo?: string | null;
   id: string | null;
   productName: string | null;
   productCode: string | null;
@@ -266,6 +270,8 @@ export interface InwardRegisterListResultDto {
 // ─── Update Input DTOs (request body) ────────────────────────────────────────
 
 export interface UpdateInwardProductInputDto {
+  /** Batch of the line (transfer / return receipts); set from the source by the server. */
+  batchNo?: string | null;
   productName?: string | null;
   variant?: string | null;
   uom?: string | null;

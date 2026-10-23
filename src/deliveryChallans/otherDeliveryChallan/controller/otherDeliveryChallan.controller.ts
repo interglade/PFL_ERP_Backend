@@ -99,7 +99,6 @@ export class OtherDeliveryChallanController {
       const requestedBy = res.locals.user.id;
       otherDeliveryChallanData.createdBy = requestedBy;
       otherDeliveryChallanData.requestedBy = requestedBy;
-      otherDeliveryChallanData.requestingDepartment = res.locals.user.selectDepartment;
 
       // Use helper function to handle file URL extraction
       setAttachmentUrls(otherDeliveryChallanData, req.files as any[]);

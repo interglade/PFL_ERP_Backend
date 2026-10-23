@@ -86,6 +86,10 @@ export class ReturnToVendor extends Model {
       @Column({ type: 'varchar', length: 255, nullable: true })
       rtvNo: string | null;
 
+      /** Batch number of the source GRN, set by the server. */
+      @Column({ type: 'varchar', length: 100, nullable: true })
+      batchNo: string | null;
+
       @Column({ type: 'varchar', length: 255, nullable: true })
       remark: string | null;
 

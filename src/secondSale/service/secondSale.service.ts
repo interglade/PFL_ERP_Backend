@@ -1,3 +1,7 @@
+import { resolveDcLines } from '../../deliveryChallans/deliverychllan/service/dcStock';
+import { allocationRequestsByLine, releaseSecondSaleStock, reserveSecondSaleStock } from '../../inventoryStock/batch/batchDocuments';
+import { priceDcLines } from '../../deliveryChallans/deliverychllan/service/dcPricing';
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from "inversify";
 import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 import { DataSource, DeepPartial, ILike, In } from "typeorm";
@@ -67,18 +71,9 @@ export class SecondSaleService {
     await Promise.all(tasks);
   }
 
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateSerialNo(): Promise<string> {
-    const now = new Date();
-    const yyyy = now.getFullYear().toString();
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const datePrefix = `SSR${yyyy}${mm}${dd}`;
-
-    const count = await this.secondSaleRepository.count({
-      where: { secondSaleNo: ILike(`${datePrefix}%`) },
-    });
-
-    return `${datePrefix}${(count + 1).toString().padStart(5, '0')}`;
+    return nextDocumentNumber(this.secondSaleRepository.manager, SERIES.secondSale, `SSR${compactDate()}`, 5);
   }
 
 
@@ -129,6 +124,11 @@ console.log("secondsaledata.....................",secondSaleData);
       // 3. Extract product IDs from variants
       const productIds = variants.map(v => v.product?.id).filter(Boolean);
 
+      // Line amounts follow each line's pricing basis (per unit / per kg); every
+      // line needs a quantity and a net weight (stock moves by batch and kg).
+      priceDcLines(secondSaleData.secondSaleProducts as any[]);
+      await resolveDcLines(queryRunner.manager, secondSaleData.secondSaleProducts as any[]);
+
       // 4. Generate serial number and assign
       const serialNo = await this.generateSerialNo();
 
@@ -159,6 +159,15 @@ const secondSale = this.secondSaleRepository.create({
 
 // Save through queryRunner so it's part of the transaction
 const savedSecondSale = await queryRunner.manager.save(SecondSale, secondSale);
+      // C8: hold RETURNED batch stock at the location (chosen batches per line or oldest first).
+      {
+        const saved = (Array.isArray(savedSecondSale) ? savedSecondSale[0] : savedSecondSale) as SecondSale;
+        await reserveSecondSaleStock(
+          queryRunner.manager,
+          saved.id,
+          allocationRequestsByLine(saved.secondSaleProducts, secondSaleData.secondSaleProducts as any[]),
+        );
+      }
 console.log("savedsecodsale...................",savedSecondSale);
       // 6. Create associated document
       const document = await this.documentbService.createDocument({
@@ -703,9 +712,26 @@ console.log(document.id)
  
     const oldData = { ...secondSale }; // Save old data for audit log
 
-    // Update the Second Sale entity
+    // An approved Second Sale has already taken its stock out.
+    const status: Array<{ status: string | null }> = await this.AppDataSource.query(
+      `SELECT d.status::text AS status FROM documents d WHERE d.document_type_id = $1 AND d.type::text = $2 ORDER BY d."createdAt" DESC LIMIT 1`,
+      [id, DocumentTypeEnum.SECOND_SALE],
+    );
+    if (status[0]?.status === DocumentStatus.COMPLETE) {
+      throw new AppError(409, `Second Sale ${secondSale.secondSaleNo ?? ''} is approved and its stock has already moved, so it cannot be edited`.replace('  ', ' '));
+    }
+
+    // Update the Second Sale entity; its lines and their batch hold change together.
     Object.assign(secondSale, secondSaleData);
-    const updatedSecondSale = await this.secondSaleRepository.save(secondSale);
+    const updatedSecondSale = await this.AppDataSource.transaction(async (manager) => {
+      const saved = await manager.save(secondSale);
+      const lines = (secondSaleData as { secondSaleProducts?: unknown[] }).secondSaleProducts;
+      if (Array.isArray(lines)) {
+        await resolveDcLines(manager, lines as any[]);
+        await reserveSecondSaleStock(manager, id, allocationRequestsByLine(saved.secondSaleProducts, lines as any[]));
+      }
+      return saved;
+    });
 
     await this.auditLogService.logChange(
       "SecondSale",
@@ -742,6 +768,8 @@ console.log(document.id)
     
     secondSale.deletionScheduledAt = sixMonthsFromNow;
     await this.secondSaleRepository.save(secondSale);
+    // Scheduled for deletion: it no longer holds returned stock.
+    await releaseSecondSaleStock(this.AppDataSource.manager, secondSale.id);
     await this.invalidateCache(id);
 
     if(!secondSale.secondSaleNo){
@@ -776,6 +804,8 @@ console.log(document.id)
 
       await this.secondSaleRepository.softDelete(secondSale.id);
       await this.secondSaleRepository.update(secondSale.id, { isDeleted: true } as any);
+      // Whatever it held goes back to returned stock.
+      await releaseSecondSaleStock(this.AppDataSource.manager, secondSale.id);
 
       if(secondSale.secondSaleNo)
       success.push({id,No:secondSale.secondSaleNo})

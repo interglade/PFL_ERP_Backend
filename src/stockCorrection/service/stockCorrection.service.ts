@@ -6,6 +6,10 @@ import { StockCorrectionRepository } from "../repository/stockCorrection.reposit
 import { InventoryStockRepository } from "../../inventoryStock/repository/inventoryStock.repository";
 import { ApproveRejectDto, CreateStockCorrectionDto } from "../dto/stockCorrection.dto";
 import { CorrectionStatus, CorrectionType, StockCorrection } from "../entity/stockCorrection.entity";
+import {
+  InventoryMovementService,
+  StockMovement,
+} from "../../inventoryStock/service/inventoryMovement.service";
 
 
 
@@ -20,6 +24,9 @@ export class StockCorrectionService {
 
     @inject(TYPES.DataSource)
     private readonly dataSource: DataSource,
+
+    @inject(TYPES.InventoryMovementService)
+    private readonly inventoryMovementService: InventoryMovementService,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -79,7 +86,9 @@ export class StockCorrectionService {
   }
 
   // -----------------------------------------------------------------------
-  // Approve — updates inventory_stock (inwardQty + dumpQty if dump)
+  // Approve — updates inventory_stock (inwardQty + dumpQty if dump) through
+  // InventoryMovementService, so the write is an atomic column-relative UPDATE
+  // instead of a read-modify-save that could lose concurrent movements.
   // -----------------------------------------------------------------------
   async approveCorrection(correctionId: string, approverId: string, dto?: ApproveRejectDto) {
     const queryRunner = this.dataSource.createQueryRunner();
@@ -87,41 +96,79 @@ export class StockCorrectionService {
     await queryRunner.startTransaction();
 
     try {
-      const correction = await this.stockCorrectionRepo.findOne({
+      const manager = queryRunner.manager;
+
+      // Lock the correction row first (no joins: FOR UPDATE cannot be applied
+      // to the nullable side of an outer join). A concurrent approve/reject of
+      // the same correction waits here and then sees the new status.
+      const locked = await manager
+        .createQueryBuilder(StockCorrection, "correction")
+        .setLock("pessimistic_write")
+        .where("correction.id = :id", { id: correctionId })
+        .getOne();
+
+      if (!locked) throw new Error("Correction not found");
+      if (locked.status !== CorrectionStatus.PENDING)
+        throw new Error("Correction already processed");
+
+      const correction = await manager.findOne(StockCorrection, {
         where: { id: correctionId },
-        relations: ["inventoryStock"],
+        relations: {
+          inventoryStock: { company: true, location: true, product: true, variant: true },
+        },
       });
 
       if (!correction) throw new Error("Correction not found");
-      if (correction.status !== CorrectionStatus.PENDING)
-        throw new Error("Correction already processed");
 
       const stock = correction.inventoryStock;
+      if (!stock) throw new Error("Inventory stock for this correction no longer exists");
 
-      // 1. Update inwardQty (applies to ALL correction types)
-      stock.inwardQty = Number(stock.inwardQty) + Number(correction.correctionDelta);
-
-      // 2. Update inwardAmt if provided
-      if (Number(correction.correctionAmt) !== 0) {
-        stock.inwardAmt = Number(stock.inwardAmt) + Number(correction.correctionAmt);
+      const companyId = (stock.company as any)?.id;
+      const locationId = (stock.location as any)?.id;
+      const productId = (stock.product as any)?.id;
+      if (!companyId || !locationId || !productId) {
+        throw new Error("Inventory stock row is missing company, location or product");
       }
 
-      // 3. Dump specific — also update dumpQty & dumpAmt on inventory_stock
-      if (correction.correctionType === CorrectionType.DAMAGE_WRITE_OFF) {
-        stock.dumpQty = Number(stock.dumpQty ?? 0) + Number(correction.dumpQty);
-        stock.dumpAmt = Number(stock.dumpAmt ?? 0) + Number(correction.dumpAmt);
-      }
+      const isDump = correction.correctionType === CorrectionType.DAMAGE_WRITE_OFF;
 
-      await queryRunner.manager.save(stock);
+      const movement: StockMovement = {
+        companyId,
+        locationId,
+        productId,
+        variantId: (stock.variant as any)?.id ?? null,
+        // 1. inwardQty += correctionDelta (ALL correction types)
+        qtyDelta: Number(correction.correctionDelta) || 0,
+        // 2. inwardAmt += correctionAmt (0 when not provided)
+        amtDelta: Number(correction.correctionAmt) || 0,
+        // 3. Dump specific — also dumpQty / dumpAmt
+        dumpQtyDelta: isDump ? Number(correction.dumpQty) || 0 : 0,
+        dumpAmtDelta: isDump ? Number(correction.dumpAmt) || 0 : 0,
+        label: (stock.product as any)?.name,
+      };
+
+      // Refuses (and rolls back) when a negative delta would take the live
+      // stock row below 0 — stock may have moved since the correction was raised.
+      await this.inventoryMovementService.applyManualAdjustment([movement], manager, {
+        validateAvailability: true,
+      });
 
       // 4. Mark correction approved
+      const approvedAt = new Date();
+      const statusUpdate: Record<string, any> = {
+        status: CorrectionStatus.APPROVED,
+        approvedBy: { id: approverId },
+        approvedAt,
+      };
+      if (dto?.remarks) statusUpdate.remarks = dto.remarks;
+
+      await manager.update(StockCorrection, { id: correctionId }, statusUpdate);
+      await queryRunner.commitTransaction();
+
       correction.status = CorrectionStatus.APPROVED;
       correction.approvedBy = { id: approverId } as any;
-      correction.approvedAt = new Date();
+      correction.approvedAt = approvedAt;
       if (dto?.remarks) correction.remarks = dto.remarks;
-
-      await queryRunner.manager.save(correction);
-      await queryRunner.commitTransaction();
 
       return correction;
     } catch (err) {

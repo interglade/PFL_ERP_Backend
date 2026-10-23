@@ -5,6 +5,8 @@
 import { DumpType } from "../entity/dumpRegister.entity";
 
 export interface DumpProductInputDto {
+  /** Batch of the line (transfer / return receipts); set from the source by the server. */
+  batchNo?: string | null;
   /** product id */
   productName?: string | null;
   productId?: string | null;
@@ -63,6 +65,8 @@ export interface CreateDumpRegisterDto {
 // ─── Update ───────────────────────────────────────────────────────────────────
 
 export interface UpdateDumpProductInputDto {
+  /** Batch of the line (transfer / return receipts); set from the source by the server. */
+  batchNo?: string | null;
   id?: string | null;
   /** product id — accepted as productName or productId, same as create */
   productName?: string | null;
@@ -101,6 +105,8 @@ export interface UpdateDumpRegisterDto {
 // ─── Get by ID (edit form — IDs only) ────────────────────────────────────────
 
 export interface DumpProductForUpdateDto {
+  /** Batch of the line (transfer / return receipts). */
+  batchNo?: string | null;
   id: string;
   productName: string | null;
   variant: string | null;
@@ -173,6 +179,8 @@ export interface DumpRegisterByIdDto {
 // ─── View (document approval view — display names) ───────────────────────────
 
 export interface DumpProductViewDto {
+  /** Batch of the line (transfer / return receipts). */
+  batchNo?: string | null;
   id: string;
   productName: string | null;
   variant: string | null;

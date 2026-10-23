@@ -1,237 +1,142 @@
-// ─── Relation ref ────────────────────────────────────────────────────────────
+import { AddressPayload } from '../../transport/transport.utils';
+import { DispatchType } from '../entity/vehicleDispatch.entity';
+import { NamedRef, ResolvedSource, SourceLine, SourceTotals } from '../service/dispatchSource';
+import { Source } from '../../utils/status.enum';
 
-export interface RelationRef {
-  id: string;
+// ─── Requests ────────────────────────────────────────────────────────────────
+
+/** Fields the form can change. Product rows are never sent: they are copied from the source. */
+export interface DispatchWritableFields {
+  date?: string | null;            // "YYYY-MM-DD"
+  batchNo?: string | null;
+  transporterId?: string | null;
+  vehicleId?: string | null;
+  driverId?: string | null;
+  outDate?: string | null;         // "YYYY-MM-DD", required when outTime is given
+  outTime?: string | null;         // "HH:mm" or "HH:mm:ss"
+  expectedReachingDate?: string | null; // "YYYY-MM-DD", required when reachingTime is given
+  reachingTime?: string | null;    // expected reaching time
+  receivingPerson?: string | null;
+  remarksPFL?: string | null;
+  /** Sales, and purchase delivered direct to a customer. */
+  customerId?: string | null;
+  /** Optional typed address; when empty the customer's registered delivery address is used. */
+  currentShippingAddress?: Partial<AddressPayload> | null;
 }
 
-// ─── Create DTO ───────────────────────────────────────────────────────────────
-
-export class CreateVehicleDispatchDto {
-  /** { id: companyId } */
-  companyName: RelationRef;
-
-  date: string; // "YYYY-MM-DD"
-
-  vehicleType?: string | null;
-  vehicleNo?: string | null;
-  driverName?: string | null;
-  driverMobNo?: string | null;
-  paymentDiscussed?: number | null;
-
-  outTime?: string | null;    // "HH:mm:ss"
-  reachingTime?: string | null; // "HH:mm:ss"
-
-  clientName: string;
-
-  /** { id: addressId } — optional */
-  clientAddress?: RelationRef | null;
-
-  receivingPerson?: string | null;
-  supervisorName?: string | null;
-  accDeptVerification?: string | null;
-  transportationBillAmt?: number | null;
-  advancePaid?: number | null;
-  remarksPFL?: string | null;
-  feedbackbyTransporterOwner?: string | null;
-  netInwardQty?: number | null;
-  clientGRNNo?: string | null;
-  paymentTerms?: string | null;
-
-  /** { id: deliveryChallanId } — optional */
-  deliveryChallanNo?: RelationRef | null;
-
-  rejection?: string | null;
-  shrinkageDump?: string | null;
-
-  // Injected by controller — do not send from client
+export interface CreateVehicleDispatchDto extends DispatchWritableFields {
+  dispatchType: DispatchType;
+  sourceId: string;
+  // Injected by the controller
   requestedBy?: string;
-  dcNo?: string | null;
 }
 
-// ─── Update DTO ───────────────────────────────────────────────────────────────
+export type UpdateVehicleDispatchDto = DispatchWritableFields;
 
-export class UpdateVehicleDispatchDto {
-  companyName?: RelationRef | null;
-  date?: string | null;
-  vehicleType?: string | null;
-  vehicleNo?: string | null;
-  driverName?: string | null;
-  driverMobNo?: string | null;
-  paymentDiscussed?: number | null;
-  outTime?: string | null;
-  reachingTime?: string | null;
-  clientName?: string | null;
-  clientAddress?: RelationRef | null;
-  receivingPerson?: string | null;
-  supervisorName?: string | null;
-  accDeptVerification?: string | null;
-  transportationBillAmt?: number | null;
-  advancePaid?: number | null;
-  remarksPFL?: string | null;
-  feedbackbyTransporterOwner?: string | null;
-  netInwardQty?: number | null;
-  clientGRNNo?: string | null;
-  paymentTerms?: string | null;
-  deliveryChallanNo?: RelationRef | null;
-  rejection?: string | null;
-  shrinkageDump?: string | null;
-}
+// ─── Responses ───────────────────────────────────────────────────────────────
 
-// ─── Query / GetAll DTO ───────────────────────────────────────────────────────
-
-export class GetAllVehicleDispatchQueryDto {
-  page?: number;
-  limit?: number;
-  search?: string;
-  sort?: string; // "field:ASC" or "field:DESC"
-  vehicleType?: string;
-  vehicleNo?: string;
-}
-
-// ─── Response DTOs ────────────────────────────────────────────────────────────
-
-export class ClientAddressDto {
-  id?: string | null;
-  address1?: string | null;
-  address2?: string | null;
-  location?: string | null;
-  city?: string | null;
-  state?: string | null;
-  pincode?: string | null;
-}
-
-/** One row in the GET /vehicleDispatches paginated list */
-export class VehicleDispatchListItemDto {
+/** One row of GET /vehicleDispatches and /recyclebin */
+export interface VehicleDispatchListItemDto {
+  /** The GRN (purchase) or delivery challan (transfer / sales) the dispatch is for. */
+  sourceId?: string | null;
   documentId: string;
   overAllStatus: string;
   createdBy: string;
   createdDate: string | null;
   createdTime: string | null;
-
   id: string | null;
-  date: Date | null;
-  vehicleType: string | null;
-  vehicleNo: string | null;
-  driverName: string | null;
-  driverMobNo: string | null;
-  paymentDiscussed: number | null;
-  outTime: string | null;
-  reachingTime: string | null;
-  clientName: string | null;
-  receivingPerson: string | null;
-  supervisorName: string | null;
-  accDeptVerification: string | null;
-  transportationBillAmt: number | null;
-  advancePaid: number | null;
-  remarksPFL: string | null;
-  feedbackbyTransporterOwner: string | null;
-  netInwardQty: number | null;
-  clientGRNNo: string | null;
-  paymentTerms: string | null;
-  rejection: string | null;
-  shrinkageDump: string | null;
-  companyName: string | null;
-  clientAddress: ClientAddressDto | null;
-  deliveryChallanNo: string | null;
-}
-
-export class VehicleDispatchListResponseDto {
-  data: VehicleDispatchListItemDto[];
-  meta: {
-    total: number;
-    page: number;
-    pages: number;
-  };
-}
-
-/** Returned by GET /vehicleDispatches/view/:docid */
-export class VehicleDispatchViewDto {
-  documentId: string;
-  overAllStatus: string;
-  createdBy: string;
-  createdDate: string | null;
-  createdTime: string | null;
-  approvalSummary?: {
-    createdBy?: { userId: string; name: string } | null;
-    verified?: { userId: string; name: string; status: string; reason: string | null } | null;
-    firstApproved?: { userId: string; name: string; status: string; reason: string | null } | null;
-    secondApproved?: { userId: string; name: string; status: string; reason: string | null } | null;
-    thirdApproved?: { userId: string; name: string; status: string; reason: string | null } | null;
-    firstFinalized?: { userId: string; name: string; status: string; reason: string | null } | null;
-    secondFinalized?: { userId: string; name: string; status: string; reason: string | null } | null;
-  } | null;
-
-  id: string;
+  dispatchType: DispatchType | null;
   vehicleDispatchNo: string | null;
-  date: Date | null;
-  vehicleType: string | null;
+  date: Date | string | null;
+  batchNo: string | null;
+  sourceNo: string | null;
+  companyName: string | null;
+  fromName: string | null;
+  toName: string | null;
   vehicleNo: string | null;
+  vehicleType: string | null;
   driverName: string | null;
   driverMobNo: string | null;
-  paymentDiscussed: number | null;
+  transporterName: string | null;
+  totalNetWeight: number | null;
+  outDate: string | null;
   outTime: string | null;
+  expectedReachingDate: string | null;
   reachingTime: string | null;
-  clientName: string | null;
+  arrivedAt: Date | string | null;
+}
+
+/** GET /vehicleDispatches/view/:docid */
+export interface VehicleDispatchViewDto extends VehicleDispatchListItemDto {
+  approvalSummary: unknown;
+  sourceId: string | null;
+  sourceDocumentId: string | null;
+  source: Source | null;
+  party: (NamedRef & { type: Source }) | null;
+  fromLocation: NamedRef | null;
+  fromText: string | null;
+  toLocation: NamedRef | null;
+  customer: NamedRef | null;
+  registeredShippingAddress: string | null;
+  shippingAddress: AddressPayload | null;
+  usesCurrentShippingAddress: boolean;
+  transporterContact: string | null;
+  vehicleCapacityKg: number | null;
+  driverAltMobNo: string | null;
+  licenseNo: string | null;
   receivingPerson: string | null;
-  supervisorName: string | null;
-  accDeptVerification: string | null;
-  transportationBillAmt: number | null;
-  advancePaid: number | null;
   remarksPFL: string | null;
-  feedbackbyTransporterOwner: string | null;
-  netInwardQty: number | null;
-  clientGRNNo: string | null;
-  paymentTerms: string | null;
-  rejection: string | null;
-  shrinkageDump: string | null;
-  companyName: string | null;
+  products: SourceLine[];
+  totals: SourceTotals;
+  arrivedBy: string | null;
+  /** Dispatch created before the three registers existed (no source lines copied). */
+  isLegacy: boolean;
+  /** Approval status of the source document. */
+  sourceStatus: string | null;
+  /** Why the dispatch cannot be approved yet (source not COMPLETE, rejected or deleted); null when it can. */
+  approvalBlockedReason: string | null;
+  /** Set when the dispatch was rejected automatically because its source was rejected or deleted. */
+  autoRejectedReason: string | null;
+  clientName: string | null;
   clientAddress: string | null;
-  deliveryChallanNo: string | null;
 }
 
-/** Returned by GET /vehicleDispatches/:id (edit form) */
-export class VehicleDispatchUpdateFormDto {
+/** GET /vehicleDispatches/update/:id */
+export interface VehicleDispatchUpdateFormDto {
   id: string;
+  dispatchType: DispatchType;
+  sourceId: string | null;
+  sourceNo: string | null;
+  date: Date | string | null;
+  batchNo: string | null;
+  transporterId: string | null;
+  vehicleId: string | null;
+  driverId: string | null;
+  outDate: string | null;
+  outTime: string | null;
+  expectedReachingDate: string | null;
+  reachingTime: string | null;
+  receivingPerson: string | null;
+  remarksPFL: string | null;
+  customerId: string | null;
+  currentShippingAddress: AddressPayload | null;
+  /** Read-only parts for display, taken from the stored dispatch. */
+  display: ResolvedSource;
+}
+
+/** GET /vehicleDispatches/by-source/:dispatchType/:sourceId */
+export interface DispatchSummaryDto {
+  id: string;
+  documentId: string | null;
   vehicleDispatchNo: string | null;
-  companyName: string | null;       // company id
-  date: Date | null;
-  vehicleType: string | null;
+  status: string | null;
   vehicleNo: string | null;
   driverName: string | null;
-  driverMobNo: string | null;
-  paymentDiscussed: number | null;
+  transporterName: string | null;
+  totalNetWeight: number | null;
+  outDate: string | null;
   outTime: string | null;
+  expectedReachingDate: string | null;
   reachingTime: string | null;
-  clientName: string | null;
-  clientAddress: ClientAddressDto | null;
-  receivingPerson: string | null;
-  supervisorName: string | null;
-  accDeptVerification: string | null;
-  transportationBillAmt: number | null;
-  advancePaid: number | null;
-  remarksPFL: string | null;
-  feedbackbyTransporterOwner: string | null;
-  netInwardQty: number | null;
-  clientGRNNo: string | null;
-  paymentTerms: string | null;
-  deliveryChallanNo: string | null; // delivery challan id
-  rejection: string | null;
-  shrinkageDump: string | null;
-}
-
-// ─── Delete result DTOs ───────────────────────────────────────────────────────
-
-export interface DeleteVehicleDispatchResultDto {
-  No: string;
-}
-
-export interface DeletedVehicleDispatchItemDto {
-  id: string;
-  No: string;
-}
-
-export interface BulkDeleteVehicleDispatchResultDto {
-  success: DeletedVehicleDispatchItemDto[];
-  failed: { id: string; reason: string }[];
-  message: string;
+  arrivedAt: Date | string | null;
 }
