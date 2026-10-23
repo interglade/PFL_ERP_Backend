@@ -1,3 +1,4 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from "inversify";
 import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 import { TYPES } from "../../types";
@@ -27,6 +28,8 @@ import { ApproveDealSlipResultDto, BulkDeleteDealSlipResultDto, CreateDealSlipDt
 import { DealSlip } from "../entity/dealSlip.entity";
 import { DealSlipProduct } from "../entity/dealSlipProduct.entity";
 import { PaymentInfoForRFPA } from "../../rfpa/entity/rfpaPayementInfo.entity";
+import { dealSlipAvailableSql, liveGrnForDealSlipExistsSql } from "../dealSlipGrnLink";
+import { isUuid, liveRowSql } from "../../grn/grnLinks.sql";
 
 
 const CACHE_PREFIX = 'dealslip';
@@ -371,27 +374,10 @@ export class DealSlipService {
     
     
 
+      /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
       async generateDealSlipId(): Promise<string> {
-    const now = new Date();
-    const yyyy = now.getFullYear().toString();
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const datePrefix = `DL${yyyy}${mm}${dd}`;
-
-    const result = await this.dealSlipRepository
-      .createQueryBuilder('ds')
-      .select('MAX(ds.dealSlipNo)', 'maxId')
-      .where('ds.dealSlipNo LIKE :prefix', { prefix: `${datePrefix}%` })
-      .getRawOne();
-
-    let nextSeq = 1;
-    if (result?.maxId) {
-      const parsed = parseInt(result.maxId.replace(datePrefix, ''), 10);
-      if (!isNaN(parsed)) nextSeq = parsed + 1;
-    }
-
-    return `${datePrefix}${nextSeq.toString().padStart(5, '0')}`;
-  }
+        return nextDocumentNumber(this.dealSlipRepository.manager, SERIES.dealSlip, `DL${compactDate()}`, 5);
+      }
 
   
   public async approveDealSlip(dealSlipId: string, userId: string, data: { approvalStatus: string; approvalNote?: string }): Promise<ApproveDealSlipResultDto> {
@@ -626,26 +612,40 @@ public async getAllDealSlipsNo(
     page?: number;
     limit?: number;
     search?: string;
+    /** GRN picker (D-6): only approved deal slips not used by a live, non-rejected GRN. */
+    available?: boolean;
+    /** GRN picker: always list this deal slip (the GRN being edited keeps its own slip). */
+    includeId?: string;
   },
   loginUserId: string
 ): Promise<DealSlipNumbersResponseDto> {
+  if (filter?.available) {
+    return this.getAvailableDealSlipNumbers(filter);
+  }
+
   const key = `${CACHE_PREFIX}:nos:${loginUserId}:${JSON.stringify(filter)}`;
   const cached = await this.cacheService.get<any>(key);
   if (cached) return cached;
 
   const where: any = { isDeleted: false };
-  if (typeof filter?.isGrnCreated === "boolean") {
-    where.isGrnCreated = filter.isGrnCreated;
-  }
 
   const dealSlips = await this.dealSlipRepository.find({
-    select: ["id", "dealSlipNo", "isGrnCreated"],
+    select: ["id", "dealSlipNo"],
     where,
     relations: ["createdBy", "rfpa"],
     order: { createdAt: "DESC" }
   });
 
-  const validDealSlips = dealSlips.filter(d => d.id && d.dealSlipNo);
+  let validDealSlips = dealSlips.filter(d => d.id && d.dealSlipNo);
+  // D-6: "GRN created" is derived (a live, non-rejected GRN references the slip); the column is not read.
+  if (typeof filter?.isGrnCreated === "boolean" && validDealSlips.length) {
+    const usedRows: Array<{ id: string }> = await this.dataSource.query(
+      `SELECT ds.id FROM deal_slips ds WHERE ds.id = ANY($1::uuid[]) AND ${liveGrnForDealSlipExistsSql('ds.id')}`,
+      [validDealSlips.map(d => d.id)],
+    );
+    const usedIds = new Set(usedRows.map(r => r.id));
+    validDealSlips = validDealSlips.filter(d => usedIds.has(d.id) === filter.isGrnCreated);
+  }
   if (!validDealSlips.length) {
     const empty = { data: [], pagination: { total: 0, page: filter.page || 1, limit: filter.limit || 10, totalPages: 0 } };
     await this.cacheService.set(key, empty, CACHE_TTL);
@@ -712,9 +712,8 @@ public async getAllDealSlipsNo(
     }
 
     const matchesStatus = !filter?.overAllStatus || documentStatus === filter.overAllStatus;
-    const matchesGrn = typeof filter?.isGrnCreated !== 'boolean' || dealSlip.isGrnCreated === filter.isGrnCreated;
 
-    if (matchesStatus && matchesGrn) {
+    if (matchesStatus) {
       filteredResults.push({ id: dealSlip.id, dealSlipNo: dealSlip.dealSlipNo, documentId, rfpaId: (dealSlip as any).rfpa?.id || null });
     }
   }
@@ -743,6 +742,67 @@ public async getAllDealSlipsNo(
   };
   await this.cacheService.set(key, nosResponse, CACHE_TTL);
   return nosResponse;
+}
+
+/**
+ * Deal slip picker of the GRN form (D-6), all in SQL: live deal slips whose
+ * latest document is COMPLETE and that no live, non-rejected GRN references;
+ * `includeId` is always listed when live (edit mode). `search` matches
+ * `dealSlipNo` (ILIKE) or the exact id. Not cached: the list changes the
+ * moment a GRN is created, rejected or deleted.
+ */
+private async getAvailableDealSlipNumbers(filter: {
+  page?: number;
+  limit?: number;
+  search?: string;
+  includeId?: string;
+}): Promise<DealSlipNumbersResponseDto> {
+  const page = Math.max(1, Number(filter.page) || 1);
+  const limit = Math.min(500, Math.max(1, Number(filter.limit) || 10));
+  const params: unknown[] = [];
+  const conditions: string[] = [];
+
+  const includeId = typeof filter.includeId === 'string' && isUuid(filter.includeId.trim()) ? filter.includeId.trim() : null;
+  let orderBy = `ds."createdAt" DESC`;
+  if (includeId) {
+    params.push(includeId);
+    conditions.push(`((${dealSlipAvailableSql('ds')}) OR (ds.id = $${params.length}::uuid AND ${liveRowSql('ds')}))`);
+    // The included slip comes first so the edit form always finds it.
+    orderBy = `(ds.id = $${params.length}::uuid) DESC, ${orderBy}`;
+  } else {
+    conditions.push(`(${dealSlipAvailableSql('ds')})`);
+  }
+  if (filter.search && String(filter.search).trim()) {
+    const term = String(filter.search).trim();
+    params.push(`%${term}%`, term);
+    conditions.push(`(ds."dealSlipNo" ILIKE $${params.length - 1} OR ds.id::text = $${params.length})`);
+  }
+  conditions.push(`ds."dealSlipNo" IS NOT NULL`);
+  const where = conditions.join(' AND ');
+
+  const countRows: Array<{ total: string }> = await this.dataSource.query(
+    `SELECT COUNT(*)::text AS total FROM deal_slips ds WHERE ${where}`,
+    params,
+  );
+  const total = Number(countRows[0]?.total ?? 0);
+
+  params.push(limit, (page - 1) * limit);
+  const rows: Array<{ id: string; dealSlipNo: string; rfpaId: string | null; documentId: string | null }> = await this.dataSource.query(
+    `SELECT ds.id, ds."dealSlipNo" AS "dealSlipNo", ds.rfpa_id AS "rfpaId",
+            (SELECT d.id::text FROM documents d
+              WHERE d.document_type_id = ds.id::text AND d.type::text = $${params.length + 1} AND d."deletedAt" IS NULL
+              ORDER BY d."createdAt" DESC LIMIT 1) AS "documentId"
+       FROM deal_slips ds
+      WHERE ${where}
+      ORDER BY ${orderBy}
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    [...params, DocumentTypeEnum.DEAL_SLIP],
+  );
+
+  return {
+    data: rows.map(r => ({ id: r.id, dealSlipNo: r.dealSlipNo, documentId: r.documentId ?? null, rfpaId: r.rfpaId ?? null })),
+    pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+  };
 }
 
 public async deleteDealSlip(dealSlipId: string): Promise<{ dealSlipNo: string } | null> {

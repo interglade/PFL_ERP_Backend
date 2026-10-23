@@ -19,8 +19,6 @@ export interface SalesReportFilters {
     companyId?: string;
     fromLocationId?: string;
     toLocationId?: string;
-    driverName?: string;
-    vehicleNo?: string;
     approvalStatus?: string;
     challanNo?: string;
     grnNo?: string;
@@ -63,10 +61,6 @@ export interface SalesDetailedReport {
     deliveryAddress: string;
     poNumber: string;
     grnNo: string;
-    driverName: string;
-    driverContact: string;
-    vehicleNo: string;
-    licenseNo: string;
     totalProductAmount: number;
     totalPackagingAmount: number;
     netProductWeight: number;
@@ -154,14 +148,6 @@ export interface SalesSummary {
         totalAmount: number;
         totalNetWeight: number;
         dcCount: number;
-    }>;
-
-    driverPerformance: Array<{
-        driverName: string;
-        totalDeliveries: number;
-        totalAmount: number;
-        totalNetWeight: number;
-        averageDeliveryValue: number;
     }>;
 }
 
@@ -302,18 +288,6 @@ export class SalesCrystalReportService {
             });
         }
 
-        if (filters.driverName) {
-            queryBuilder.andWhere('dc.driverName LIKE :driverName', {
-                driverName: `%${filters.driverName}%`,
-            });
-        }
-
-        if (filters.vehicleNo) {
-            queryBuilder.andWhere('dc.vehicleNo = :vehicleNo', {
-                vehicleNo: filters.vehicleNo,
-            });
-        }
-
         if (filters.approvalStatus) {
             queryBuilder.andWhere('dc.approvalStatus = :approvalStatus', {
                 approvalStatus: filters.approvalStatus,
@@ -439,10 +413,6 @@ export class SalesCrystalReportService {
                 `${dc.deliveryAddress?.address1 || ''}, ${dc.deliveryAddress?.location || ''}, ${dc.deliveryAddress?.state || ''} ${dc.deliveryAddress?.pincode || ''}`.trim() : '',
             poNumber: dc.poNumber || '',
             grnNo: dc.grnNo?.grnNo || '',
-            driverName: dc.driverName || '',
-            driverContact: dc.contactNo || '',
-            vehicleNo: dc.vehicleNo || '',
-            licenseNo: dc.licenseNo || '',
             totalProductAmount: Number(dc.totalProductAmount) || 0,
             totalPackagingAmount: Number(dc.totalPackagingMaterialAmount) || 0,
             netProductWeight: Number(dc.netProductWeight) || 0,
@@ -542,9 +512,6 @@ export class SalesCrystalReportService {
         // Location-wise breakdown
         const locationWiseBreakdown = await this.getLocationBreakdown(filters);
 
-        // Driver performance
-        const driverPerformance = await this.getDriverPerformance(filters);
-
         return {
             totalDeliveryChallans,
             totalSalesAmount,
@@ -559,7 +526,6 @@ export class SalesCrystalReportService {
             yearlyTrends,
             customTrends,
             locationWiseBreakdown,
-            driverPerformance,
         };
     }
 
@@ -820,40 +786,6 @@ export class SalesCrystalReportService {
             totalAmount: Number(r.totalAmount) || 0,
             totalNetWeight: Number(r.totalNetWeight) || 0,
             dcCount: Number(r.dcCount) || 0,
-        }));
-    }
-
-    /**
-     * Get driver performance
-     */
-    private async getDriverPerformance(filters: SalesReportFilters, limit: number = 10) {
-        const queryBuilder = this.dcRepository
-            .createQueryBuilder('dc')
-            .select('dc.driverName', 'driverName')
-            .addSelect('COUNT(dc.id)', 'totalDeliveries')
-            .addSelect('SUM(dc.totalProductAmount)', 'totalAmount')
-            .addSelect('SUM(dc.netProductWeight)', 'totalNetWeight')
-            .addSelect('AVG(dc.totalProductAmount)', 'averageDeliveryValue')
-            .where('dc.driverName IS NOT NULL')
-            .groupBy('dc.driverName')
-            .orderBy('SUM(dc.totalProductAmount)', 'DESC')
-            .limit(limit);
-
-        if (filters.startDate && filters.endDate) {
-            queryBuilder.andWhere('dc.createdAt BETWEEN :startDate AND :endDate', {
-                startDate: filters.startDate,
-                endDate: filters.endDate,
-            });
-        }
-
-        const results = await queryBuilder.getRawMany();
-
-        return results.map((r) => ({
-            driverName: r.driverName || 'Unknown',
-            totalDeliveries: Number(r.totalDeliveries) || 0,
-            totalAmount: Number(r.totalAmount) || 0,
-            totalNetWeight: Number(r.totalNetWeight) || 0,
-            averageDeliveryValue: Number(r.averageDeliveryValue) || 0,
         }));
     }
 

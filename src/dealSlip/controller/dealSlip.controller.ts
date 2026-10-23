@@ -404,13 +404,15 @@ export class DealSlipController {
     try {
 
       const isGrnCreated = req.query.isGrnCreated === "true" ? true : req.query.isGrnCreated === "false" ? false : undefined;
+      // D-6 GRN picker: available=true -> approved and unused; includeId keeps the edited GRN's own slip.
+      const available = req.query.available === "true";
+      const includeId = typeof req.query.includeId === "string" && req.query.includeId.trim() ? req.query.includeId.trim() : undefined;
       const userId = res.locals.user.id;
 
+      const dealSlips: DealSlipNumbersResponseDto = await this.dealSlipService.getAllDealSlipsNo({...req.query, isGrnCreated, available, includeId},userId);
       
-
-      const dealSlips: DealSlipNumbersResponseDto = await this.dealSlipService.getAllDealSlipsNo({...req.query, isGrnCreated},userId);
-      
-      if (!dealSlips || dealSlips.pagination.total === 0) {
+      // The picker path answers an empty list with 200 (nothing available is a normal state).
+      if (!available && (!dealSlips || dealSlips.pagination.total === 0)) {
         ControllerLogger.logOperationFailed('Get All', 'Deal Slip Numbers', 'No records found', req, res);
         return next(new AppError(404, "No Deal Slips found"));
       }

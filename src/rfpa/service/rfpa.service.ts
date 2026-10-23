@@ -1,3 +1,4 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from 'inversify';
 import { TYPES } from '../../types';
 
@@ -239,27 +240,9 @@ export class RfpaService {
 
 
 
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   async generateRFPAId(): Promise<string> {
-    const now = new Date();
-    const yyyy = now.getFullYear().toString();
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const datePrefix = `RFPA${yyyy}${mm}${dd}`;
-
-    const result = await this.rfpaRepository
-      .createQueryBuilder('rfpa')
-      .select(`MAX(rfpa.rfpaId)`, 'maxId')
-      .where('rfpa.rfpaId LIKE :prefix', { prefix: `${datePrefix}%` })
-      .getRawOne();
-
-    let nextSeq = 1;
-    if (result?.maxId) {
-      const suffix = result.maxId.replace(datePrefix, '');
-      const parsed = parseInt(suffix, 10);
-      if (!isNaN(parsed)) nextSeq = parsed + 1;
-    }
-
-    return `${datePrefix}${nextSeq.toString().padStart(5, '0')}`;
+    return nextDocumentNumber(this.rfpaRepository.manager, SERIES.rfpa, `RFPA${compactDate()}`, 5);
   }
 
 

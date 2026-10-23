@@ -1,3 +1,9 @@
+import { allocationRequestsByLine, releaseDcStock, reserveDcStock } from '../../../inventoryStock/batch/batchDocuments';
+import { priceDcLines } from '../../deliverychllan/service/dcPricing';
+import { resolveDcLines } from '../../deliverychllan/service/dcStock';
+import { refId as refIdOf } from '../../../receiving/receiving.helpers';
+import { DocumentTypeEnum as ApprovalDocType } from '../../../approvalFlow/entity/docuemnt.entity';
+import { assertDcChangeable } from '../../deliverychllan/service/dcChangeGuard';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 import { TYPES } from '../../../types';
@@ -90,7 +96,16 @@ export class OtherDeliveryChallanService {
     await queryRunner.startTransaction();
 
     try {
+      // D-13: the Other DC is the challan for customers who are not registered, so the
+      // receiving customer's name must be recorded on it.
+      if (!String(data.customerName || data.customer || '').trim()) {
+        throw new AppError(400, 'Enter the name of the customer receiving the goods');
+      }
+      // Every line needs a quantity and a net weight (dcStock.ts); batch stock is reserved after the save.
+      await resolveDcLines(queryRunner.manager, data.deliveryChallanProducts);
+
       data.challanNo = await this.customerDeliveryChallanService.generateVoucherNo(data.type || 'O');
+      data.totalProductAmount = priceDcLines(data.deliveryChallanProducts);
 
       const challanData: any = {
         challanNo: data.challanNo,
@@ -99,11 +114,6 @@ export class OtherDeliveryChallanService {
         offices: data.offices ? { id: data.offices } : undefined,
         grnNo: data.grnNo ? { id: data.grnNo } : undefined,
         fromLocation: data.fromLocation ? { id: data.fromLocation } : undefined,
-        driverName: data.driverName,
-        contactNo: data.contactNo,
-        altContactNo: data.altContactNo,
-        vehicleNo: data.vehicleNo,
-        licenseNo: data.licenseNo,
         rmn: data.rmn,
         receiverName: data.receiverName,
         transitInsuranceNo: data.transitInsuranceNo || null,
@@ -112,7 +122,6 @@ export class OtherDeliveryChallanService {
         netPackagingMaterialWeight: data.netPackagingMaterialWeight,
         totalPackagingMaterialAmount: data.totalPackagingMaterialAmount,
         totalAmtInWords: data.totalAmtInWords,
-        requestingDepartment: data.requestingDepartment,
         remark: data.remark,
         anyAttachment: data.anyAttachment,
         createdBy: data.createdBy ? { id: data.createdBy } : undefined,
@@ -143,6 +152,14 @@ export class OtherDeliveryChallanService {
       const savedChallanArr = await queryRunner.manager.save(challan);
       const savedChallan = Array.isArray(savedChallanArr) ? savedChallanArr[0] : savedChallanArr;
 
+      // Hold batch stock at the from-location: chosen batches per line or oldest first.
+      await reserveDcStock(
+        queryRunner.manager,
+        ApprovalDocType.DC_TYPE_OTHER,
+        savedChallan.id,
+        allocationRequestsByLine(savedChallan.deliveryChallanProducts, data.deliveryChallanProducts),
+      );
+
       const document = await this.documentbService.createDocument({
         type: DocumentTypeEnum.DC_TYPE_OTHER,
         docDef: DocDefEnum.OPERATION,
@@ -163,8 +180,9 @@ export class OtherDeliveryChallanService {
     } catch (error: any) {
       // Rollback transaction - undo all changes
       await queryRunner.rollbackTransaction();
-      console.error('Error creating GRN:', error);
-      throw new Error('Failed to create GRN');
+      logger.error('Error creating other delivery challan', { error });
+      if (error instanceof AppError) throw error;
+      throw new Error('Failed to create Other Delivery Challan');
     } finally {
       // Release query runner
       await queryRunner.release();
@@ -201,8 +219,7 @@ export class OtherDeliveryChallanService {
       .leftJoin('challan.fromLocation', 'fromLocation')
       .select([
         'challan.id', 'challan.challanNo', 'challan.transitInsuranceNo', 'challan.rmn',
-        'challan.driverName', 'challan.contactNo', 'challan.altContactNo',
-        'challan.vehicleNo', 'challan.licenseNo', 'challan.receiverName',
+        'challan.receiverName',
         'challan.totalProductAmount', 'challan.netProductWeight',
         'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
         'challan.totalAmtInWords', 'challan.remark', 'challan.anyAttachment', 'challan.createdAt',
@@ -233,11 +250,6 @@ export class OtherDeliveryChallanService {
       office: challan.offices?.name ?? null,
       grnNo: challan.grnNo?.grnNo ?? null,
       fromLocation: challan.fromLocation?.name ?? null,
-      driverName: challan.driverName ?? null,
-      contactNo: challan.contactNo ?? null,
-      altContactNo: challan.altContactNo ?? null,
-      vehicleNo: challan.vehicleNo ?? null,
-      licenseNo: challan.licenseNo ?? null,
       receiverName: challan.receiverName ?? null,
       rmn: challan.rmn ?? null,
       transitInsuranceNo: challan.transitInsuranceNo ?? null,
@@ -306,11 +318,10 @@ export class OtherDeliveryChallanService {
       .leftJoin('challan.fromLocation', 'fromLocation')
       .select([
         'challan.id', 'challan.challanNo', 'challan.transitInsuranceNo', 'challan.rmn',
-        'challan.driverName', 'challan.contactNo', 'challan.altContactNo',
-        'challan.vehicleNo', 'challan.licenseNo', 'challan.receiverName',
+        'challan.receiverName',
         'challan.totalProductAmount', 'challan.netProductWeight',
         'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
-        'challan.totalAmtInWords', 'challan.requestingDepartment', 'challan.approvalStatus',
+        'challan.totalAmtInWords', 'challan.approvalStatus',
         'challan.remark', 'challan.anyAttachment', 'challan.createdAt',
         'challan.customer', 'challan.customerContactNo', 'challan.customerEmail',
         'company.id', 'office.id', 'grn.id', 'fromLocation.id',
@@ -339,11 +350,6 @@ export class OtherDeliveryChallanService {
       grnNo: challan.grnNo?.id ?? null,
       fromLocation: challan.fromLocation?.id ?? null,
       rmn: challan.rmn ?? null,
-      driverName: challan.driverName ?? null,
-      contactNo: challan.contactNo ?? null,
-      altContactNo: challan.altContactNo ?? null,
-      vehicleNo: challan.vehicleNo ?? null,
-      licenseNo: challan.licenseNo ?? null,
       receiverName: challan.receiverName ?? null,
       transitInsuranceNo: challan.transitInsuranceNo ?? null,
       totalProductAmount: challan.totalProductAmount ?? null,
@@ -351,7 +357,6 @@ export class OtherDeliveryChallanService {
       netPackagingMaterialWeight: challan.netPackagingMaterialWeight ?? null,
       totalPackagingMaterialAmount: challan.totalPackagingMaterialAmount ?? null,
       totalAmtInWords: challan.totalAmtInWords ?? null,
-      requestingDepartment: challan.requestingDepartment ?? null,
       approvalStatus: challan.approvalStatus ?? null,
       remark: challan.remark ?? null,
       anyAttachment: challan.anyAttachment ?? null,
@@ -421,11 +426,10 @@ export class OtherDeliveryChallanService {
         .leftJoin('challan.customerAddress', 'customerAddress')
         .select([
           'challan.id', 'challan.challanNo', 'challan.transitInsuranceNo', 'challan.rmn',
-          'challan.driverName', 'challan.contactNo', 'challan.altContactNo',
-          'challan.vehicleNo', 'challan.licenseNo', 'challan.receiverName',
+          'challan.receiverName',
           'challan.totalProductAmount', 'challan.netProductWeight',
           'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
-          'challan.totalAmtInWords', 'challan.requestingDepartment', 'challan.approvalStatus',
+          'challan.totalAmtInWords', 'challan.approvalStatus',
           'challan.remark', 'challan.anyAttachment',
           'challan.customer', 'challan.customerContactNo', 'challan.customerEmail',
           'company.name', 'office.name', 'grn.grnNo', 'fromLocation.name',
@@ -468,11 +472,6 @@ export class OtherDeliveryChallanService {
             ? [addr.address1, addr.address2, addr.location, addr.city, addr.state, addr.pincode]
                 .filter(Boolean).join(' ')
             : null,
-          driverName: rd.driverName ?? null,
-          contactNo: rd.contactNo ?? null,
-          altContactNo: rd.altContactNo ?? null,
-          vehicleNo: rd.vehicleNo ?? null,
-          licenseNo: rd.licenseNo ?? null,
           receiverName: rd.receiverName ?? null,
           transitInsuranceNo: rd.transitInsuranceNo ?? null,
           totalProductAmount: rd.totalProductAmount ?? null,
@@ -480,7 +479,6 @@ export class OtherDeliveryChallanService {
           netPackagingMaterialWeight: rd.netPackagingMaterialWeight ?? null,
           totalPackagingMaterialAmount: rd.totalPackagingMaterialAmount ?? null,
           totalAmtInWords: rd.totalAmtInWords ?? null,
-          requestingDepartment: rd.requestingDepartment ?? null,
           approvalStatus: rd.approvalStatus ?? null,
           remark: rd.remark ?? null,
           anyAttachment: rd.anyAttachment ?? null,
@@ -497,37 +495,47 @@ export class OtherDeliveryChallanService {
   }
 
   async update(id: string, data: UpdateODCDto & Record<string, any>): Promise<OtherDeliveryChallan | null> {
+    await assertDcChangeable(this.dataSource.manager, ApprovalDocType.DC_TYPE_OTHER, id, 'edit');
+    if (Array.isArray(data.deliveryChallanProducts)) {
+      // Edited lines of a pending DC: same stock check as on create, this DC excluded.
+      await resolveDcLines(this.dataSource.manager, data.deliveryChallanProducts);
+      data.totalProductAmount = priceDcLines(data.deliveryChallanProducts);
+    }
     try {
       const challan = await this.challanRepository.findOne({ where: { id } });
       if (!challan) return null;
 
       Object.assign(challan, data);
-      const saved = await this.challanRepository.save(challan);
+      const saved = await this.dataSource.transaction(async (manager) => {
+        const result = await manager.save(challan);
+        if (Array.isArray(data.deliveryChallanProducts) || data.fromLocation) {
+          await reserveDcStock(
+            manager,
+            ApprovalDocType.DC_TYPE_OTHER,
+            id,
+            allocationRequestsByLine(result.deliveryChallanProducts, data.deliveryChallanProducts),
+          );
+        }
+        return result;
+      });
       await this.invalidateCache(id);
       return saved;
     } catch (err) {
       logger.error(`Error updating other delivery challan with ID: ${id}`, {
         error: err,
       });
+      if (err instanceof AppError) throw err;
       return null;
     }
   }
 
+  /** Single delete: the same soft delete as the bulk path (document too, guards). */
   async delete(id: string): Promise<DeleteResultDto | null> {
-   const chalan=await this.challanRepository.findOne({where:{id}});
-   if (!chalan) throw new AppError(404, `AQR with ID ${id} not found`);
-    try {
-      const result = await this.challanRepository.softDelete(id);
-      await this.challanRepository.update(id, { isDeleted: true } as any);
-      if (result.affected !== 0) await this.invalidateCache(id);
-      //return result.affected !== 0;
-    } catch (err) {
-      logger.error(`Error deleting other delivery challan with ID: ${id}`, {
-        error: err,
-      });
-      
-    }
-    return {No:chalan.challanNo};
+    const chalan = await this.challanRepository.findOne({ where: { id } });
+    if (!chalan) throw new AppError(404, `Other DC with ID ${id} not found`);
+    const result = await this.deleteMultipleOtherDeliveryChallans([id]);
+    if (result.failed.length > 0) throw new AppError(409, result.failed[0].reason);
+    return { No: chalan.challanNo };
   }
 
   public async deleteMultipleOtherDeliveryChallans(ids: string[]): Promise<BulkDeleteResultDto> {
@@ -541,6 +549,7 @@ export class OtherDeliveryChallanService {
           failed.push({ id, reason: 'Other Delivery Challan not found' });
           continue;
         }
+        await assertDcChangeable(this.dataSource.manager, ApprovalDocType.DC_TYPE_OTHER, id, 'delete');
 
         // Soft delete related document
         const relatedDocument = await this.documentbRepository.findOne({
@@ -551,9 +560,10 @@ export class OtherDeliveryChallanService {
           await this.documentbRepository.update(relatedDocument.id, { isDeleted: true } as any);
         }
 
-        // Soft delete challan
+        // Soft delete challan; whatever it held goes back to stock.
         await this.challanRepository.softDelete(challan.id);
         await this.challanRepository.update(challan.id, { isDeleted: true } as any);
+        await releaseDcStock(this.dataSource.manager, ApprovalDocType.DC_TYPE_OTHER, challan.id);
 
         await this.invalidateCache(id);
         success.push({id,No:challan.challanNo});

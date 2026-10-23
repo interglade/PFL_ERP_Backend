@@ -88,6 +88,13 @@ const TYPES = {
   DriversService: Symbol.for("DriversService"),
   DriverRepository: Symbol.for("DriverRepository"),
   DriverController: Symbol.for("DriverController"),
+  //-----------------------transporter / vehicle registration----------------
+  TransporterService: Symbol.for("TransporterService"),
+  TransporterRepository: Symbol.for("TransporterRepository"),
+  TransporterController: Symbol.for("TransporterController"),
+  VehicleService: Symbol.for("VehicleService"),
+  VehicleRepository: Symbol.for("VehicleRepository"),
+  VehicleController: Symbol.for("VehicleController"),
   //-------------------------productClassification--------------------
   ProductClassificationService: Symbol.for("ProductClassificationService"),
   ProductClassificationRepository: Symbol.for(
@@ -476,6 +483,9 @@ RegistrationReportsController:Symbol.for("RegistrationReportsController"),
   ReceivingStatusService: Symbol.for("ReceivingStatusService"),
   ReceivingGuardService: Symbol.for("ReceivingGuardService"),
   ReceivingController: Symbol.for("ReceivingController"),
+  StockBatchController: Symbol.for("StockBatchController"),
+  StockAdjustmentService: Symbol.for("StockAdjustmentService"),
+  DcDeliveryController: Symbol.for("DcDeliveryController"),
 
   // Admin Control Center dashboard
   AdminControlCenterController: Symbol.for("AdminControlCenterController"),

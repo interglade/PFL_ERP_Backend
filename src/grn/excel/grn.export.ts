@@ -18,6 +18,7 @@ import {
   BRANCH_COLUMNS,
   COMPANY_COLUMNS,
   FARMER_COLUMNS,
+  PACKING_MATERIAL_COLUMNS,
   PRODUCT_COLUMNS,
   USER_COLUMNS,
   VARIANT_COLUMNS,
@@ -57,6 +58,9 @@ export const GRN_EXPORT: ExportDefinition = {
       },
       columns: [
         { header: 'GRN No', maps: 'grns.grnNo', get: (r) => r.record.grnNo },
+        { header: 'Batch No', maps: 'grns.batchNo', get: (r) => r.record.batchNo },
+        { header: 'Total Gross Weight', maps: 'grns.totalGrossWeight', type: 'quantity', get: (r) => r.record.totalGrossWeight },
+        { header: 'Total Net Weight', maps: 'grns.totalNetWeight', type: 'quantity', get: (r) => r.record.totalNetWeight },
         { header: 'GRN Type', maps: 'grns.grnType', get: (r) => r.record.grnType },
         { header: 'Purchase Type', maps: 'grns.purchaseType', get: (r) => r.record.purchaseType },
         { header: 'Location Type', maps: 'grns.locationType', get: (r) => r.record.locationType },
@@ -76,10 +80,8 @@ export const GRN_EXPORT: ExportDefinition = {
         { header: 'Total Amount', maps: 'grns.totalAmt', type: 'amount', get: (r) => r.record.totalAmt },
         { header: 'Amount In Words', maps: 'grns.amtWords', get: (r) => r.record.amtWords },
         { header: 'Amount Status', maps: 'grns.ammountStatus', get: (r) => r.record.ammountStatus },
-        { header: 'Vehicle No', maps: 'grns.vehicleNo', get: (r) => r.record.vehicleNo },
-        { header: 'Received Through', maps: 'grns.receivedThrough', get: (r) => r.record.receivedThrough },
         { header: 'Crates In', maps: 'grns.cratesIn', type: 'quantity', get: (r) => r.record.cratesIn },
-        { header: 'Delivery Receiving Person', maps: 'grns.deliveryReceivingPerson', get: (r) => r.record.deliveryReceivingPerson },
+        { header: 'Receiving Person', maps: 'grns.receivingPerson', get: (r) => r.record.receivingPerson },
         { header: 'Security Person', maps: 'grns.securityPerson', get: (r) => r.record.securityPerson },
         { header: 'RMN', maps: 'grns.rmn', get: (r) => r.record.rmn },
         { header: 'Purchased By', maps: 'grns.purchasedBy', get: (r) => r.record.purchasedBy },
@@ -106,6 +108,7 @@ export const GRN_EXPORT: ExportDefinition = {
           .innerJoin('line.grn', 'parent')
           .addSelect(['parent.id', 'parent.grnNo']);
         joinProductLine(qb, 'line');
+        joinSelect(qb, 'line.packagingMaterial', 'packagingMaterial', PACKING_MATERIAL_COLUMNS);
         return qb.where('parent.id IN (:...ids)', { ids: ctx.ids }).orderBy('line.createdAt', 'ASC').getMany();
       },
       columns: [
@@ -118,6 +121,7 @@ export const GRN_EXPORT: ExportDefinition = {
         { header: 'Revised Rate', maps: 'grn_products.revisedRate', type: 'amount', get: (l: GrnProduct) => l.revisedRate },
         { header: 'Amount', maps: 'grn_products.amount', type: 'amount', get: (l: GrnProduct) => l.amount },
         { header: 'Gross Weight', maps: 'grn_products.grossWeight', type: 'quantity', get: (l: GrnProduct) => l.grossWeight },
+        { header: 'Packaging Material', maps: 'grn_products.packagingMaterial -> packing_material.packagingMaterialName', get: (l: GrnProduct) => l.packagingMaterial?.packagingMaterialName },
         { header: 'Packing Material Weight', maps: 'grn_products.packingMaterialWeight', type: 'quantity', get: (l: GrnProduct) => l.packingMaterialWeight },
         { header: 'Net Weight', maps: 'grn_products.netWeight', type: 'quantity', get: (l: GrnProduct) => l.netWeight },
         { header: 'Return To Vendor', maps: 'grn_products.rtv', type: 'boolean', get: (l: GrnProduct) => l.rtv },

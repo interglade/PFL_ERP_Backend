@@ -199,7 +199,7 @@ describe('validateAqrLines — complete-or-nothing', () => {
     expect(validateAqrLines([
       { product: { id: TOMATO }, variant: { id: GRADE_A }, arrivedQty: 10, samplingQty: 1 },
       { product: { id: TOMATO }, variant: { id: GRADE_A }, arrivedQty: 10, samplingQty: 1 },
-    ])).toEqual(['Product line 2: repeats the product of line 1']);
+    ])).toEqual(['Product line 2: repeats the product and unit of line 1']);
     expect(validateAqrLines([
       { product: { id: TOMATO }, variant: { id: GRADE_A }, arrivedQty: 10, samplingQty: 1 },
       { product: { id: TOMATO }, variant: null, arrivedQty: 10, samplingQty: 1 },

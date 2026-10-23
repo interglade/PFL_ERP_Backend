@@ -39,8 +39,33 @@ export class AqrProduct extends Model {
   @Column("decimal", { precision: 12, scale: 3, nullable: true })
   receivedQty: number;
 
+  /** Net kg that arrived (weighed at the receiving CC/DC). */
   @Column("decimal", { precision: 12, scale: 3, nullable: true })
   arrivedQty: number;
+
+  /** Quantity of the source line in its unit (boxes, crates …) at the time the AQR was made. */
+  @Column("decimal", { precision: 12, scale: 3, nullable: true })
+  sentUnits: number | null;
+
+  /** Units that arrived (counted lines); null for lines counted in kg. */
+  @Column("decimal", { precision: 12, scale: 3, nullable: true })
+  arrivedUnits: number | null;
+
+  /** Transit loss, set by the server: sent − arrived kg (negative = excess). */
+  @Column("decimal", { precision: 12, scale: 3, nullable: true })
+  lossKg: number | null;
+
+  /** Transit loss in units: sent − arrived units. */
+  @Column("decimal", { precision: 12, scale: 3, nullable: true })
+  lossUnits: number | null;
+
+  /** Transit loss value: lost units × unit price of the source line. */
+  @Column("decimal", { precision: 14, scale: 2, nullable: true })
+  lossValue: number | null;
+
+  /** Batch of the source line (transfer lines carry the batch the Transfer DC took). */
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  batchNo: string | null;
 
   @Column("decimal", { precision: 12, scale: 3, nullable: true })
   samplingQty: number;

@@ -11,6 +11,9 @@ import {
 } from 'inversify-express-utils';
 import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
 import { inject } from 'inversify';
+import { DataSource } from 'typeorm';
+import { NotificationService } from '../../notification/service/notification.service';
+import { documentStatusOf, notifyApprovalTransition } from '../../notification/flowNotifications';
 import { TYPES } from '../../types';
 
 import { NextFunction, Request, Response } from 'express';
@@ -48,8 +51,15 @@ export class DocumentbController {
     @inject(TYPES.DocDoubleApproverService)
     private docDoubleApproveService: DocDoubleApproverService,
     @inject(TYPES.DocSingalApproverService)
-    private docSingleApproveService: DocSingalApproverService
+    private docSingleApproveService: DocSingalApproverService,
+    @inject(TYPES.DataSource) private readonly dataSource: DataSource,
+    @inject(TYPES.NotificationService) private readonly notificationService: NotificationService,
   ) { }
+
+  /** D-9: after an approval action, tell the people of the documents that can now move on. */
+  private async notifyTransition(documentId: string, before: string | null, userId: string): Promise<void> {
+    await notifyApprovalTransition(this.dataSource, this.notificationService, documentId, before, userId);
+  }
 
 
   
@@ -71,12 +81,14 @@ export class DocumentbController {
         return;
       }
 
+      const before = await documentStatusOf(this.dataSource, documentId);
       await this.docuemntbService.approveDocumentStep(
         documentId,
         userId,
         status as ApproverStatus,
         reason,
       );
+      await this.notifyTransition(documentId, before, userId);
 
       res.status(200).json({ message: `Document ${status} successfully` });
     } catch (error: any) {
@@ -102,12 +114,14 @@ export class DocumentbController {
         return;
       }
 
+      const before = await documentStatusOf(this.dataSource, documentId);
       await this.docDoubleApproveService.approveDocumentStepForDoubleLevel(
         documentId,
         userId,
         status as ApproverStatus,
         reason,
       );
+      await this.notifyTransition(documentId, before, userId);
 
       res.status(200).json({ message: `Document ${status} successfully` });
     } catch (error: any) {
@@ -130,17 +144,21 @@ export class DocumentbController {
         return;
       }
 
+      const before = await documentStatusOf(this.dataSource, documentId);
       await this.docSingleApproveService.approveDocumentStepForSingleLevel(
         documentId,
         userId,
         status as ApproverStatus,
         reason,
       );
+      await this.notifyTransition(documentId, before, userId);
 
       res.status(200).json({ message: `Document ${status} successfully` });
     } catch (error: any) {
       console.error('Error approving document:', error.message);
-      res.status(500).json({ message: error.message || 'Internal server error' });
+      // Deliberate refusals (e.g. a dispatch whose source is not approved yet) keep their 4xx status.
+      const code = Number(error?.statusCode);
+      res.status(code >= 400 && code < 500 ? code : 500).json({ message: error.message || 'Internal server error' });
     }
   }
 

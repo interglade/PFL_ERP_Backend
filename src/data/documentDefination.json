@@ -57,7 +57,7 @@
     },
 
     {
-      "uniqueKey": "return-by-vendor",
+      "uniqueKey": "return-to-vendor",
       "documentType": "Operation",
       "name": "Return To Vendor"
     },

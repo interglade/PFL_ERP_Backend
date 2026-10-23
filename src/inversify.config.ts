@@ -61,6 +61,15 @@ import { ProductController } from "./product/createproduct/controller/product.co
 import { DriversService } from "./driver/service/driver.service";
 import { DriverRepository } from "./driver/repository/driver.repository";
 import { DriverController } from "./driver/controller/drivers.controller";
+import { Drivers } from "./driver/entity/driver.entity";
+import { TransporterService } from "./transporter/service/transporter.service";
+import { TransporterRepository } from "./transporter/repository/transporter.repository";
+import { TransporterController } from "./transporter/controller/transporter.controller";
+import { Transporter } from "./transporter/entity/transporter.entity";
+import { VehicleService } from "./vehicle/service/vehicle.service";
+import { VehicleRepository } from "./vehicle/repository/vehicle.repository";
+import { VehicleController } from "./vehicle/controller/vehicle.controller";
+import { Vehicle } from "./vehicle/entity/vehicle.entity";
 import { ProductClassificationService} from "./product/productClassification/service/product_classification.service";
 import { ProductClassificationController } from "./product/productClassification/controller/productClassification.controller";
 import { ProductClassificationRepository } from "./product/productClassification/repository/product_classification.repository";
@@ -374,6 +383,9 @@ import { GrnProductHistory } from "./grn/entity/grnProductHistory.entity";
 import { ReceivingStatusService } from "./receiving/service/receivingStatus.service";
 import { ReceivingGuardService } from "./receiving/service/receivingGuard.service";
 import { ReceivingController } from "./receiving/controller/receiving.controller";
+import { StockBatchController } from "./inventoryStock/controller/stockBatch.controller";
+import { StockAdjustmentService } from "./inventoryStock/adjustment/stockAdjustment.service";
+import { DcDeliveryController } from "./deliveryChallans/customerDeliveryChllan/controller/dcDelivery.controller";
 
 const container = new Container();
 //socket server
@@ -632,9 +644,25 @@ container
  
 
 //-------------------------driver------------------------------
-container.bind<DriversService>(TYPES.DriversService).to(DriversService);
-container.bind<DriverRepository>(TYPES.DriverRepository).to(DriverRepository).inSingletonScope();
+container.bind<DriversService>(TYPES.DriversService).to(DriversService).inSingletonScope();
+container.bind<DriverRepository>(TYPES.DriverRepository).toDynamicValue((context) => {
+  const dataSource = context.container.get<DataSource>(TYPES.DataSource);
+  return dataSource.getRepository(Drivers).extend(DriverRepository);
+}).inSingletonScope();
 container.bind<DriverController>(TYPES.DriverController).to(DriverController).inSingletonScope();
+//-------------------------transporter / vehicle registration------------------------------
+container.bind<TransporterService>(TYPES.TransporterService).to(TransporterService).inSingletonScope();
+container.bind<TransporterRepository>(TYPES.TransporterRepository).toDynamicValue((context) => {
+  const dataSource = context.container.get<DataSource>(TYPES.DataSource);
+  return dataSource.getRepository(Transporter).extend(TransporterRepository);
+}).inSingletonScope();
+container.bind<TransporterController>(TYPES.TransporterController).to(TransporterController).inSingletonScope();
+container.bind<VehicleService>(TYPES.VehicleService).to(VehicleService).inSingletonScope();
+container.bind<VehicleRepository>(TYPES.VehicleRepository).toDynamicValue((context) => {
+  const dataSource = context.container.get<DataSource>(TYPES.DataSource);
+  return dataSource.getRepository(Vehicle).extend(VehicleRepository);
+}).inSingletonScope();
+container.bind<VehicleController>(TYPES.VehicleController).to(VehicleController).inSingletonScope();
 //-------------------------------productclassfication------------------------------
 container.bind<ProductClassificationService>(TYPES.ProductClassificationService).to(ProductClassificationService);
 container.bind<ProductClassificationController>(TYPES.ProductClassificationController).to(ProductClassificationController);
@@ -1376,6 +1404,9 @@ container.bind<GrnProductHistoryService>(TYPES.GrnProductHistoryService).to(GrnP
 container.bind<ReceivingStatusService>(TYPES.ReceivingStatusService).to(ReceivingStatusService).inSingletonScope();
 container.bind<ReceivingGuardService>(TYPES.ReceivingGuardService).to(ReceivingGuardService).inSingletonScope();
 container.bind<ReceivingController>(TYPES.ReceivingController).to(ReceivingController).inSingletonScope();
+container.bind<StockBatchController>(TYPES.StockBatchController).to(StockBatchController).inSingletonScope();
+container.bind<StockAdjustmentService>(TYPES.StockAdjustmentService).to(StockAdjustmentService).inSingletonScope();
+container.bind<DcDeliveryController>(TYPES.DcDeliveryController).to(DcDeliveryController).inSingletonScope();
 
 // Admin Control Center dashboard
 container.bind<AccFiltersService>(TYPES.AccFiltersService).to(AccFiltersService).inSingletonScope();

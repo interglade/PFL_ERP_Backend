@@ -33,6 +33,10 @@ export class InvoiceProduct extends Model {
   @ManyToOne(() => UOM, { cascade: true, nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'saleuom_id' })
   saleUoM: UOM;
+  /** 'per_unit' (quantity × unit price) or 'per_kg' (net kg × unit price). */
+  @Column({ type: 'varchar', length: 10, default: 'per_unit' })
+  pricingBasis: 'per_unit' | 'per_kg';
+
  @Column('decimal', { precision: 20, scale: 4, nullable: true })
   amount: number;
   @Column('decimal', { precision: 20, scale: 4, nullable: true })

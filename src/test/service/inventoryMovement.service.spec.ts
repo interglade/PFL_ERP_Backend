@@ -1,4 +1,14 @@
 import 'reflect-metadata';
+import { OtherDeliveryChallan } from '../../deliveryChallans/otherDeliveryChallan/entity/otherDeliveryChallan.entity';
+import { consumeDcStock, postInwardToBatches } from '../../inventoryStock/batch/batchDocuments';
+
+// Batch stock has its own specs (stockBatch.core.spec.ts); here only the
+// roll-up and the hand-over to the batch layer are checked.
+jest.mock('../../inventoryStock/batch/batchDocuments', () => ({
+  ...jest.requireActual('../../inventoryStock/batch/batchDocuments'),
+  postInwardToBatches: jest.fn(async () => undefined),
+  consumeDcStock: jest.fn(async () => undefined),
+}));
 
 import { InventoryMovementService } from '../../inventoryStock/service/inventoryMovement.service';
 import {
@@ -17,6 +27,8 @@ import { ReturnToVendor } from '../../returnToVendor/entity/returnToVendor.entit
 interface CapturedUpdate {
   qtyDelta: number;
   amtDelta: number;
+  /** Raw SQL of the inwardAmt expression (average-cost movements). */
+  amtSql?: string;
   dumpQtyDelta: number;
   dumpAmtDelta: number;
   where: Record<string, any>;
@@ -39,6 +51,7 @@ function buildHarness(options: HarnessOptions) {
   const inserts: any[] = [];
   const documentUpdates: any[] = [];
   const transaction = { committed: false, rolledBack: false, released: false };
+  const locks: string[] = [];
 
   const readDelta = (fn: any): number => {
     const sql = typeof fn === 'function' ? fn() : String(fn);
@@ -53,6 +66,7 @@ function buildHarness(options: HarnessOptions) {
       set: (values: any) => {
         captured.qtyDelta = readDelta(values.inwardQty);
         captured.amtDelta = readDelta(values.inwardAmt);
+        captured.amtSql = typeof values.inwardAmt === 'function' ? values.inwardAmt() : String(values.inwardAmt);
         captured.dumpQtyDelta = readDelta(values.dumpQty);
         captured.dumpAmtDelta = readDelta(values.dumpAmt);
         return builder;
@@ -76,7 +90,10 @@ function buildHarness(options: HarnessOptions) {
 
   const makeSelectBuilder = (entity: any) => {
     const builder: any = {
-      setLock: () => builder,
+      setLock: (mode: string) => {
+        locks.push(mode);
+        return builder;
+      },
       select: () => builder,
       where: () => builder,
       andWhere: () => builder,
@@ -119,7 +136,7 @@ function buildHarness(options: HarnessOptions) {
   const dataSource: any = { createQueryRunner: () => queryRunner, manager };
   const service = new InventoryMovementService(dataSource);
 
-  return { service, updates, inserts, documentUpdates, transaction };
+  return { service, updates, inserts, documentUpdates, transaction, locks, manager };
 }
 
 function makeDocument(type: DocumentTypeEnum, overrides: Partial<Documentb> = {}) {
@@ -263,7 +280,10 @@ describe('InventoryMovementService — direction and amounts per document type',
 
     await harness.service.completeDocumentWithInventory(document);
 
-    expect(harness.updates[0]).toMatchObject({ qtyDelta: -40, amtDelta: -400 });
+    // Net kg out; value at the row's average cost, not the line's sale amount.
+    expect(harness.updates[0].qtyDelta).toBe(-40);
+    expect(harness.updates[0].amtSql).toMatch(/COALESCE\("inwardAmt", 0\) \/ "inwardQty"/);
+    expect(harness.updates[0].amtSql).not.toContain('400');
     expect(harness.updates[0].where.locationId).toBe('location-1');
   });
 
@@ -288,11 +308,12 @@ describe('InventoryMovementService — direction and amounts per document type',
 
     // Exactly one write, and it is against the FROM location.
     expect(harness.updates).toHaveLength(1);
-    expect(harness.updates[0]).toMatchObject({ qtyDelta: -25, amtDelta: -250 });
+    expect(harness.updates[0].qtyDelta).toBe(-25);
+    expect(harness.updates[0].amtSql).toMatch(/\/ "inwardQty"/);
     expect(harness.updates[0].where.locationId).toBe('location-1');
   });
 
-  it('Dump Register reduces inward AND increases the dump counters', async () => {
+  it('Dump Register only increases the dump counters (dumped kg never entered stock)', async () => {
     const document = makeDocument(DocumentTypeEnum.DUMP_REGISTER);
 
     const harness = buildHarness({
@@ -311,8 +332,8 @@ describe('InventoryMovementService — direction and amounts per document type',
     await harness.service.completeDocumentWithInventory(document);
 
     expect(harness.updates[0]).toMatchObject({
-      qtyDelta: -12,
-      amtDelta: -120,
+      qtyDelta: 0,
+      amtDelta: 0,
       dumpQtyDelta: 12,
       dumpAmtDelta: 120,
     });
@@ -338,14 +359,14 @@ describe('InventoryMovementService — direction and amounts per document type',
     await harness.service.completeDocumentWithInventory(document);
 
     expect(harness.updates[0]).toMatchObject({
-      qtyDelta: -42.5,
-      amtDelta: -425,
+      qtyDelta: 0,
+      amtDelta: 0,
       dumpQtyDelta: 42.5,
       dumpAmtDelta: 425,
     });
   });
 
-  it('Return To Vendor REDUCES stock (value from unitPrice x quantity)', async () => {
+  it('Return To Vendor moves no stock (returned goods were never inwarded)', async () => {
     const document = makeDocument(DocumentTypeEnum.RETURN_TO_VENDOR);
 
     const harness = buildHarness({
@@ -363,21 +384,55 @@ describe('InventoryMovementService — direction and amounts per document type',
 
     await harness.service.completeDocumentWithInventory(document);
 
-    expect(harness.updates[0]).toMatchObject({ qtyDelta: -30, amtDelta: -60 });
+    expect(harness.updates).toHaveLength(0);
+    expect(harness.inserts).toHaveLength(0);
+    expect(harness.documentUpdates[0].values.inventoryProcessed).toBe(true);
   });
 
-  it('Other Delivery Challan moves no stock (behaviour deliberately unchanged)', async () => {
+  it('Other Delivery Challan REDUCES stock at the from-location (every DC type takes stock out)', async () => {
     const document = makeDocument(DocumentTypeEnum.DC_TYPE_OTHER);
 
     const harness = buildHarness({
       lockedDocument: { ...document, inventoryProcessed: false },
+      sourceRecord: Object.assign(new OtherDeliveryChallan(), {
+        id: 'src-1',
+        challanNo: 'O0001',
+        companyName: COMPANY,
+        fromLocation: LOCATION,
+        deliveryChallanProducts: [
+          { id: 'p1', productName: PRODUCT, variant: VARIANT, netWeight: 12, amount: 999 },
+        ],
+      }),
+    });
+
+    await harness.service.completeDocumentWithInventory(document);
+
+    expect(harness.updates).toHaveLength(1);
+    expect(harness.updates[0].qtyDelta).toBe(-12);
+    expect(harness.updates[0].where.locationId).toBe('location-1');
+  });
+
+  it('a Customer DC of a direct-to-customer GRN moves no stock (the goods never entered a CC)', async () => {
+    const document = makeDocument(DocumentTypeEnum.DC_TYPE_CUSTOMER);
+
+    const harness = buildHarness({
+      lockedDocument: { ...document, inventoryProcessed: false },
+      sourceRecord: Object.assign(new CustomerDeliveryChallan(), {
+        id: 'src-1',
+        challanNo: 'C0009',
+        companyName: COMPANY,
+        fromLocation: LOCATION,
+        grnNo: { id: 'grn-1', deliveryMode: 'direct-to-customer' },
+        deliveryChallanProducts: [
+          { id: 'p1', productName: PRODUCT, variant: VARIANT, netWeight: 40, amount: 400 },
+        ],
+      }),
     });
 
     await harness.service.completeDocumentWithInventory(document);
 
     expect(harness.updates).toHaveLength(0);
     expect(harness.inserts).toHaveLength(0);
-    // The document is still marked processed so it is never revisited.
     expect(harness.documentUpdates[0].values.inventoryProcessed).toBe(true);
   });
 });
@@ -427,11 +482,10 @@ describe('InventoryMovementService — availability and row creation', () => {
     await harness.service.completeDocumentWithInventory(document);
 
     expect(harness.inserts).toHaveLength(1);
-    // The decrement must survive on the create path — the previous dump code
-    // wrote inwardQty: 0 here and silently lost it.
+    // The dump counters must survive on the create path.
     expect(harness.inserts[0]).toMatchObject({
-      inwardQty: -7,
-      inwardAmt: -70,
+      inwardQty: 0,
+      inwardAmt: 0,
       dumpQty: 7,
       dumpAmt: 70,
     });
@@ -522,7 +576,7 @@ describe('InventoryMovementService — pre-flight check (assertMovementIsApplica
   });
 
   it('is a no-op for document types that do not move stock', async () => {
-    const document = makeDocument(DocumentTypeEnum.DC_TYPE_OTHER);
+    const document = makeDocument(DocumentTypeEnum.RETURN_TO_VENDOR);
 
     const harness = buildHarness({
       lockedDocument: { ...document, inventoryProcessed: false },
@@ -530,5 +584,142 @@ describe('InventoryMovementService — pre-flight check (assertMovementIsApplica
     });
 
     await expect(harness.service.assertMovementIsApplicable(document)).resolves.toBeUndefined();
+  });
+});
+
+describe('InventoryMovementService — applyManualAdjustment (Stock Correction)', () => {
+  const baseMovement = {
+    companyId: 'company-1',
+    locationId: 'location-1',
+    productId: 'product-1',
+    variantId: 'variant-1' as string | null,
+  };
+
+  it('applies signed qty/amt and dump deltas through the atomic UPDATE', async () => {
+    const harness = buildHarness({ lockedDocument: null });
+
+    await harness.service.applyManualAdjustment(
+      [{ ...baseMovement, qtyDelta: -12, amtDelta: -120, dumpQtyDelta: 12, dumpAmtDelta: 120 }],
+      harness.manager,
+    );
+
+    expect(harness.updates).toHaveLength(1);
+    expect(harness.updates[0]).toMatchObject({
+      qtyDelta: -12,
+      amtDelta: -120,
+      dumpQtyDelta: 12,
+      dumpAmtDelta: 120,
+    });
+    expect(harness.updates[0].where).toMatchObject({
+      companyId: 'company-1',
+      locationId: 'location-1',
+      productId: 'product-1',
+      variantId: 'variant-1',
+    });
+    // No availability check requested -> no row lock taken.
+    expect(harness.locks).toHaveLength(0);
+  });
+
+  it('creates the stock row when none exists yet', async () => {
+    const harness = buildHarness({ lockedDocument: null, updateAffected: 0 });
+
+    await harness.service.applyManualAdjustment(
+      [{ ...baseMovement, variantId: null, qtyDelta: 25, amtDelta: 250 }],
+      harness.manager,
+    );
+
+    expect(harness.updates[0].variantIsNull).toBe(true);
+    expect(harness.inserts).toHaveLength(1);
+    expect(harness.inserts[0]).toMatchObject({ inwardQty: 25, inwardAmt: 250, dumpQty: 0, dumpAmt: 0 });
+    expect(harness.inserts[0].variant).toBeUndefined();
+  });
+
+  it('refuses a reduction that would take the row below 0 when availability is checked', async () => {
+    const harness = buildHarness({ lockedDocument: null, availableQty: 5 });
+
+    await expect(
+      harness.service.applyManualAdjustment(
+        [{ ...baseMovement, qtyDelta: -6, amtDelta: 0, label: 'Alphonso' }],
+        harness.manager,
+        { validateAvailability: true },
+      ),
+    ).rejects.toThrow(/Insufficient stock: required 6 but only 5 available for product "Alphonso"/);
+
+    expect(harness.updates).toHaveLength(0);
+    expect(harness.locks).toEqual(['pessimistic_write']);
+  });
+
+  it('allows a reduction down to exactly 0, locking the stock row first', async () => {
+    const harness = buildHarness({ lockedDocument: null, availableQty: 6 });
+
+    await harness.service.applyManualAdjustment(
+      [{ ...baseMovement, qtyDelta: -6, amtDelta: -60 }],
+      harness.manager,
+      { validateAvailability: true },
+    );
+
+    expect(harness.locks).toEqual(['pessimistic_write']);
+    expect(harness.updates).toHaveLength(1);
+    expect(harness.updates[0].qtyDelta).toBe(-6);
+  });
+
+  it('does not check availability for an increase', async () => {
+    const harness = buildHarness({ lockedDocument: null, availableQty: 0 });
+
+    await harness.service.applyManualAdjustment(
+      [{ ...baseMovement, qtyDelta: 10, amtDelta: 0 }],
+      harness.manager,
+      { validateAvailability: true },
+    );
+
+    expect(harness.locks).toHaveLength(0);
+    expect(harness.updates[0].qtyDelta).toBe(10);
+  });
+
+  it('is a no-op for an empty list or all-zero deltas', async () => {
+    const harness = buildHarness({ lockedDocument: null });
+
+    await harness.service.applyManualAdjustment([], harness.manager, { validateAvailability: true });
+    await harness.service.applyManualAdjustment(
+      [{ ...baseMovement, qtyDelta: 0, amtDelta: 0 }],
+      harness.manager,
+    );
+
+    expect(harness.updates).toHaveLength(0);
+    expect(harness.inserts).toHaveLength(0);
+  });
+});
+
+describe('InventoryMovementService — batch stock hand-over', () => {
+  beforeEach(() => {
+    (postInwardToBatches as jest.Mock).mockClear();
+    (consumeDcStock as jest.Mock).mockClear();
+  });
+
+  it('posts an approved Inward Register into batch stock', async () => {
+    const document = makeDocument(DocumentTypeEnum.INWARD_REGISTER);
+    const harness = buildHarness({
+      lockedDocument: { ...document, inventoryProcessed: false },
+      sourceRecord: Object.assign(new InwardRegister(), {
+        id: 'src-1', inwardNo: 'IWD1', companyName: COMPANY, location: LOCATION,
+        inwardProducts: [{ id: 'l1', productName: PRODUCT, variant: VARIANT, netWeight: 10, quantity: 2, unitPrice: 5 }],
+      }),
+    });
+    await harness.service.completeDocumentWithInventory(document);
+    expect(postInwardToBatches).toHaveBeenCalledTimes(1);
+    expect((postInwardToBatches as jest.Mock).mock.calls[0][1]).toBe(document.document_type_id);
+  });
+
+  it('consumes the batches an approved DC holds', async () => {
+    const document = makeDocument(DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER);
+    const harness = buildHarness({
+      lockedDocument: { ...document, inventoryProcessed: false },
+      sourceRecord: Object.assign(new StockTransferDeliveryChallan(), {
+        id: 'src-1', challanNo: 'S1', companyName: COMPANY, fromLocation: LOCATION,
+        deliveryChallanProducts: [{ id: 'p1', productName: PRODUCT, variant: VARIANT, netWeight: 25 }],
+      }),
+    });
+    await harness.service.completeDocumentWithInventory(document);
+    expect(consumeDcStock).toHaveBeenCalledWith(expect.anything(), DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER, document.document_type_id, null);
   });
 });

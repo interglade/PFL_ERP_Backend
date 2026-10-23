@@ -14,6 +14,8 @@ import { DataSource, EntityManager } from 'typeorm';
 
 import { TYPES } from '../../types';
 import AppError from '../../utils/appError';
+import { DispatchType } from '../../vehicleDispatch/entity/vehicleDispatch.entity';
+import { dispatchGate } from '../../vehicleDispatch/service/dispatchRules';
 import { GRN, GrnDeliveryMode } from '../../grn/entity/grn.entity';
 import { StockTransferDeliveryChallan } from '../../deliveryChallans/stockTransferDC/entity/stockTransferdeliveryChallan.entity';
 import { PostReturnByCustomer } from '../../returnByCustomer/entity/postReturnByCustomer.entity';
@@ -100,7 +102,7 @@ export class ReceivingGuardService {
   }
 
   /**
-   * R1–R7. Locks the source row (`SELECT … FOR UPDATE`) through `manager` when
+   * R1–R7 and R12. Locks the source row (`SELECT … FOR UPDATE`) through `manager` when
    * it is inside a transaction so concurrent creates for the same source
    * serialise, then validates the lines. Returns the resolved source so the
    * caller can default company / location / party from it.
@@ -131,6 +133,14 @@ export class ReceivingGuardService {
       throw new AppError(400, 'This GRN is delivered directly to the customer');
     }
 
+    // R12 — the vehicle dispatch of the GRN / Transfer DC must be approved before receiving
+    // starts (docs/dispatch-enforcement-plan.md D3). Checked on create only, so documents
+    // raised before the rule existed stay editable.
+    if (!excludeDocId && (sourceType === 'grn' || sourceType === 'stock-transfer-dc')) {
+      const gate = await dispatchGate(manager, sourceType === 'grn' ? DispatchType.PURCHASE : DispatchType.STOCK_TRANSFER, sourceId);
+      if (!gate.ready) throw new AppError(400, `Receiving cannot start yet: ${gate.reasons.join('; ')}`);
+    }
+
     const sourceNo = source.info.no ?? `${label} ${sourceId}`;
 
     // R6 — one counting document of this type per source.
@@ -142,15 +152,29 @@ export class ReceivingGuardService {
       throw new AppError(409, `${DOC_LABEL_WITH_ARTICLE[docType]} already exists for ${sourceNo} (${existing.docNo ?? existing.id})`);
     }
 
-    // R5 — kg already claimed by the other counting documents (AQR never consumes).
-    const consumedByOthers = new Map<string, number>();
+    const sourceAgg = aggregateSourceLines(source.lines);
+
+    // What arrived (the counting AQR): the basis for Inward / Dump / RTV.
     if (docType !== 'aqr') {
-      const others: ProcessingDocument[] = counting.filter((d) => d.docType !== 'aqr' && d.docType !== docType);
-      aggregateDocLines(others.flatMap((d) => d.lines)).forEach((line, key) => consumedByOthers.set(key, line.kg));
+      const aqrDocs = counting.filter((d) => d.docType === 'aqr');
+      if (aqrDocs.length > 0) {
+        const arrived = aggregateDocLines(aqrDocs.flatMap((d) => d.lines), sourceAgg);
+        sourceAgg.forEach((line, key) => {
+          const a = arrived.get(key);
+          line.arrivedKg = a ? a.kg : 0;
+          line.arrivedQty = a ? a.qty : null;
+        });
+      }
     }
 
+    // R5 — kg already claimed by the other counting documents (AQR never
+    // consumes). For an AQR these are all of Inward / Dump / RTV: what arrived
+    // cannot be less than what they already record.
+    const consumedByOthers = new Map<string, number>();
+    const others: ProcessingDocument[] = counting.filter((d) => d.docType !== 'aqr' && d.docType !== docType);
+    aggregateDocLines(others.flatMap((d) => d.lines), sourceAgg).forEach((line, key) => consumedByOthers.set(key, line.kg));
+
     // R4 / R5 / R7
-    const sourceAgg = aggregateSourceLines(source.lines);
     const errors = validateLinesAgainstSource(docType, sourceAgg, input.lines ?? [], consumedByOthers, { sourceType, sourceNo });
     if (errors.length > 0) {
       throw new AppError(400, errors.join('; '));
@@ -169,6 +193,7 @@ export class ReceivingGuardService {
       partyType: source.info.partyType,
       partyId: source.info.partyId,
       partyName: source.info.partyName,
+      batchNo: source.info.batchNo,
       products: Array.from(sourceAgg.values()),
     };
   }

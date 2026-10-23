@@ -34,7 +34,9 @@ export interface ProcurementReportData {
   branchName: string;
   purchaseLocation: string;
   billNo: string;
-  vehicleNo: string;
+  batchNo: string;
+  totalGrossWeight: number;
+  totalNetWeight: number;
   totalAmount: number;
   subTotalAmount: number;
   freight: number;
@@ -314,7 +316,9 @@ export class CrystalReportService {
       branchName: grn.location?.name || '',
       purchaseLocation: grn.purchaseLocation?.name || grn.otherPurchaseLoc || '',
       billNo: grn.billNo || '',
-      vehicleNo: grn.vehicleNo || '',
+      batchNo: grn.batchNo || '',
+      totalGrossWeight: Number(grn.totalGrossWeight) || 0,
+      totalNetWeight: Number(grn.totalNetWeight) || 0,
       totalAmount: grn.totalAmt || 0,
       subTotalAmount: grn.subTotalAmt || 0,
       freight: grn.freight || 0,

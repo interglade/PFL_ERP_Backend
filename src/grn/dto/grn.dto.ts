@@ -1,4 +1,4 @@
-import { ammountStatus, Department, Source } from "../../utils/status.enum";
+import { ammountStatus, Source } from "../../utils/status.enum";
 import { GrnDeliveryMode, GrnType, LocationType, PurchaseType } from "../entity/grn.entity";
 
 
@@ -9,6 +9,8 @@ export interface GrnProductDto {
   productName?: string | null;
   variant?: string | null;
   uom?: string | null;
+  /** Packaging material id (create / update / edit form) or name (view). */
+  packagingMaterial?: string | null;
   amount?: number;
   rtv?: boolean;
   netWeight?: number;
@@ -36,7 +38,8 @@ export interface PaymentInfoDto {
 export interface CreateGrnDto {
   companyName?: string;
   purchaseInstructionsBy?: string;
-  requestingDepartment?: Department;
+  /** Optional, alphanumeric, unique among live GRNs. */
+  batchNo?: string | null;
   locationType?: LocationType;
   grnType?: GrnType;
   /** Where the goods go: `cc-dc` (default, receivable) or `direct-to-customer`. */
@@ -63,12 +66,9 @@ export interface CreateGrnDto {
   amtWords?: string;
   purchasedBy?: string;
   approvalNote?: string;
-  receivedThrough?: string;
-  vehicleNo?: string;
   timeIn?: string | null;
   cratesIn?: number;
-  deliveryReceivingPerson?: string;
-  baseLocation?: string;
+  receivingPerson?: string;
   remark?: string;
   purchaseBy?: string;
   paymentInfo?: PaymentInfoDto;
@@ -116,16 +116,17 @@ export interface GrnListItemDto {
   amtWords: string | null;
   cratesIn: number | null;
   purchasedBy: string | null;
-  receivedThrough: string | null;
-  vehicleNo: string | null;
   timeIn: string | null;
   remark: string | null;
   securityPerson: string | null;
-  deliveryReceivingPerson: string | null;
+  receivingPerson: string | null;
   rmn: string | null;
   purchaseLocation: string | null;
   purchaseForSalesLocation: string | null;
   grnNo: string | null;
+  batchNo: string | null;
+  totalGrossWeight: number | null;
+  totalNetWeight: number | null;
   paymentInfo: PaymentInfoDto | null;
 }
 
@@ -149,6 +150,9 @@ export interface GrnDetailDto {
   otherPurchaseForSalesLoc?: string | null;
   otherPurchaseLoc?: string | null;
   grnNo?: string | null;
+  batchNo?: string | null;
+  totalGrossWeight?: number | null;
+  totalNetWeight?: number | null;
   locationType?: LocationType | null;
   grnType?: GrnType | null;
   deliveryMode?: GrnDeliveryMode | null;
@@ -156,7 +160,6 @@ export interface GrnDetailDto {
   createdDate?: string | null;
   createdTime?: string | null;
   createdBy?: string | null;
-  requestingDepartment?: Department | null;
   purchaseLocation?: string | null;
   purchaseForSalesLocation?: string | null;
   selectedParty?: string | null;
@@ -169,12 +172,9 @@ export interface GrnDetailDto {
   totalAmt?: number | null;
   amtWords?: string | null;
   purchasedBy?: string | null;
-  receivedThrough?: string | null;
-  vehicleNo?: string | null;
   timeIn?: string | null;
   cratesIn?: number | null;
-  deliveryReceivingPerson?: string | null;
-  baseLocation?: string | null;
+  receivingPerson?: string | null;
   specialReq?: string | null;
   securityPerson?: string | null;
   approvalNote?: string | null;

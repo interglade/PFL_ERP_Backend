@@ -1,3 +1,4 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from 'inversify';
 
 import { ILike } from 'typeorm';
@@ -42,15 +43,9 @@ export class EodStockService {
     private readonly documentbRepository: DocumentbRepository,
   ) {}
 
+  /** `PREFIX-00001`, the serial running per prefix; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateSerialNo(prefix: string): Promise<string> {
-    // Get the count of existing GRNs for the branch (or use another unique mechanism)
-    const count = await this.eodRepository.count({
-      where: { eodNo: ILike(`${prefix}%`) },
-    });
-    
-    // Generate the serial number in the format "PREFIX-001"
-    const serialNo = `${prefix}-${(count + 1).toString().padStart(5, '0')}`;
-    return serialNo;
+    return nextDocumentNumber(this.eodRepository.manager, SERIES.eod, `${prefix}-`, 5);
   }
 
 

@@ -1,3 +1,5 @@
+import { assertDeliveryConfirmed, assertDeliveryNotConfirmed } from '../../deliveryChallans/customerDeliveryChllan/service/dcDelivery';
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 import { TYPES } from '../../types';
@@ -11,6 +13,7 @@ import { DocumentTypeEnum, Documentb } from '../../approvalFlow/entity/docuemnt.
 import { UserLogger } from '../../utils/logger';
 import { DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 import { DocumentTypeEnum as DocDefEnum } from "../../documentDef/entity/documentdef.entity";
+import { dcIdsOfSalesDocuments, syncCustomerDcSalesLinks } from '../../deliveryChallans/customerDeliveryChllan/service/dcSalesLinks';
 import { ApprovalFlowService } from "../../approvalFlow/service/approvalFlow.service";
 import { CustomerDeliveryChallanService } from "../../deliveryChallans/customerDeliveryChllan/service/customerDeliveryChallan.service";
 import AppError from "../../utils/appError";
@@ -42,6 +45,7 @@ import { CacheService } from '../../global/cache.service';
 import { PostReturnByCustomer } from '../entity/postReturnByCustomer.entity';
 import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
 import { refId } from '../../receiving/receiving.helpers';
+import { assertCustomerDcReady } from '../../vehicleDispatch/service/dispatchRules';
 import { completeDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../receiving/receiving.sql';
 
 /** Receiving picker filters for `getAllRBCNumbers`. */
@@ -126,7 +130,7 @@ export class PostReturnByCustomerService {
   private assertNoDuplicateProducts(products: unknown): void {
     if (!Array.isArray(products)) return;
     this.receivingGuardService.assertNoDuplicateLines(
-      products.map((p: any) => ({ productId: refId(p?.productName), variantId: refId(p?.variant) })),
+      products.map((p: any) => ({ productId: refId(p?.productName), variantId: refId(p?.variant), uomId: refId(p?.saleUoM) })),
     );
   }
   private readonly CACHE_TTL = 180;
@@ -170,18 +174,9 @@ export class PostReturnByCustomerService {
    * - Cascade save for returnedProducts (no manual save needed)
    * - Efficient SQL aggregation for quantity updates
    */
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateSerialNo(): Promise<string> {
-    const now = new Date();
-    const yyyy = now.getFullYear().toString();
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const datePrefix = `RBC${yyyy}${mm}${dd}`;
-
-    const count = await this.postReturnByCustomerRepository.count({
-      where: { rbcNo: ILike(`${datePrefix}%`) },
-    });
-
-    return `${datePrefix}${(count + 1).toString().padStart(5, '0')}`;
+    return nextDocumentNumber(this.postReturnByCustomerRepository.manager, SERIES.rbc, `RBC${compactDate()}`, 5);
   }
 
 
@@ -220,7 +215,7 @@ export class PostReturnByCustomerService {
         this.deliveryChallanRepository.target, 
         { 
           where: { id: returnData.deliveryChallanNo },
-          relations: ['deliveryChallanProducts', 'deliveryChallanProducts.productName', 'deliveryChallanProducts.variant']
+          relations: ['deliveryChallanProducts', 'deliveryChallanProducts.productName', 'deliveryChallanProducts.variant', 'deliveryChallanProducts.saleUoM', 'deliveryChallanProducts.uom']
         }
       );
 
@@ -232,6 +227,11 @@ export class PostReturnByCustomerService {
       if ((deliveryChallan as any).isReturnByCustomerCreated) {
         throw new Error('Return By Customer has already been created for this Delivery Challan');
       }
+
+      // DC and its vehicle dispatch must be approved (docs/dispatch-enforcement-plan.md D6).
+      await assertCustomerDcReady(queryRunner.manager, returnData.deliveryChallanNo);
+      // Returns are recorded at delivery, before the delivery is confirmed (D-1 / D-3).
+      await assertDeliveryNotConfirmed(queryRunner.manager, returnData.deliveryChallanNo, 'raised');
 
       // 4️⃣ Validate that returned products match delivery challan products
       if (returnData.returnedProducts && returnData.returnedProducts.length > 0) {
@@ -266,6 +266,21 @@ export class PostReturnByCustomerService {
             throw new Error(
               `Total returned (${returnedQty}) and rejected (${rejectedQty}) quantity cannot exceed original quantity (${originalQty}) for product ${productId}`
             );
+          }
+
+          // D-2: quantities are in the DC line's unit; returned goods are received
+          // in kg, so a returned quantity needs its net kg, within the DC line's kg.
+          const dcUnit = (matchingProduct as { saleUoM?: { id?: string } | null; uom?: { id?: string } | null }).saleUoM?.id
+            ?? (matchingProduct as { uom?: { id?: string } | null }).uom?.id ?? null;
+          if (dcUnit) (returnProduct as Record<string, unknown>).saleUoM = dcUnit;
+          const returnedKg = Number(returnProduct.returnedNetWt || 0);
+          const dcKg = Number(matchingProduct.netWeight || 0);
+          const label = matchingProduct.productName?.name ?? productId;
+          if (returnedQty > 0 && returnedKg <= 0) {
+            throw new AppError(400, `${label}: enter the returned net weight (kg) — returned goods are received by weight`);
+          }
+          if (dcKg > 0 && returnedKg + Number(returnProduct.rejectedNetWt || 0) > dcKg) {
+            throw new AppError(400, `${label}: returned and rejected net weight cannot exceed the ${dcKg} kg delivered`);
           }
         }
       }
@@ -311,19 +326,13 @@ export class PostReturnByCustomerService {
         } as any
       );
 
-      // 6️⃣ Mark challan as returned and set isReturnByCustomerCreated flag
-      deliveryChallan.isReturned = true;
-      (deliveryChallan as any).isReturnByCustomerCreated = true;
-      
-      const [, savedReturn] = await Promise.all([
-        queryRunner.manager.save(deliveryChallan),
-        queryRunner.manager.save(newReturn)
-      ]);
-
+      const savedReturn = await queryRunner.manager.save(newReturn);
       const savedReturnEntity = Array.isArray(savedReturn) ? savedReturn[0] : savedReturn;
 
-      // 7️⃣ Update delivery challan items with aggregated return quantities
-      await this.updateDeliveryChallanItemsWithReturns(returnData.deliveryChallanNo, queryRunner);
+      // 6️⃣ DC flags follow the live documents: this pending RBC sets
+      // isReturnByCustomerCreated; the DC line quantities change only when the
+      // RBC is approved (see syncCustomerDcSalesLinks).
+      await syncCustomerDcSalesLinks(queryRunner.manager, [returnData.deliveryChallanNo]);
 
       // 8️⃣ Create document and start approval flow
       const document = await this.documentbService.createDocument({
@@ -358,86 +367,6 @@ export class PostReturnByCustomerService {
       await queryRunner.release();
     }
   }
-
-  /**
-   * Updates delivery challan items with aggregated return quantities
-   * 
-   * LOGIC FLOW:
-   * 1. Aggregates all returned/rejected quantities per product+variant using SQL GROUP BY
-   * 2. Bulk updates all delivery challan items with calculated quantities
-   * 3. Calculates acceptedQty = originalQty - returnedQty - rejectedQty
-   * 
-   * OPTIMIZATIONS:
-   * - Single SQL query for aggregation (vs N queries)
-   * - Handles NULL variants correctly
-   * - Uses parameterized queries to prevent SQL injection
-   * - Efficient DECIMAL casting for accurate calculations
-   * 
-   * @param deliveryChallanId - The delivery challan ID to update items for
-   * @param queryRunner - Optional query runner for transaction support
-   */
-  private async updateDeliveryChallanItemsWithReturns(
-    deliveryChallanId: string,
-    queryRunner?: any
-  ): Promise<void> {
-    // Define aggregation result type
-    interface AggregatedReturn {
-      productId: string;
-      variantId: string | null;
-      totalReturnedQty: string;
-      totalRejectedQty: string;
-    }
-
-    const manager = queryRunner ? queryRunner.manager : this.dataSource;
-
-    // 1️⃣ Aggregate return quantities using raw SQL for performance
-    const aggregatedReturns = await (queryRunner ? queryRunner.query : this.dataSource.query).call(
-      queryRunner || this.dataSource,
-      `
-      SELECT 
-        rp."product_id" as "productId",
-        rp."varient_id" as "variantId",
-        SUM(CAST(COALESCE(rp."returnedQty", 0) AS DECIMAL)) as "totalReturnedQty",
-        SUM(CAST(COALESCE(rp."rejectedQty", 0) AS DECIMAL)) as "totalRejectedQty"
-      FROM "returned_products_by_customer" rp
-      INNER JOIN "return_by_customer" prc ON rp."postReturnId" = prc."id"
-      WHERE prc."delivery_challan_id" = $1
-      GROUP BY rp."product_id", rp."varient_id"
-    `, [deliveryChallanId]);
-
-    if (!aggregatedReturns || aggregatedReturns.length === 0) {
-      return; // No returns to process
-    }
-
-    // 2️⃣ Execute bulk update for each product/variant combination
-    for (const agg of aggregatedReturns) {
-      const returnedQty = Number(agg.totalReturnedQty || 0);
-      const rejectedQty = Number(agg.totalRejectedQty || 0);
-
-      const queryBuilder = queryRunner 
-        ? queryRunner.manager.createQueryBuilder()
-        : this.dataSource.createQueryBuilder();
-
-      await queryBuilder
-        .update('item')
-        .set({
-          returnedQty,
-          rejectedQty,
-          acceptedQty: () => `GREATEST(CAST(COALESCE(quantity, 0) AS DECIMAL) - ${returnedQty} - ${rejectedQty}, 0)`,
-        })
-        .where('product_id = :productId', { productId: agg.productId })
-        .andWhere(
-          agg.variantId 
-            ? 'varient_id = :variantId' 
-            : 'varient_id IS NULL',
-          agg.variantId ? { variantId: agg.variantId } : {}
-        )
-        .andWhere('deliveryChallanId = :challanId', { challanId: deliveryChallanId })
-        .execute();
-    }
-  }
-
-
 
   async getAllPostReturnByCustomer(
     queryOptions: PaginationOptions,
@@ -908,6 +837,9 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
       }
       // Receiving links R10 — a 409 here lands in `failed` with its message.
       await this.receivingGuardService.assertSourceEditable('rbc', id);
+      // Not once the DC's delivery is confirmed (the invoice relies on it).
+      const [rbcDc] = await dcIdsOfSalesDocuments(this.dataSource.manager, DocumentTypeEnum.RETURN_BY_CUSTOMER, [rbc.id]);
+      await assertDeliveryNotConfirmed(this.dataSource.manager, rbcDc, 'deleted');
       const relatedDocument = await this.documentbRepository.findOne({
         where: { document_type_id: rbc.id }
       });
@@ -923,6 +855,10 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
 
       await this.postReturnByCustomerRepository.softDelete(rbc.id);
       await this.postReturnByCustomerRepository.update(rbc.id, { isDeleted: true } as any);
+      // The DC can take a new RBC again and loses this one's quantities.
+      const dcIds = await dcIdsOfSalesDocuments(this.dataSource.manager, DocumentTypeEnum.RETURN_BY_CUSTOMER, [rbc.id]);
+      await syncCustomerDcSalesLinks(this.dataSource.manager, dcIds);
+      await Promise.all([this.invalidateCache(rbc.id), ...dcIds.map((dcId) => this.customerDeliveryChallanService.invalidateCDCCache(dcId))]);
       success.push({id,No:rbc.rbcNo});
     } catch (error: any) {
       failed.push({ id, reason: error.message || 'Unknown error' });
@@ -939,6 +875,10 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
   ): Promise<any> {
     // Receiving links R9 / D6: not while an AQR / Inward / Dump counts against it; no repeated product + variant.
     await this.receivingGuardService.assertSourceEditable('rbc', id);
+    {
+      const [rbcDc] = await dcIdsOfSalesDocuments(this.dataSource.manager, DocumentTypeEnum.RETURN_BY_CUSTOMER, [id]);
+      await assertDeliveryNotConfirmed(this.dataSource.manager, rbcDc, 'changed');
+    }
     this.assertNoDuplicateProducts(returnData?.returnedProducts);
     const postReturn = await this.postReturnByCustomerRepository.findOne({
       where: { id },
@@ -975,11 +915,9 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
       postReturn,
     );
 
-    // Update delivery challan items with new return/reject quantities
+    // The DC line figures follow the approved returns (an edit of an approved RBC changes them).
     if (postReturn.deliveryChallanNo?.id) {
-      await this.updateDeliveryChallanItemsWithReturns(
-        postReturn.deliveryChallanNo.id
-      );
+      await syncCustomerDcSalesLinks(this.dataSource.manager, [postReturn.deliveryChallanNo.id]);
     }
 
     // Same staleness as createReturn: this edit changed both this return and the

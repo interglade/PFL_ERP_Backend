@@ -50,8 +50,47 @@ export function toKg(value: number | string | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-export function productKey(productId: string, variantId?: string | null): string {
+/**
+ * Line key of receiving: product + variant + unit. One GRN may carry the same
+ * product in two units (Mango in Box and Mango in kg); those are two lines.
+ */
+export function productKey(productId: string, variantId?: string | null, uomId?: string | null, batchNo?: string | null): string {
+  const base = `${productId}:${variantId ? variantId : 'null'}:${uomId ? uomId : 'null'}`;
+  // Only lines that carry their own batch (transfer lines) get a batch segment.
+  return batchNo ? `${base}:${batchNo}` : base;
+}
+
+/** Product + variant only (used to fall back for lines without a matching unit). */
+export function productVariantKey(productId: string, variantId?: string | null): string {
   return `${productId}:${variantId ? variantId : 'null'}`;
+}
+
+/**
+ * The source line a document line belongs to: the exact product + variant +
+ * unit, otherwise the only source line of that product + variant (documents
+ * written before the unit was part of the key, or with a unit changed by
+ * hand). Returns the line's own key when nothing matches.
+ */
+export function matchSourceKey(
+  sourceAgg: Map<string, { productId: string; variantId: string | null; uomId?: string | null; batchNo?: string | null }>,
+  productId: string,
+  variantId?: string | null,
+  uomId?: string | null,
+  batchNo?: string | null,
+): string {
+  const exact = productKey(productId, variantId, uomId, batchNo);
+  if (sourceAgg.has(exact)) return exact;
+  // Narrow step by step: same product + variant, then the unit, then the batch
+  // (each only when it still leaves a candidate); one candidate left wins.
+  const wanted = productVariantKey(productId, variantId);
+  let candidates = Array.from(sourceAgg.entries()).filter(([, line]) => productVariantKey(line.productId, line.variantId) === wanted);
+  const narrow = (keep: (line: { uomId?: string | null; batchNo?: string | null }) => boolean) => {
+    const left = candidates.filter(([, line]) => keep(line));
+    if (left.length) candidates = left;
+  };
+  if (uomId) narrow((line) => (line.uomId ?? null) === uomId);
+  if (batchNo) narrow((line) => (line.batchNo ?? '').toUpperCase() === batchNo.toUpperCase());
+  return candidates.length === 1 ? candidates[0][0] : exact;
 }
 
 /** `Tomato (Grade A)` or `Tomato` when there is no variant. */
@@ -70,11 +109,16 @@ export function aggregateSourceLines(lines: SourceLineInput[]): Map<string, Aggr
   for (const line of lines ?? []) {
     if (!line || !line.productId) continue;
     const variantId = line.variantId ? line.variantId : null;
-    const key = productKey(line.productId, variantId);
+    const batchNo = line.batchNo ? line.batchNo : null;
+    const key = productKey(line.productId, variantId, line.uomId ?? null, batchNo);
     const kg = toKg(line.kg);
+    const qty = toKg(line.qty);
+    const grossKg = toKg(line.grossKg);
     const existing = result.get(key);
     if (existing) {
       existing.receivedKg = round3(existing.receivedKg + kg);
+      existing.receivedQty = round3(existing.receivedQty + qty);
+      existing.receivedGrossKg = round3(existing.receivedGrossKg + grossKg);
       if (existing.productName == null && line.productName) existing.productName = line.productName;
       if (existing.variantName == null && line.variantName) existing.variantName = line.variantName;
       if (existing.uomId == null && line.uomId) {
@@ -92,25 +136,40 @@ export function aggregateSourceLines(lines: SourceLineInput[]): Map<string, Aggr
       variantName: line.variantName ?? null,
       uomId: line.uomId ?? null,
       uomName: line.uomName ?? null,
+      batchNo,
       unitPrice: line.unitPrice != null && line.unitPrice !== '' ? Number(line.unitPrice) : null,
+      receivedQty: round3(qty),
+      receivedGrossKg: round3(grossKg),
       receivedKg: round3(kg),
     });
   }
   return result;
 }
 
-/** Sums kg (and sample kg) per product + variant across the lines of one or more documents. */
-export function aggregateDocLines(lines: DocLineInput[]): Map<string, AggregatedDocLine> {
+/**
+ * Sums kg, quantity and sample kg per line key across the lines of one or more
+ * documents. With `sourceAgg`, each line is keyed by the source line it
+ * belongs to ({@link matchSourceKey}).
+ */
+export function aggregateDocLines(
+  lines: DocLineInput[],
+  sourceAgg?: Map<string, AggregatedSourceLine>,
+): Map<string, AggregatedDocLine> {
   const result = new Map<string, AggregatedDocLine>();
   for (const line of lines ?? []) {
     if (!line || !line.productId) continue;
     const variantId = line.variantId ? line.variantId : null;
-    const key = productKey(line.productId, variantId);
+    const key = sourceAgg
+      ? matchSourceKey(sourceAgg, line.productId, variantId, line.uomId ?? null, line.batchNo ?? null)
+      : productKey(line.productId, variantId, line.uomId ?? null, line.batchNo ?? null);
     const kg = toKg(line.kg);
+    const hasQty = line.qty !== null && line.qty !== undefined && line.qty !== '';
+    const qty = hasQty ? toKg(line.qty) : null;
     const sampleKg = toKg(line.sampleKg);
     const existing = result.get(key);
     if (existing) {
       existing.kg = round3(existing.kg + kg);
+      if (qty !== null) existing.qty = round3((existing.qty ?? 0) + qty);
       existing.sampleKg = round3(existing.sampleKg + sampleKg);
       existing.legacy = existing.legacy || Boolean(line.legacy);
       if (existing.productName == null && line.productName) existing.productName = line.productName;
@@ -124,6 +183,7 @@ export function aggregateDocLines(lines: DocLineInput[]): Map<string, Aggregated
       variantId,
       variantName: line.variantName ?? null,
       kg: round3(kg),
+      qty: qty === null ? null : round3(qty),
       sampleKg: round3(sampleKg),
       legacy: Boolean(line.legacy),
     });
@@ -139,8 +199,9 @@ function neverBelowZero(value: number): number {
 /**
  * One row per product of the source (plus any product that only appears on a
  * processing document — legacy data — so nothing is hidden). Suggested kg:
- * inward = received − dump − rtv, dump = received − inward − rtv,
- * rtv = received − inward − dump, never below 0.
+ * inward = basis − dump − rtv, dump = basis − inward − rtv,
+ * rtv = basis − inward − dump, never below 0, where basis is the arrived kg
+ * of the AQR when one counts and the source kg otherwise.
  */
 export function buildProductRows(
   sourceAgg: Map<string, AggregatedSourceLine>,
@@ -174,9 +235,14 @@ export function buildProductRows(
     if (!fallback) continue;
 
     const receivedKg = source ? source.receivedKg : 0;
+    const arrivedKg = aqr ? aqr.kg : null;
+    const arrivedQty = aqr ? aqr.qty : null;
+    // What arrived is what must be accounted for; until an AQR counts, the source kg.
+    const basisKg = arrivedKg !== null ? arrivedKg : receivedKg;
     const inwardKg = inward ? inward.kg : 0;
     const dumpKg = dump ? dump.kg : 0;
     const rtvKg = rtv ? rtv.kg : 0;
+    const loss = source && arrivedKg !== null ? transitLoss(source, arrivedKg, arrivedQty) : null;
 
     rows.push({
       key,
@@ -186,18 +252,26 @@ export function buildProductRows(
       variantName: source?.variantName ?? aqr?.variantName ?? inward?.variantName ?? dump?.variantName ?? rtv?.variantName ?? null,
       uomId: source?.uomId ?? null,
       uomName: source?.uomName ?? null,
+      batchNo: source?.batchNo ?? null,
       unitPrice: source?.unitPrice ?? null,
+      receivedQty: source ? source.receivedQty : 0,
+      receivedGrossKg: source ? source.receivedGrossKg : 0,
       receivedKg,
-      arrivedKg: aqr ? aqr.kg : null,
+      arrivedKg,
+      arrivedQty,
       sampleKg: aqr ? aqr.sampleKg : null,
       inwardKg,
       dumpKg,
       rtvKg,
-      differenceKg: round3(receivedKg - inwardKg - dumpKg - rtvKg),
+      basisKg,
+      differenceKg: round3(basisKg - inwardKg - dumpKg - rtvKg),
+      transitLossKg: loss ? loss.lossKg : null,
+      transitLossQty: loss ? loss.lossQty : null,
+      transitLossValue: loss ? loss.lossValue : null,
       suggested: {
-        inwardKg: neverBelowZero(receivedKg - dumpKg - rtvKg),
-        dumpKg: neverBelowZero(receivedKg - inwardKg - rtvKg),
-        rtvKg: neverBelowZero(receivedKg - inwardKg - dumpKg),
+        inwardKg: neverBelowZero(basisKg - dumpKg - rtvKg),
+        dumpKg: neverBelowZero(basisKg - inwardKg - rtvKg),
+        rtvKg: neverBelowZero(basisKg - inwardKg - dumpKg),
       },
     });
   }
@@ -290,8 +364,11 @@ function formatKg(value: number): string {
  *
  * - R4: lines equal the source product + variant set exactly, each once,
  *   kg ≥ 0, and at least one kg > 0 for inward / dump / rtv.
- * - R5: per product `kg + consumedByOthers ≤ receivedKg`
- *   (AQR: `arrivedQty ≤ receivedKg`; AQR kg is never consumed).
+ * - R5: per line `kg + consumedByOthers ≤ basis`, basis = the AQR's arrived
+ *   kg when an AQR counts (`source.arrivedKg`), otherwise the source kg.
+ *   AQR: `consumedByOthers ≤ arrived ≤ receivedKg`; AQR kg is never consumed.
+ * Lines are matched to the source by product + variant + unit
+ * ({@link matchSourceKey}).
  * - R7: RTV only for GRN sources.
  */
 export function validateLinesAgainstSource(
@@ -340,7 +417,7 @@ export function validateLinesAgainstSource(
       continue;
     }
     const variantId = line.variantId ? line.variantId : null;
-    const key = productKey(line.productId, variantId);
+    const key = matchSourceKey(sourceAgg, line.productId, variantId, line.uomId ?? null, line.batchNo ?? null);
     if (seen.has(key)) {
       errors.push(`${label(key, line.productId, variantId)} is listed more than once`);
       continue;
@@ -376,24 +453,34 @@ export function validateLinesAgainstSource(
     errors.push('Enter a quantity greater than 0 for at least one product');
   }
 
-  // R5 — per-product cap
+  // R5 — per-product cap. The basis is what arrived (AQR) once an AQR counts,
+  // otherwise what the source sent.
   kgByKey.forEach((kg, key) => {
     const source = sourceAgg.get(key);
     if (!source) return;
-    const received = source.receivedKg;
+    const consumed = consumedByOthers.get(key) ?? 0;
     if (docType === 'aqr') {
-      if (round3(kg) > round3(received)) {
+      // Arrived kg: not more than was sent, not less than Inward + Dump + RTV already record.
+      if (round3(kg) > round3(source.receivedKg)) {
         errors.push(
-          `Only ${formatKg(received)} kg of ${label(key)} arrived on ${sourceNo}; you entered ${formatKg(kg)} kg`,
+          `Only ${formatKg(source.receivedKg)} kg of ${label(key)} was sent on ${sourceNo}; you entered ${formatKg(kg)} kg arrived`,
+        );
+      } else if (round3(kg) < round3(consumed)) {
+        errors.push(
+          `Inward / Dump / RTV already account for ${formatKg(consumed)} kg of ${label(key)} on ${sourceNo}; arrived kg cannot be lower`,
         );
       }
       return;
     }
-    const consumed = consumedByOthers.get(key) ?? 0;
-    const available = round3(received - consumed);
+    const arrived = source.arrivedKg ?? null;
+    const basis = arrived !== null ? arrived : source.receivedKg;
+    const available = round3(basis - consumed);
     if (round3(kg) > available) {
+      const left = formatKg(available < 0 ? 0 : available);
       errors.push(
-        `Only ${formatKg(available < 0 ? 0 : available)} kg of ${label(key)} is unaccounted for ${sourceNo}; you entered ${formatKg(kg)} kg`,
+        arrived !== null
+          ? `Only ${left} kg of the ${formatKg(arrived)} kg of ${label(key)} that arrived on ${sourceNo} is unaccounted for; you entered ${formatKg(kg)} kg`
+          : `Only ${left} kg of ${label(key)} is unaccounted for ${sourceNo}; you entered ${formatKg(kg)} kg`,
       );
     }
   });
@@ -402,7 +489,8 @@ export function validateLinesAgainstSource(
 }
 
 /**
- * R11 — a source (GRN, Transfer DC, RBC) may list each product + variant once.
+ * R11 — a source (GRN, Transfer DC, RBC) may list each product + variant +
+ * unit once (Mango in Box and Mango in kg are two lines).
  * Returns the human-readable message or null when there are no duplicates.
  * Lines without a product are ignored (the caller's own validation handles those).
  */
@@ -411,7 +499,7 @@ export function findDuplicateLines(lines: DuplicateLineInput[]): string | null {
   const duplicates: string[] = [];
   (lines ?? []).forEach((line, index) => {
     if (!line || !line.productId) return;
-    const key = productKey(line.productId, line.variantId ? line.variantId : null);
+    const key = productKey(line.productId, line.variantId ? line.variantId : null, line.uomId ?? null);
     const seenAt = firstIndex.get(key);
     if (seenAt === undefined) {
       firstIndex.set(key, index);
@@ -420,7 +508,7 @@ export function findDuplicateLines(lines: DuplicateLineInput[]): string | null {
     }
   });
   if (duplicates.length === 0) return null;
-  return `The same product and variant is listed more than once (${duplicates.join(', ')}); merge the rows`;
+  return `The same product, variant and unit is listed more than once (${duplicates.join(', ')}); merge the rows`;
 }
 
 /** Strips a possibly-object id reference (`'id'` or `{ id }`) down to the id string. */
@@ -432,4 +520,99 @@ export function refId(value: unknown): string | null {
     return id === null || id === undefined || id === '' ? null : String(id);
   }
   return null;
+}
+
+/** Rounds money to 2 decimals. */
+export function round2(value: number): number {
+  const rounded = Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+export interface SourcePricedLine {
+  uomId: string | null;
+  /** The source line's own batch (transfer lines); null otherwise. */
+  batchNo: string | null;
+  unitPrice: number | null;
+  quantity: number;
+  amount: number;
+}
+
+/**
+ * Unit, price and amount of one Inward / Dump / RTV line, taken from the
+ * source line of the same product + variant. The unit and unit price are the
+ * source's (the user cannot change them); the quantity is the user's, in that
+ * unit, and the amount is always `quantity × unit price`. Without a matching
+ * source line (legacy rows) the line's own values are kept.
+ *
+ * Returns an error message when the quantity exceeds the source quantity.
+ */
+export function priceLineFromSource(
+  products: AggregatedSourceLine[],
+  line: { productId: string | null | undefined; variantId?: string | null; uomId?: string | null; batchNo?: string | null; unitPrice?: number | string | null; quantity?: number | string | null },
+  sourceNo?: string | null,
+): { line: SourcePricedLine; error: string | null } {
+  const quantity = round3(toKg(line.quantity));
+  const byKey = new Map(products.map((p) => [p.key, p]));
+  const source = line.productId
+    ? byKey.get(matchSourceKey(byKey, line.productId, line.variantId ?? null, line.uomId ?? null, line.batchNo ?? null))
+    : undefined;
+  if (!source) {
+    const unitPrice = line.unitPrice != null && line.unitPrice !== '' ? Number(line.unitPrice) : null;
+    return {
+      line: { uomId: line.uomId ?? null, batchNo: line.batchNo ?? null, unitPrice, quantity, amount: round2(quantity * (unitPrice ?? 0)) },
+      error: null,
+    };
+  }
+  const unitPrice = source.unitPrice ?? (line.unitPrice != null && line.unitPrice !== '' ? Number(line.unitPrice) : null);
+  let error: string | null = null;
+  const arrivedQty = source.arrivedQty ?? null;
+  const capQty = arrivedQty !== null ? arrivedQty : source.receivedQty;
+  if (capQty > 0 && quantity > capQty) {
+    const unit = source.uomName ? ` ${source.uomName}` : '';
+    const where = arrivedQty !== null ? 'that arrived' : `on ${sourceNo ?? 'the source'}`;
+    error = `${productLabel(source.productName, source.variantName)}: quantity ${quantity}${unit} is more than the ${capQty}${unit} ${where}`;
+  }
+  return {
+    line: { uomId: source.uomId ?? line.uomId ?? null, batchNo: source.batchNo ?? null, unitPrice, quantity, amount: round2(quantity * (unitPrice ?? 0)) },
+    error,
+  };
+}
+
+/**
+ * True when the source line is counted in kg (its quantity equals its net kg,
+ * or it has no quantity): units and kg are then the same number.
+ */
+export function isKgCounted(source: Pick<AggregatedSourceLine, 'receivedQty' | 'receivedKg'>): boolean {
+  return !(source.receivedQty > 0) || round3(source.receivedQty) === round3(source.receivedKg);
+}
+
+export interface TransitLoss {
+  /** sent − arrived kg (negative = excess) */
+  lossKg: number;
+  /** sent − arrived units; null when the arrived units are unknown (counted lines) */
+  lossQty: number | null;
+  /** lost units × unit price (kg lines: lost kg × unit price); null when not computable */
+  lossValue: number | null;
+}
+
+/**
+ * Transport loss of one source line from what arrived. For lines counted in
+ * kg the units follow the kg. For counted units (boxes, crates …) the value
+ * needs the arrived units: weight loss alone (a lighter box) has no value.
+ */
+export function transitLoss(
+  source: Pick<AggregatedSourceLine, 'receivedQty' | 'receivedKg' | 'unitPrice'>,
+  arrivedKg: number,
+  arrivedQty: number | null | undefined,
+): TransitLoss {
+  const lossKg = round3(source.receivedKg - arrivedKg);
+  const price = source.unitPrice ?? null;
+  if (isKgCounted(source)) {
+    return { lossKg, lossQty: lossKg, lossValue: price === null ? null : round2(lossKg * price) };
+  }
+  if (arrivedQty === null || arrivedQty === undefined) {
+    return { lossKg, lossQty: null, lossValue: null };
+  }
+  const lossQty = round3(source.receivedQty - arrivedQty);
+  return { lossKg, lossQty, lossValue: price === null ? null : round2(lossQty * price) };
 }

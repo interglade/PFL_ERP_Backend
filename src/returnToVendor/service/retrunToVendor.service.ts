@@ -1,3 +1,4 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from "inversify";
 import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 import { TYPES } from "../../types";
@@ -28,7 +29,36 @@ import { ApprovalAssignment, DocumentbService, DocumentWithRelatedData } from ".
 import { DocDoubleApproverService } from "../../approvalFlow/service/docDoubleApprover.service";
 import { ReturnToVendor } from "../entity/returnToVendor.entity";
 import { ReceivingGuardService } from "../../receiving/service/receivingGuard.service";
-import { refId } from "../../receiving/receiving.helpers";
+import { priceLineFromSource, refId, round2 } from "../../receiving/receiving.helpers";
+import { ResolvedSource } from "../../receiving/receiving.types";
+
+/**
+ * Unit and unit price of every RTV line come from the GRN line; the amount is
+ * recomputed as quantity (in that unit) × unit price. Returns the total.
+ */
+function priceRtvLinesFromSource(lines: any[], resolved: ResolvedSource): number {
+  const errors: string[] = [];
+  for (const item of lines) {
+    const { line, error } = priceLineFromSource(
+      resolved.products,
+      {
+        productId: refId(item?.productName),
+        variantId: refId(item?.variant),
+        uomId: refId(item?.uom),
+        unitPrice: item?.unitPrice,
+        quantity: item?.quantity,
+      },
+      resolved.sourceNo,
+    );
+    if (error) errors.push(error);
+    if (line.uomId) item.uom = item.uom && typeof item.uom === 'object' ? { id: line.uomId } : line.uomId;
+    item.unitPrice = line.unitPrice;
+    item.quantity = line.quantity;
+    item.amount = line.amount;
+  }
+  if (errors.length > 0) throw new AppError(400, errors.join('; '));
+  return round2(lines.reduce((sum, item) => sum + (Number(item?.amount) || 0), 0));
+}
 
 @injectable()
 export class ReturnToVendorService {
@@ -77,25 +107,9 @@ export class ReturnToVendorService {
         await Promise.all(tasks);
     }
 
+    /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
     private async generateSerialNo(): Promise<string> {
-      const now = new Date();
-      const yyyy = now.getFullYear().toString();
-      const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-      const dd = now.getDate().toString().padStart(2, '0');
-      const datePrefix = `RTV${yyyy}${mm}${dd}`;
-
-      const result = await this.postReturnToVendorRepository
-        .createQueryBuilder('rtv')
-        .select('MAX(rtv.rtvNo)', 'maxNo')
-        .where('rtv.rtvNo LIKE :prefix', { prefix: `${datePrefix}%` })
-        .getRawOne();
-
-      let nextSeq = 1;
-      if (result?.maxNo) {
-        const parsed = parseInt(result.maxNo.replace(datePrefix, ''), 10);
-        if (!isNaN(parsed)) nextSeq = parsed + 1;
-      }
-      return `${datePrefix}${nextSeq.toString().padStart(5, '0')}`;
+      return nextDocumentNumber(this.postReturnToVendorRepository.manager, SERIES.rtv, `RTV${compactDate()}`, 5);
     }
 
   // Creating a document without a configured approval flow leaves it with no
@@ -131,12 +145,18 @@ export class ReturnToVendorService {
             lines: (returnData.rtvProducts ?? []).map((p: any) => ({
               productId: refId(p?.productName),
               variantId: refId(p?.variant),
+              uomId: refId(p?.uom),
               kg: p?.netWeight,
             })),
             manager: queryRunner.manager,
           });
           returnData.grnNo = grnId as string;
-          if (!returnData.companyName && resolvedSource.companyId) returnData.companyName = resolvedSource.companyId;
+          // Company and batch belong to the GRN; line unit, price and amount too.
+          if (resolvedSource.companyId) returnData.companyName = resolvedSource.companyId;
+          (returnData as Record<string, any>).batchNo = resolvedSource.batchNo ?? null;
+          if (Array.isArray(returnData.rtvProducts)) {
+            returnData.totalAmt = priceRtvLinesFromSource(returnData.rtvProducts, resolvedSource);
+          }
           if (!returnData.location && resolvedSource.locationId) returnData.location = resolvedSource.locationId;
           if (!returnData.selectedVendor && resolvedSource.partyType === 'vendor' && resolvedSource.partyId) {
             returnData.selectedVendor = resolvedSource.partyId;
@@ -469,7 +489,7 @@ export class ReturnToVendorService {
 
             const existingRecord = await this.postReturnToVendorRepository.findOne({
                 where: { id },
-                relations: ['rtvProducts', 'rtvProducts.productName', 'rtvProducts.variant', 'companyName', 'location', 'document', 'grnNo'],
+                relations: ['rtvProducts', 'rtvProducts.productName', 'rtvProducts.variant', 'rtvProducts.uom', 'companyName', 'location', 'document', 'grnNo'],
             });
 
             if (!existingRecord) {
@@ -503,9 +523,9 @@ export class ReturnToVendorService {
             const updatedRecord = await this.dataSource.transaction(async (manager) => {
                 const grnId = updateData.grnNo !== undefined ? refId(updateData.grnNo) : existingRecord.grnNo?.id ?? null;
                 const lines = Array.isArray(updateData.rtvProducts)
-                    ? updateData.rtvProducts.map((p: any) => ({ productId: refId(p?.productName), variantId: refId(p?.variant), kg: p?.netWeight }))
-                    : (existingRecord.rtvProducts ?? []).map((p) => ({ productId: p.productName?.id, variantId: p.variant?.id ?? null, kg: p.netWeight }));
-                await this.receivingGuardService.resolveAndAssert({
+                    ? updateData.rtvProducts.map((p: any) => ({ productId: refId(p?.productName), variantId: refId(p?.variant), uomId: refId(p?.uom), kg: p?.netWeight }))
+                    : (existingRecord.rtvProducts ?? []).map((p) => ({ productId: p.productName?.id, variantId: p.variant?.id ?? null, uomId: p.uom?.id ?? null, kg: p.netWeight }));
+                const resolvedSource = await this.receivingGuardService.resolveAndAssert({
                     docType: 'rtv',
                     sourceType: 'grn',
                     sourceId: grnId,
@@ -514,6 +534,11 @@ export class ReturnToVendorService {
                     manager,
                 });
                 if (updateData.grnNo !== undefined && grnId) updateData.grnNo = grnId;
+                if (resolvedSource.companyId) updateData.companyName = resolvedSource.companyId;
+                updateData.batchNo = resolvedSource.batchNo ?? null;
+                if (Array.isArray(updateData.rtvProducts)) {
+                    updateData.totalAmt = priceRtvLinesFromSource(updateData.rtvProducts, resolvedSource);
+                }
 
                 Object.assign(existingRecord, updateData);
                 return manager.save(existingRecord);

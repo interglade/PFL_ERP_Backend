@@ -6,6 +6,7 @@ import { format } from "date-fns-tz";
 import { Product } from "../../product/createproduct/entity/product.entity";
 import { ProductVarient } from "../../product/productVarient/entity/productVarient.entity";
 import { UOM } from "../../uom/entity/uom.entity";
+import { PackingMaterial } from "../../packingMaterial/entity/packingMaterial.entity";
 
 
 
@@ -33,6 +34,11 @@ export class GrnProduct extends Model {
   @ManyToOne(() => UOM, { nullable: true,onDelete: "SET NULL",cascade: true})
   @JoinColumn({ name: "uom_id" })
   uom: UOM;
+
+  // Packaging material the product was received in (optional)
+  @ManyToOne(() => PackingMaterial, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "packing_material_id" })
+  packagingMaterial: PackingMaterial | null;
 
   // @Column("character varying", { name: "count", nullable: true, length: 100 })
   // count: string;

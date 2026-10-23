@@ -59,6 +59,10 @@ export interface AqrLineInput {
   variant?: RefLike;
   uom?: RefLike;
   arrivedQty?: number | string | null;
+  /** Batch of the source line (transfer lines). */
+  batchNo?: string | null;
+  /** Units that arrived (boxes, crates …); optional, for lines not counted in kg. */
+  arrivedUnits?: number | string | null;
   samplingQty?: number | string | null;
   totalQty?: number | string | null;
   totalpercent?: number | string | null;
@@ -167,10 +171,10 @@ export function validateAqrLines(products: AqrLineInput[] | null | undefined): s
     if (!productId) {
       errors.push(`${where}: product is required`);
     } else {
-      const key = productKey(productId, refIdOf(line.variant));
+      const key = productKey(productId, refIdOf(line.variant), refIdOf(line.uom), line.batchNo ?? null);
       const first = firstLineByKey.get(key);
       if (first !== undefined) {
-        errors.push(`${where}: repeats the product of line ${first}`);
+        errors.push(`${where}: repeats the product and unit of line ${first}`);
       } else {
         firstLineByKey.set(key, n);
       }
@@ -181,6 +185,11 @@ export function validateAqrLines(products: AqrLineInput[] | null | undefined): s
       errors.push(`${where}: arrived quantity is required`);
     } else if (!Number.isFinite(arrived) || arrived < 0) {
       errors.push(`${where}: arrived quantity must be a number of 0 or more`);
+    }
+
+    const arrivedUnits = parseQuantity(line.arrivedUnits);
+    if (arrivedUnits !== undefined && arrivedUnits !== null && (!Number.isFinite(arrivedUnits) || arrivedUnits < 0)) {
+      errors.push(`${where}: arrived units must be a number of 0 or more`);
     }
 
     const sampling = parseQuantity(line.samplingQty);

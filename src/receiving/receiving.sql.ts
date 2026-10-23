@@ -7,6 +7,7 @@
  * input (ids, search terms) always travels as a bound parameter.
  */
 
+import { RECEIVABLE_GRN_STATUSES } from '../grn/grnApproval';
 import { DocumentStatus, DocumentTypeEnum } from '../approvalFlow/entity/docuemnt.entity';
 import { ProcessingDocType, ReceivingSourceType } from './receiving.types';
 
@@ -74,8 +75,11 @@ function quote(literal: string): string {
  */
 export function completeDocumentExistsSql(sourceIdExpr: string, sourceType: ReceivingSourceType): string {
   const type = quote(SOURCE_DOCUMENT_TYPE[sourceType]);
-  const complete = quote(DocumentStatus.COMPLETE);
-  return `EXISTS (SELECT 1 FROM documents rl_d WHERE rl_d.document_type_id = (${sourceIdExpr})::text AND rl_d.type::text = ${type} AND rl_d.status::text = ${complete} AND rl_d."deletedAt" IS NULL)`;
+  // D-4: a GRN can be received once fully approved, while finance finalisation is pending.
+  const statusTest = sourceType === 'grn'
+    ? `IN (${RECEIVABLE_GRN_STATUSES.map(quote).join(', ')})`
+    : `= ${quote(DocumentStatus.COMPLETE)}`;
+  return `EXISTS (SELECT 1 FROM documents rl_d WHERE rl_d.document_type_id = (${sourceIdExpr})::text AND rl_d.type::text = ${type} AND rl_d.status::text ${statusTest} AND rl_d."deletedAt" IS NULL)`;
 }
 
 /**
@@ -121,6 +125,61 @@ export function anyCountingDocumentSql(sourceIdExpr: string, sourceType: Receivi
     .map((docType) => countingDocumentExistsSql(sourceIdExpr, sourceType, docType))
     .filter((sql): sql is string => Boolean(sql));
   return `(${parts.join(' OR ')})`;
+}
+
+/**
+ * Same rule as {@link countingDocumentExistsSql}, evaluated like the status
+ * service does it in JS (`isCountingDocument`): the document counts when its
+ * *newest* live `documents` row is not REJECT (or it has none). Used by the
+ * Arrivals state classification, which must agree with the computed state.
+ */
+export function countingDocumentLatestSql(
+  sourceIdExpr: string,
+  sourceType: ReceivingSourceType,
+  docType: ProcessingDocType,
+  extraWhere = '',
+): string | null {
+  const spec = PROCESSING_TABLE[docType];
+  const fk = spec.fk[sourceType];
+  if (!fk) return null;
+  const alias = `rs_${docType}`;
+  const type = quote(PROCESSING_DOCUMENT_TYPE[docType]);
+  const reject = quote(DocumentStatus.REJECT);
+  const live = [`${alias}."isDeleted" = false`, `${alias}."deletedAt" IS NULL`, ...spec.extraLive.map((p) => `${alias}.${p}`)].join(' AND ');
+  const latest =
+    `(SELECT rs_d.status::text FROM documents rs_d WHERE rs_d.document_type_id = ${alias}.id::text AND rs_d.type::text = ${type} ` +
+    `AND rs_d."deletedAt" IS NULL ORDER BY rs_d."createdAt" DESC LIMIT 1)`;
+  return (
+    `EXISTS (SELECT 1 FROM ${spec.table} ${alias} WHERE ${alias}.${fk} = (${sourceIdExpr}) AND ${live} ` +
+    `AND COALESCE(${latest}, '') <> ${reject}${extraWhere ? ` AND ${extraWhere.replace(/\$doc/g, alias)}` : ''})`
+  );
+}
+
+/**
+ * Arrivals state as far as SQL can tell it exactly (see `deriveState`):
+ * `not-started` without any counting document; without a counting Inward the
+ * source cannot be `done`, so it is `legacy` (a counting dump line without net
+ * weight) or `open`. NULL when an Inward counts: done / open / legacy then
+ * depends on the per-product kg matching, which only the status service computes.
+ */
+export function sqlStateExpr(sourceIdExpr: string, sourceType: ReceivingSourceType): string {
+  const any = processingTypesFor(sourceType)
+    .map((docType) => countingDocumentLatestSql(sourceIdExpr, sourceType, docType))
+    .filter((sql): sql is string => Boolean(sql))
+    .join(' OR ');
+  const inward = countingDocumentLatestSql(sourceIdExpr, sourceType, 'inward');
+  // Line FK and columns from DumpProduct (dump_product.dump_register_id, product_id, "netWeight").
+  const legacyDump = countingDocumentLatestSql(
+    sourceIdExpr,
+    sourceType,
+    'dump',
+    `EXISTS (SELECT 1 FROM dump_product rs_dp WHERE rs_dp.dump_register_id = $doc.id AND rs_dp.product_id IS NOT NULL AND rs_dp."netWeight" IS NULL)`,
+  );
+  return (
+    `(CASE WHEN NOT (${any}) THEN 'not-started' ` +
+    `WHEN NOT ${inward} THEN (CASE WHEN ${legacyDump} THEN 'legacy' ELSE 'open' END) ` +
+    `ELSE NULL END)`
+  );
 }
 
 export function isProcessingDocType(value: unknown): value is ProcessingDocType {

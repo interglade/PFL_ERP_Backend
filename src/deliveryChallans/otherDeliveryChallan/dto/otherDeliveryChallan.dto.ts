@@ -1,4 +1,3 @@
-import { Department } from "../../../utils/status.enum";
 
 ;
 
@@ -57,11 +56,6 @@ export interface CreateODCDto {
   customerAddress?: ODCAddressDto | string | null;
 
   transitInsuranceNo?: string | null;
-  driverName?: string | null;
-  contactNo?: string | null;
-  altContactNo?: string | null;
-  vehicleNo?: string | null;
-  licenseNo?: string | null;
   receiverName?: string | null;
   rmn?: string | null;
 
@@ -71,7 +65,6 @@ export interface CreateODCDto {
   totalPackagingMaterialAmount?: number | null;
   totalAmtInWords?: string | null;
 
-  requestingDepartment?: Department | null;
   remark?: string | null;
   anyAttachment?: string[] | null;
 
@@ -130,11 +123,6 @@ export interface ODCViewDto {
   office: string | null;
   grnNo: string | null;
   fromLocation: string | null;
-  driverName: string | null;
-  contactNo: string | null;
-  altContactNo: string | null;
-  vehicleNo: string | null;
-  licenseNo: string | null;
   receiverName: string | null;
   rmn: string | null;
   transitInsuranceNo: string | null;
@@ -199,11 +187,6 @@ export interface ODCUpdateFormDto {
   grnNo: string | null;
   fromLocation: string | null;
   rmn: string | null;
-  driverName: string | null;
-  contactNo: string | null;
-  altContactNo: string | null;
-  vehicleNo: string | null;
-  licenseNo: string | null;
   receiverName: string | null;
   transitInsuranceNo: string | null;
   totalProductAmount: number | null;
@@ -211,7 +194,6 @@ export interface ODCUpdateFormDto {
   netPackagingMaterialWeight: number | null;
   totalPackagingMaterialAmount: number | null;
   totalAmtInWords: string | null;
-  requestingDepartment: Department | null;
   approvalStatus: string | null;
   remark: string | null;
   anyAttachment: string[] | null;
@@ -246,11 +228,6 @@ export interface ODCListItemDto {
   rmn: string | null;
   /** Formatted address string */
   customerAddress: string | null;
-  driverName: string | null;
-  contactNo: string | null;
-  altContactNo: string | null;
-  vehicleNo: string | null;
-  licenseNo: string | null;
   receiverName: string | null;
   transitInsuranceNo: string | null;
   totalProductAmount: number | null;
@@ -258,7 +235,6 @@ export interface ODCListItemDto {
   netPackagingMaterialWeight: number | null;
   totalPackagingMaterialAmount: number | null;
   totalAmtInWords: string | null;
-  requestingDepartment: Department | null;
   approvalStatus: string | null;
   remark: string | null;
   anyAttachment: string[] | null;

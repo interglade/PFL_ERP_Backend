@@ -265,41 +265,6 @@ FILTERS
       });
     }
 
-    // have multiple Driver Name
-
-    // if (filter.driverName) {
-    //   const diverName = Array.isArray(filter.driverName)
-    //     ? filter.driverName
-    //     : String(filter.driverName).split(',');
-    //   qb.andWhere('dc.driverName IN (:...driver)', { driver: diverName });
-    // }
-
-    if (filter.driverName) {
-      const diverName = normalizeArray(filter.driverName)
-      qb.andWhere(
-    `LOWER(dc.driverName) IN (:...driver)`,
-    {
-      driver: diverName.map(d => d.trim().toLowerCase()),
-    }
-  );
-    }
-
-    //have multiple Driver License Number
-    // if (filter.driverLicenseNumber) {
-    //   const licenseNumbers = Array.isArray(filter.driverLicenseNumber)
-    //     ? filter.driverLicenseNumber
-    //     : String(filter.driverLicenseNumber).split(',');
-    //   qb.andWhere('dc.licenseNo IN (:...lic)', { lic: licenseNumbers });
-    // }
-
-    if (filter.driverLicenseNumber) {
-  const values = normalizeArray(filter.driverLicenseNumber);
-
-  qb.andWhere(`LOWER(dc.licenseNo) IN (:...lic)`, {
-    lic: values,
-  });
-}
-
     //have multiple Vehicle Number
     // if (filter.vehicleNumber) {
     //   const vehicleNumbers = Array.isArray(filter.vehicleNumber)
@@ -543,10 +508,6 @@ const formatFilterValue = (val: any) => {
           ? `${filter.totalAmountOperator} ${filter.totalAmount}`
           : 'All',
       ],
-      ['Driver Name', formatFilterValue(filter.driverName) || 'All'],
-      // ['Driver Name', Array.isArray(filter.driverName) ? filter.driverName.join(', ') : (filter.driverName || 'All')],
-      ["Driver's License Number", formatFilterValue(filter.driverLicenseNumber) || 'All'],
-      // ["Driver's License Number", Array.isArray(filter.driverLicenseNumber) ? filter.driverLicenseNumber.join(', ') : (filter.driverLicenseNumber || 'All')],
       ['Vehicle Number', formatFilterValue(filter.vehicleNumber) || 'All'],
       // ['Vehicle Number', Array.isArray(filter.vehicleNumber) ? filter.vehicleNumber.join(', ') : (filter.vehicleNumber || 'All')],
       ['Receiver Name', formatFilterValue(filter.receiverName) || 'All'],
@@ -849,8 +810,6 @@ export interface FinalInvoiceReportFilter {
   totalQuantityOperator?: '>' | '<' | '=' | '>=' | '<=' | '!=';
   totalAmount?: number;
   totalAmountOperator?: '>' | '<' | '=' | '>=' | '<=' | '!=';
-  driverName?: string | string[];
-  driverLicenseNumber?: string | string[];
   vehicleNumber?: string | string[];
   receiverName?: string | string[];
   status?: string | string[];

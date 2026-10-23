@@ -1,3 +1,6 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../../global/numbering/documentNumber';
+import { assertGrnFreeForVoucher, resolveVoucherGrn } from '../../voucherGrnLink';
+import { relationIdOf } from '../../../grn/grnLinks.sql';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 
@@ -94,6 +97,10 @@ export class TPVoucherService {
       if (!approvalFlowExit) {
         throw new Error('Approval flow not found');
       }
+
+      // D-6: one live Transport Payment Voucher per GRN.
+      const grnId = relationIdOf(tpvoucherData.grnNo);
+      if (grnId) await assertGrnFreeForVoucher(queryRunner.manager, 'tp', grnId);
 
       tpvoucherData.voucherNo = await this.generateTransportPaymentVoucherNo();
 
@@ -493,7 +500,7 @@ public async getAllTPVouchers(
 ): Promise<TPVoucher | null> {
   const voucher = await this.tpVoucherRepository.findOne({
     where: { id },
-    relations: ['products'], // load current products
+    relations: ['products', 'grnNo'], // load current products and GRN
   });
 
   if (!voucher) return null;
@@ -502,8 +509,14 @@ public async getAllTPVouchers(
 
   const grnNo = updatedData.grnNo;
   if (grnNo) {
-    const grn = await this.grnRepository.findOne({ where: { grnNo } });
+    // The edit form sends the GRN id (older callers the GRN number).
+    const grn = await resolveVoucherGrn(this.grnRepository, grnNo);
+    if (grn && grn.id !== voucher.grnNo?.id) {
+      await assertGrnFreeForVoucher(this.tpVoucherRepository.manager, 'tp', grn.id, id);
+    }
     if (grn) voucher.grnNo = grn;
+    // The relation is set above; a raw id / number must not overwrite it below.
+    delete (updatedData as Record<string, unknown>).grnNo;
   }
 
   if (updatedData.products && Array.isArray(updatedData.products)) {
@@ -544,23 +557,9 @@ public async getAllTPVouchers(
     return {No:voucher.voucherNo};
   }
 
+  /** `TPV-yyyyMMdd-00001`, the serial running per day (it used to be missing, so every voucher of a day shared one number); issued by the shared sequence (no COUNT / MAX race, never reused). */
   public async generateTransportPaymentVoucherNo(): Promise<string> {
-    const today = new Date();
-    const formattedDate = format(today, 'yyyyMMdd');
-
-    const lastVoucher = await this.tpVoucherRepository
-      .createQueryBuilder('tpVoucher')
-      .where('tpVoucher.voucherNo LIKE :datePattern', { datePattern: `TPV-${formattedDate}-%` })
-      .orderBy('tpVoucher.voucherNo', 'DESC')
-      .getOne();
-
-    let newSerialNumber = 1;
-    if (lastVoucher) {
-      const lastSerialNumber = parseInt(lastVoucher.voucherNo.split('-')[2], 10);
-      newSerialNumber = lastSerialNumber + 1;
-    }
-
-    return `TPV-${formattedDate}`;
+    return nextDocumentNumber(this.tpVoucherRepository.manager, SERIES.transportVoucher, `TPV-${compactDate()}-`, 5);
   }
 
   public async deleteMultipleTransportPaymentVoucher(ids: string[]): Promise<BulkDeleteResultDto> {

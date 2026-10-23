@@ -1,3 +1,4 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 import { TYPES } from '../../types';
@@ -7,6 +8,7 @@ import AppError from '../../utils/appError';
 import { Source } from '../../utils/status.enum';
 import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
 import { ResolvedSource } from '../../receiving/receiving.types';
+import { priceLineFromSource, round2 } from '../../receiving/receiving.helpers';
 
 import { LessThanOrEqual, DataSource, SelectQueryBuilder, In, IsNull, ILike, DeepPartial } from 'typeorm';
 
@@ -104,7 +106,9 @@ export class InwardRegisterService {
     },
     resolved: ResolvedSource,
   ): void {
-    if (!data.companyName && resolved.companyId) data.companyName = resolved.companyId;
+    // The company and the batch belong to the source and cannot be changed downstream.
+    if (resolved.companyId) data.companyName = resolved.companyId;
+    if (resolved.batchNo) (data as { batchNo?: string | null }).batchNo = resolved.batchNo;
     if (!data.location && resolved.locationId) data.location = resolved.locationId;
     if (!data.fromLocation && resolved.fromLocationId) data.fromLocation = resolved.fromLocationId;
     if (!data.selectedVendor && !data.selectedFarmer && !data.customerName && resolved.partyId) {
@@ -120,6 +124,34 @@ export class InwardRegisterService {
     }
   }
   private readonly CACHE_TTL = 180;
+
+  /**
+   * Unit and unit price come from the source line; the amount is recomputed as
+   * quantity (in that unit) × unit price, and the header cost follows.
+   */
+  private priceLinesFromSource(
+    data: { inwardProducts?: Array<{ productName?: string | null; variant?: string | null; uom?: string | null; batchNo?: string | null; quantity?: number | null; unitPrice?: number | null; amount?: number | null }> | null; inwardCost?: number | null },
+    resolved: ResolvedSource,
+  ): void {
+    if (!Array.isArray(data.inwardProducts)) return;
+    const errors: string[] = [];
+    for (const item of data.inwardProducts) {
+      const { line, error } = priceLineFromSource(
+        resolved.products,
+        { productId: item.productName, variantId: item.variant ?? null, uomId: item.uom, batchNo: item.batchNo ?? null, unitPrice: item.unitPrice, quantity: item.quantity },
+        resolved.sourceNo,
+      );
+      if (error) errors.push(error);
+      item.uom = line.uomId ?? item.uom;
+      // A transfer line carries the batch the Transfer DC took (C5); others use the header batch.
+      item.batchNo = line.batchNo ?? null;
+      item.unitPrice = line.unitPrice;
+      item.quantity = line.quantity;
+      item.amount = line.amount;
+    }
+    if (errors.length > 0) throw new AppError(400, errors.join('; '));
+    data.inwardCost = round2(data.inwardProducts.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
+  }
 
   private async invalidateCache(id?: string): Promise<void> {
     const tasks: Promise<any>[] = [
@@ -143,21 +175,10 @@ export class InwardRegisterService {
 
  
 
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateSerialNo(): Promise<string> {
-      const now = new Date();
-      const yyyy = now.getFullYear().toString();
-      const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-      const dd = now.getDate().toString().padStart(2, '0');
-      const datePrefix = `IWD${yyyy}${mm}${dd}`;
-
-      // Count only records for today's prefix to get per-day sequence
-      const count = await this.inwardRegisterRepo.count({
-        where: { inwardNo: ILike(`${datePrefix}%`) },
-      });
-
-      const serialNo = `${datePrefix}${(count + 1).toString().padStart(4, '0')}`;
-      return serialNo;
-    }
+    return nextDocumentNumber(this.inwardRegisterRepo.manager, SERIES.inward, `IWD${compactDate()}`, 4);
+  }
 
 
     
@@ -216,11 +237,14 @@ const serialNo = await this.generateSerialNo();
       lines: (data.inwardProducts ?? []).map((item) => ({
         productId: item.productName,
         variantId: item.variant ?? null,
+        uomId: item.uom ?? null,
+        batchNo: item.batchNo ?? null,
         kg: item.netWeight,
       })),
       manager: queryRunner.manager,
     });
     this.applySourceDefaults(data, resolvedSource);
+    this.priceLinesFromSource(data, resolvedSource);
 
       const {
   requestedBy,
@@ -298,6 +322,7 @@ const serialNo = await this.generateSerialNo();
     amount: item.amount,
     netWeight: item.netWeight,
     grossWeight: item.grossWeight,
+    batchNo: item.batchNo ?? null,
   })),
 };
     // 4. Create Inward Register
@@ -582,7 +607,7 @@ async getInwardidforupdate(id: string, userId: string): Promise<InwardRegisterUp
         'deliveryChallanNo.id', 'rbcNo.id',
         'selectedVendor.id', 'selectedFarmer.id',
         'inwardBy.id', 'purchasedBy.id',
-        'inwardProducts.id', 'inwardProducts.grossWeight', 'inwardProducts.netWeight',
+        'inwardProducts.id', 'inwardProducts.grossWeight', 'inwardProducts.netWeight', 'inwardProducts.batchNo',
         'inwardProducts.weight', 'inwardProducts.packingMaterialWeight',
         'inwardProducts.quantity', 'inwardProducts.unitPrice', 'inwardProducts.amount',
         'productName.id','productName.name','productName.productCode', 'uom.id', 'variant.id',
@@ -644,6 +669,7 @@ async getInwardidforupdate(id: string, userId: string): Promise<InwardRegisterUp
           quantity: p.quantity,
           unitPrice: p.unitPrice,
           amount: p.amount,
+          batchNo: p.batchNo ?? null,
         }),
       ),
     };
@@ -661,7 +687,7 @@ console.log(transformedInwardRegister)
   ): Promise<InwardRegister> {
     const inwardRegister = await this.inwardRegisterRepo.findOne({
       where: { id },
-      relations: ['grnNo', 'deliveryChallanNo', 'rbcNo', 'inwardProducts', 'inwardProducts.productName', 'inwardProducts.variant'],
+      relations: ['grnNo', 'deliveryChallanNo', 'rbcNo', 'inwardProducts', 'inwardProducts.productName', 'inwardProducts.variant', 'inwardProducts.uom'],
     });
 
     if (!inwardRegister) {
@@ -682,8 +708,8 @@ console.log(transformedInwardRegister)
         ReceivingGuardService.sourceTypeFromDocKind(data.inwardType ?? inwardRegister.inwardType),
       );
       const lines = data.inwardProducts
-        ? data.inwardProducts.map((item) => ({ productId: item.productName, variantId: item.variant ?? null, kg: item.netWeight }))
-        : (inwardRegister.inwardProducts ?? []).map((item) => ({ productId: item.productName?.id, variantId: item.variant?.id ?? null, kg: item.netWeight }));
+        ? data.inwardProducts.map((item) => ({ productId: item.productName, variantId: item.variant ?? null, uomId: item.uom ?? null, batchNo: item.batchNo ?? null, kg: item.netWeight }))
+        : (inwardRegister.inwardProducts ?? []).map((item) => ({ productId: item.productName?.id, variantId: item.variant?.id ?? null, uomId: item.uom?.id ?? null, batchNo: item.batchNo ?? null, kg: item.netWeight }));
       const resolvedSource = await this.receivingGuardService.resolveAndAssert({
         docType: 'inward',
         sourceType: sourceRef?.sourceType,
@@ -693,6 +719,7 @@ console.log(transformedInwardRegister)
         manager,
       });
       this.applySourceDefaults(data, resolvedSource);
+      this.priceLinesFromSource(data, resolvedSource);
 
       Object.assign(inwardRegister, data);
       return manager.save(inwardRegister);
@@ -1121,7 +1148,7 @@ public async getInwardregisterByIdForView(docid: string, userId: string, isAdmin
         'residensialAddress.location', 'residensialAddress.city', 'residensialAddress.state', 'residensialAddress.pincode',
         'purchasedBy.firstName', 'purchasedBy.lastName',
         'inwardBy.firstName', 'inwardBy.lastName',
-        'inwardProducts.id', 'inwardProducts.packingMaterialWeight', 'inwardProducts.quantity',
+        'inwardProducts.id', 'inwardProducts.packingMaterialWeight', 'inwardProducts.quantity', 'inwardProducts.batchNo',
         'inwardProducts.weight', 'inwardProducts.unitPrice', 'inwardProducts.amount',
         'inwardProducts.netWeight', 'inwardProducts.grossWeight',
         'productName.name', 'uom.unit', 'variant.variantName',

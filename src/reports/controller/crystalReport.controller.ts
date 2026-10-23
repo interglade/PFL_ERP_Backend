@@ -206,8 +206,8 @@ export class CrystalReportController {
       // Add headers
       const headers = [
         'GRN No', 'GRN Date', 'GRN Type', 'Purchase Type', 'Vendor Name', 
-        'Farmer Name', 'Company', 'Branch', 'Purchase Location', 'Bill No', 
-        'Vehicle No', 'Total Amount', 'Sub Total', 'Freight', 'Other Charges',
+        'Farmer Name', 'Company', 'Branch', 'Purchase Location', 'Bill No',
+        'Batch No', 'Total Gross Weight', 'Total Net Weight', 'Total Amount', 'Sub Total', 'Freight', 'Other Charges',
         'Purchased By', 'Created By', 'Source', 'Product Name', 'Variant',
         'Quantity', 'Revised Quantity', 'Unit Price', 'Revised Rate', 'Amount',
         'UOM', 'Gross Weight', 'Net Weight', 'Packing Material Weight',
@@ -232,7 +232,7 @@ export class CrystalReportController {
             worksheet.addRow([
               grn.grnNo, grn.grnDate, grn.grnType, grn.purchaseType,
               grn.vendorName, grn.farmerName, grn.companyName, grn.branchName,
-              grn.purchaseLocation, grn.billNo, grn.vehicleNo, grn.totalAmount,
+              grn.purchaseLocation, grn.billNo, grn.batchNo, grn.totalGrossWeight, grn.totalNetWeight, grn.totalAmount,
               grn.subTotalAmount, grn.freight, grn.otherCharges, grn.purchasedBy,
               grn.createdBy, grn.source, product.productName, product.variantName,
               product.quantity, product.revisedQuantity, product.unitPrice,
@@ -245,9 +245,9 @@ export class CrystalReportController {
           worksheet.addRow([
             grn.grnNo, grn.grnDate, grn.grnType, grn.purchaseType,
             grn.vendorName, grn.farmerName, grn.companyName, grn.branchName,
-            grn.purchaseLocation, grn.billNo, grn.vehicleNo, grn.totalAmount,
+            grn.purchaseLocation, grn.billNo, grn.batchNo, grn.totalGrossWeight, grn.totalNetWeight, grn.totalAmount,
             grn.subTotalAmount, grn.freight, grn.otherCharges, grn.purchasedBy,
-            grn.createdBy, grn.source, '', '', '', '', '', '', '', '', '', '', '', '', '', ''
+            grn.createdBy, grn.source, '', '', '', '', '', '', '', '', '', '', '', '', ''
           ]);
         }
       });
