@@ -84,8 +84,7 @@ async function backfillDealSlipRfpaDetails() {
           const paymentInfo = await copyRfpaPaymentInfo(manager, rfpa);
 
           // update(), not save(): DealSlip.rfpa is cascade:true, so saving would also write the RFPA.
-          const { requestingDepartment: _keepExistingDepartment, ...header } = dealSlipHeaderFromRfpa(rfpa);
-          await manager.update(DealSlip, { id }, { ...header, paymentInfo } as any);
+          await manager.update(DealSlip, { id }, { ...dealSlipHeaderFromRfpa(rfpa), paymentInfo } as any);
 
           const dealSlip = await manager.findOneByOrFail(DealSlip, { id });
           await copyRfpaProducts(manager, dealSlip, rfpa);

@@ -16,7 +16,8 @@ export class GrnProduct extends Model {
   
 
   // Relation to GRN entity
-  @ManyToOne(() => GRN, (grn) => grn.grnProducts,{nullable: true,onDelete: "SET NULL"})
+  // A line left out of a GRN save is deleted, not detached (GRN edit rule S4).
+  @ManyToOne(() => GRN, (grn) => grn.grnProducts, { nullable: true, onDelete: "SET NULL", orphanedRowAction: "delete" })
   @JoinColumn({ name: "grn_id" })
   grn: GRN;
 
@@ -53,21 +54,17 @@ export class GrnProduct extends Model {
   // variety:string;
   @Column('decimal', { precision: 10, scale: 2,nullable: true })
   quantity: number; // Quantity of the product in the GRN
-  @Column('decimal', { precision: 10, scale: 2,nullable: true })
-  revisedQuantity: number; // Quantity of the product in the GRN
 
   // @Column({ name: 'product_origin', nullable: true })
   // productOrigin: string;
   @Column('decimal', { precision: 10, scale: 2 ,nullable: true})
   unitPrice: number; // Rate of the product per unit
-  @Column('decimal', { precision: 10, scale: 2 ,nullable:true})
-  revisedRate: number; // Rate of the product per unit
   @Column("decimal", { precision: 12, scale: 2, default: 0 })
   amount: number;
   
-  // Product details
-  // @Column("character varying", { name: "grade", nullable: true, length: 100 })
-  // grade: string;
+  // Product details (pre-filled from the Deal Slip line, editable in the GRN)
+  @Column("character varying", { name: "grade", nullable: true, length: 100 })
+  grade: string | null;
 
   @Column("decimal", { precision: 100, scale: 3 ,nullable:true})
   grossWeight: number;

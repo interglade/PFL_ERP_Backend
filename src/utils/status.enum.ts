@@ -56,6 +56,16 @@ export enum ammountStatus{
     UNPAID='unpaid'
 }
 
+/**
+ * A GRN's payment status, worked out from its recorded payments (docs/grn-payment-history-plan.md B2).
+ * Invoices keep the two-value `ammountStatus`.
+ */
+export enum GrnPaymentStatus {
+    UNPAID = 'unpaid',
+    PARTIAL = 'partial',
+    PAID = 'paid',
+}
+
 
 
 

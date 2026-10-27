@@ -51,9 +51,7 @@ export interface ProcurementProductData {
   productName: string;
   variantName: string;
   quantity: number;
-  revisedQuantity: number;
   unitPrice: number;
-  revisedRate: number;
   amount: number;
   uom: string;
   grossWeight: number;
@@ -93,9 +91,7 @@ export class CrystalReportService {
       .leftJoinAndSelect('grn.selectedVendor', 'vendor')
       .leftJoinAndSelect('grn.selectedFarmer', 'farmer')
       .leftJoinAndSelect('grn.companyName', 'company')
-      .leftJoinAndSelect('grn.location', 'branch')
       .leftJoinAndSelect('grn.purchaseLocation', 'purchaseLocation')
-      .leftJoinAndSelect('grn.purchaseBy', 'purchaseBy')
       .leftJoinAndSelect('grn.createdBy', 'createdBy')
       .leftJoinAndSelect('grn.grnProducts', 'grnProducts')
       .leftJoinAndSelect('grnProducts.productName', 'product')
@@ -120,7 +116,7 @@ export class CrystalReportService {
     }
 
     if (filters.branchId) {
-      queryBuilder.andWhere('branch.id = :branchId', { branchId: filters.branchId });
+      queryBuilder.andWhere('purchaseLocation.id = :branchId', { branchId: filters.branchId });
     }
 
     if (filters.companyId) {
@@ -313,7 +309,7 @@ export class CrystalReportService {
       vendorName: grn.selectedVendor?.companyName || '',
       farmerName: grn.selectedFarmer?.farmerfName|| '',
       companyName: grn.companyName?.name || '',
-      branchName: grn.location?.name || '',
+      branchName: grn.purchaseLocation?.name || '',
       purchaseLocation: grn.purchaseLocation?.name || grn.otherPurchaseLoc || '',
       billNo: grn.billNo || '',
       batchNo: grn.batchNo || '',
@@ -323,16 +319,14 @@ export class CrystalReportService {
       subTotalAmount: grn.subTotalAmt || 0,
       freight: grn.freight || 0,
       otherCharges: grn.otherCharges || 0,
-      purchasedBy: grn.purchaseBy?.firstName + ' ' + grn.purchaseBy?.lastName || '',
+      purchasedBy: grn.purchasedBy || '',
       createdBy: grn.createdBy?.firstName + ' ' + grn.createdBy?.lastName || '',
       source: grn.source || '',
       products: grn.grnProducts?.map(product => ({
         productName: product.productName?.name || '',
         variantName: product.variant?.variantName|| '',
         quantity: product.quantity || 0,
-        revisedQuantity: product.revisedQuantity || 0,
         unitPrice: product.unitPrice || 0,
-        revisedRate: product.revisedRate || 0,
         amount: product.amount || 0,
         uom: product.uom?.unit || '',
         grossWeight: product.grossWeight || 0,

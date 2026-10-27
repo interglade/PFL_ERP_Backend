@@ -41,6 +41,7 @@ import { uploadSingle } from '../../middleware/uploadsingle.middleware';
 import { NotificationService } from '../../notification/service/notification.service';
 import { DocumentbService } from '../../approvalFlow/service/documentb.service';
 import { GrnService } from '../service/grn.service';
+import { GrnPaymentService } from '../service/grnPayment.service';
 import { GrnRepository } from '../repository/grn.repository';
 import { ActivityAction, ActivityModule } from '../../employeeActivity/entity/userActivityLog.entity';
 import { CreateGrnDto, UpdateGrnDto } from '../dto/grn.dto';
@@ -66,6 +67,8 @@ export class GrnController {
     private readonly activityLogService: UserActivityLogService,
     @inject(TYPES.DocumentExportService)
     private readonly documentExportService: DocumentExportService,
+    @inject(TYPES.GrnPaymentService)
+    private readonly grnPaymentService: GrnPaymentService,
 
   ) {
     this.s3Client = new S3Client({
@@ -288,7 +291,7 @@ console.log(req.body);
   ) {
     try {
      
-      const { page, limit, search, sort, rfpaId, companyName, source, grnType, locationType } = req.query;
+      const { page, limit, search, sort, companyName, source, grnType, locationType } = req.query;
       const userId = res.locals.user.id;
       // const userRole = res.locals.user.role;
       // if (userRole !== "SuperAdmin")
@@ -373,7 +376,7 @@ console.log(req.body);
   ) {
     try {
 
-      const { page, limit, search, sort, rfpaId, companyName, source, grnType, locationType } = req.query;
+      const { page, limit, search, sort, companyName, source, grnType, locationType } = req.query;
       const userId = res.locals.user.id;
 
       //TODO: Shri
@@ -787,7 +790,10 @@ console.log(req.body);
     }
   }
 
-  // TODO: Update GRN amount status (paid / unpaid)
+  /**
+   * Legacy "Mark As Paid". The payment status now follows the recorded payments
+   * (POST /grns/:id/payments); this only confirms a GRN whose advance covers its whole total.
+   */
   @httpPut('/amount-status/:id')
   public async updateAmountStatus(
     @requestParam('id') id: string,
@@ -797,19 +803,18 @@ console.log(req.body);
   ) {
     try {
       const { ammountStatus: status } = req.body;
-console.log(req.body)
-      if (!status || !['paid', 'unpaid'].includes(status)) {
-        return next(new AppError(400, 'Invalid status. Must be "paid" or "unpaid"'));
+      if (status !== 'paid') {
+        return next(new AppError(409, 'The payment status follows the recorded payments; void a payment to undo it'));
       }
 
-      const result = await this.grnService.updateAmountStatus(id, status as any);
+      await this.grnPaymentService.confirmPaidByAdvance(id, res.locals.user);
 
       ControllerLogger.logSuccess('GRN amount status updated', id, req, res);
 
       // Recorded for the admin dashboard's recent activity; never blocks the response.
       const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName || ''}`.trim() || res.locals.user.username || 'Unknown User';
       void this.logUserActivity(req, res, ActivityAction.UPDATE,
-        `${userName} marked GRN as ${status === 'paid' ? 'Paid' : 'Unpaid'}`,
+        `${userName} marked GRN as Paid (covered by its advance)`,
         { entityId: id, metadata: { event: 'amount-status', ammountStatus: status } });
 
       res.status(200).json({

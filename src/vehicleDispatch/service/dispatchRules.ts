@@ -4,6 +4,7 @@ import moment from 'moment-timezone';
 import AppError from '../../utils/appError';
 import { DocumentStatus, DocumentTypeEnum } from '../../approvalFlow/entity/docuemnt.entity';
 import { GrnDeliveryMode } from '../../grn/entity/grn.entity';
+import { Source } from '../../utils/status.enum';
 import { DispatchType, VehicleDispatch } from '../entity/vehicleDispatch.entity';
 import { DispatchProduct } from '../entity/dispatchProduct.entity';
 import {
@@ -265,6 +266,131 @@ export async function prepareDispatchApproval(manager: EntityManager, dispatchId
     dispatch.totalAmount = decimalOrNull(source.totals.amount) as string;
     await m.getRepository(VehicleDispatch).save(dispatch);
   });
+}
+
+// ─── Refresh from an edited GRN ───────────────────────────────────────────────
+
+export interface RefreshedDispatch {
+  dispatchId: string;
+  documentId: string | null;
+  vehicleDispatchNo: string | null;
+  /** The dispatch's copy of the GRN changed, so its approval must start again. */
+  changed: boolean;
+}
+
+const refId = (value: any): string | null => (value && typeof value === 'object' ? value.id ?? null : value ?? null);
+const decimalText = (value: unknown): string | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n) : null;
+};
+
+/** What a purchase dispatch copies from its GRN, normalised for comparison. */
+function purchaseCopySnapshot(header: {
+  company: string | null;
+  source: string | null;
+  vendor: string | null;
+  farmer: string | null;
+  fromLocation: string | null;
+  fromText: string | null;
+  toLocation: string | null;
+  batchNo: string | null;
+  totals: Array<string | null>;
+}, lines: DispatchProduct[]): string {
+  const lineState = lines
+    .map((l) => [
+      refId(l.productName), refId(l.variant), refId(l.uom), refId(l.packagingMaterial),
+      decimalText(l.quantity), decimalText(l.unitPrice), decimalText(l.amount),
+      decimalText(l.packingMaterialWeight), decimalText(l.grossWeight), decimalText(l.netWeight),
+    ])
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return JSON.stringify({ header, lineState });
+}
+
+/**
+ * GRN edit rule D1-D3 (docs/grn-edit-rules-plan.md): a pending purchase dispatch keeps its copy of
+ * the GRN in step with it. Rebuilds the lines, totals, company, party, from / to location and batch no
+ * from the GRN; the destination follows the delivery mode (a direct-to-customer GRN has no CC / DC
+ * destination; a CC / DC GRN has no customer). Transport details (transporter, vehicle, driver,
+ * times, remarks) are the dispatch's own and stay. Approved dispatches are left alone (they block the
+ * GRN edit); legacy dispatches without lines are skipped. Runs inside the GRN edit's transaction.
+ */
+export async function refreshPendingPurchaseDispatch(m: EntityManager, grnId: string): Promise<RefreshedDispatch | null> {
+  const resolver = new DispatchSourceResolver(m);
+  const live = await resolver.liveDispatch(DispatchType.PURCHASE, grnId);
+  if (!live || live.status === DocumentStatus.COMPLETE) return null;
+
+  const repo = m.getRepository(VehicleDispatch);
+  const d = await repo.findOne({
+    where: { id: live.id },
+    relations: [
+      'companyName', 'vendor', 'farmer', 'fromLocation', 'toLocation', 'customer', 'toAddress',
+      'products', 'products.productName', 'products.variant', 'products.uom', 'products.packagingMaterial',
+    ],
+  });
+  if (!d || !d.products?.length) return null;
+
+  const source = await resolver.resolve(DispatchType.PURCHASE, grnId);
+  const direct = source.deliveryMode === GrnDeliveryMode.DIRECT_TO_CUSTOMER;
+  const party = source.party;
+  const next = {
+    company: source.company?.id ?? null,
+    source: party?.type ?? null,
+    vendor: party?.type === Source.VENDOR ? party.id : null,
+    farmer: party?.type === Source.FARMER ? party.id : null,
+    fromLocation: source.fromLocation?.id ?? null,
+    fromText: source.fromText ?? null,
+    toLocation: direct ? null : source.toLocation?.id ?? null,
+    batchNo: source.batchNo ?? null,
+    totals: [source.totals.quantity, source.totals.grossWeight, source.totals.netWeight, source.totals.amount].map(decimalText),
+  };
+  const nextLines = buildDispatchProducts(m, source.products);
+
+  const before = purchaseCopySnapshot(
+    {
+      company: refId(d.companyName),
+      source: d.source ?? null,
+      vendor: refId(d.vendor),
+      farmer: refId(d.farmer),
+      fromLocation: refId(d.fromLocation),
+      fromText: d.fromText ?? null,
+      toLocation: refId(d.toLocation),
+      batchNo: d.batchNo ?? null,
+      totals: [d.totalQuantity, d.totalGrossWeight, d.totalNetWeight, d.totalAmount].map(decimalText),
+    },
+    d.products,
+  );
+  // A CC / DC dispatch that still has a customer (or a direct one without a destination change) also counts.
+  const customerMismatch = !direct && (!!d.customer || !!d.toAddress);
+  const changed = customerMismatch || before !== purchaseCopySnapshot(next, nextLines);
+  const result = { dispatchId: d.id, documentId: live.documentId, vehicleDispatchNo: d.vehicleDispatchNo ?? null, changed };
+  if (!changed) return result;
+
+  d.companyName = (next.company ? { id: next.company } : null) as any;
+  d.source = next.source as any;
+  d.vendor = (next.vendor ? { id: next.vendor } : null) as any;
+  d.farmer = (next.farmer ? { id: next.farmer } : null) as any;
+  d.fromLocation = (next.fromLocation ? { id: next.fromLocation } : null) as any;
+  d.fromText = next.fromText as any;
+  d.toLocation = (next.toLocation ? { id: next.toLocation } : null) as any;
+  d.batchNo = next.batchNo as any;
+  if (!direct) {
+    // To a CC / DC: no customer. (A direct dispatch keeps any customer already picked on its form.)
+    d.customer = null as any;
+    d.toAddress = null as any;
+    d.clientName = null as any;
+    d.usesCurrentShippingAddress = false;
+  }
+  d.totalQuantity = next.totals[0] as string;
+  d.totalGrossWeight = next.totals[1] as string;
+  d.totalNetWeight = next.totals[2] as string;
+  d.totalAmount = next.totals[3] as string;
+
+  await m.query(`DELETE FROM dispatch_product WHERE dispatch_id = $1`, [d.id]);
+  d.products = undefined as any;
+  await repo.save(d);
+  await m.getRepository(DispatchProduct).save(nextLines.map((line) => Object.assign(line, { dispatch: { id: d.id } })));
+  return result;
 }
 
 // ─── Cascade ──────────────────────────────────────────────────────────────────

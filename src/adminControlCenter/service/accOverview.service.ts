@@ -21,6 +21,8 @@ import {
   timeLabel,
   tsText,
   unpaid,
+  grnNotFullyPaid,
+  grnDueSql,
 } from './accShared.util';
 
 const TREND_METRICS = ['purchaseQty', 'salesQty', 'purchaseAmount', 'salesAmount'] as const;
@@ -98,8 +100,9 @@ interface Activity {
  */
 export function completedGrnsSql(extraWhere = ''): string {
   return `
-    SELECT g.id, g."createdAt" AS ts, COALESCE(g."totalAmt", 0) AS amt, (${unpaid('g')}) AS unpaid,
-           g.source::text AS source, g.farmer_id, g.vendor_id, g.company_id, g.branch_id,
+    SELECT g.id, g."createdAt" AS ts, COALESCE(g."totalAmt", 0) AS amt, (${grnNotFullyPaid('g')}) AS unpaid,
+           ${grnDueSql('g')} AS due,
+           g.source::text AS source, g.farmer_id, g.vendor_id, g.company_id, g.purchaselocation_id,
            (SELECT COALESCE(SUM(gp."netWeight"), 0) FROM grn_products gp
              WHERE gp.grn_id = g.id AND gp."isDeleted" = false) AS qty
       FROM grns g
@@ -114,7 +117,7 @@ export function completedInvoicesSql(extraWhere = ''): string {
   const kg = dcLineKg('it');
   return `
     SELECT i.id, COALESCE(i."invoiceDate"::timestamp, i."createdAt") AS ts, COALESCE(i."totalAmount", 0) AS amt,
-           (${unpaid('i')}) AS unpaid, i.customer_id, i.company_id, i.branch_id, i.delivery_challan_id,
+           COALESCE(i."totalAmount", 0) AS due, (${unpaid('i')}) AS unpaid, i.customer_id, i.company_id, i.branch_id, i.delivery_challan_id,
            (SELECT COALESCE(SUM(${kg.accepted}), 0) FROM item it
              WHERE it."deliveryChallanId" = i.delivery_challan_id AND it."isDeleted" = false) AS qty
       FROM invoices i
@@ -191,7 +194,7 @@ export class AccOverviewService {
               COALESCE(SUM(amt) FILTER (WHERE NOT unpaid), 0) AS amount,
               COALESCE(SUM(amt) FILTER (WHERE NOT unpaid AND ts >= $1::timestamp), 0) AS "amountThisMonth",
               COALESCE(SUM(amt) FILTER (WHERE NOT unpaid AND ts >= $2::timestamp AND ts < $1::timestamp), 0) AS "amountLastMonth",
-              COALESCE(SUM(amt) FILTER (WHERE unpaid), 0) AS "unpaidAmount",
+              COALESCE(SUM(due) FILTER (WHERE unpaid), 0) AS "unpaidAmount",
               COUNT(*) FILTER (WHERE unpaid)::int AS "unpaidCount"
          FROM docs`,
       [thisMonth, lastMonth],

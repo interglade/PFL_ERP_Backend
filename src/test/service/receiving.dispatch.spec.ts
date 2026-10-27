@@ -6,13 +6,13 @@
 
 import 'reflect-metadata';
 
-import { attachDispatch, dispatchReadySql, dispatchStateOf, dispatchStateSql } from '../../receiving/receiving.dispatch';
+import { attachDispatch, dispatchArrivedSql, dispatchReadySql, dispatchStateOf, dispatchStateSql } from '../../receiving/receiving.dispatch';
 import { DispatchSummary, ReceivingSourceStatus } from '../../receiving/receiving.types';
 
 const summary = (arrivedAt: string | null = null): DispatchSummary => ({
   id: 'd1', dispatchNo: 'VDP2610130001', documentId: 'doc1', status: 'hold',
   vehicleNo: 'MH12AB1234', vehicleType: 'Pickup', driverName: 'Raju', driverMobNo: '9800000000',
-  transporterName: null, outTime: '09:30:00', reachingTime: null, arrivedAt, netWeightKg: 1500,
+  transporterName: null, outTime: '09:30:00', expectedReachingDate: null, reachingTime: null, arrivedAt, netWeightKg: 1500,
 });
 
 const status = (source: Partial<ReceivingSourceStatus['source']> = {}): ReceivingSourceStatus =>
@@ -80,6 +80,14 @@ describe('attachDispatch readiness (dispatch-enforcement D3)', () => {
     expect(attachDispatch(status({ type: 'rbc' }), undefined)).toMatchObject({ dispatchRequired: false, canReceive: true });
     expect(attachDispatch(status({ date: '2026-09-01T10:00:00' }), undefined)).toMatchObject({ dispatchRequired: false, canReceive: true });
   });
+
+  it('counts as arrived once the dispatch has arrivedAt, or when no dispatch is needed (D3)', () => {
+    const approved = (arrivedAt: string | null): DispatchSummary => ({ ...summary(arrivedAt), status: 'COMPLETE' });
+    expect(attachDispatch(status(), { summary: approved(null), kgByKey: new Map() }).arrived).toBe(false);
+    expect(attachDispatch(status(), { summary: approved('2026-10-26T09:00:00Z'), kgByKey: new Map() }).arrived).toBe(true);
+    expect(attachDispatch(status({ type: 'rbc' }), undefined).arrived).toBe(true);
+    expect(attachDispatch(status({ date: '2026-09-01T10:00:00' }), undefined).arrived).toBe(true);
+  });
 });
 
 describe('dispatchReadySql', () => {
@@ -110,5 +118,18 @@ describe('dispatchStateSql', () => {
 
   it('is a NULL literal for a return by customer (no dispatch exists)', () => {
     expect(dispatchStateSql('r.id', 'rbc')).toBe('NULL::text');
+  });
+});
+
+describe('dispatchArrivedSql', () => {
+  it('needs the live dispatch arrived for sources created since go-live', () => {
+    const sql = dispatchArrivedSql('g.id', 'g."createdAt"', 'grn');
+    expect(sql).toContain('rl_ad."grn_id" = g.id');
+    expect(sql).toContain('rl_ad."arrivedAt" IS NOT NULL');
+    expect(sql).toContain('ELSE TRUE END');
+  });
+
+  it('is always true for returns', () => {
+    expect(dispatchArrivedSql('r.id', 'r."createdAt"', 'rbc')).toBe('TRUE');
   });
 });

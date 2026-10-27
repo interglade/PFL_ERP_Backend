@@ -91,7 +91,8 @@ export class DealSlipAutoCreateService {
 
       const dealSlip = queryRunner.manager.create(this.dealSlipRepository.target, {
         ...dealSlipHeaderFromRfpa(rfpa),
-        rfpa,
+        // By id only: the deal slip links to its RFPA but never saves it.
+        rfpa: { id: rfpa.id },
         paymentInfo,
         dealSlipNo: await this.generateDealSlipNo(),
         // Left empty on purpose (lotNo, loadingLocation and specialRequest are NOT NULL columns,
@@ -141,7 +142,7 @@ export class DealSlipAutoCreateService {
     return `${yyyy}${mm}${dd}`;
   }
 
-  // Same scheme as DealSlipService.generateDealSlipId (DLyyyymmddNNNNN).
+  // DLyyyymmddNNNNN, from the shared document number sequence.
   /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateDealSlipNo(): Promise<string> {
     return nextDocumentNumber(this.dealSlipRepository.manager, SERIES.dealSlip, `DL${this.datePrefix()}`, 5);

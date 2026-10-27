@@ -196,7 +196,8 @@ export class VehicleDispatchService {
       if (!date) throw new AppError(400, 'Dispatch date is required');
       d.date = date as unknown as Date;
     }
-    if (has('batchNo')) d.batchNo = blankToNull(dto.batchNo) as string;
+    // A purchase dispatch's batch no is the GRN's (set from it on create and on every GRN edit), never the form's.
+    if (has('batchNo') && d.dispatchType !== DispatchType.PURCHASE) d.batchNo = blankToNull(dto.batchNo) as string;
     if (has('outDate')) d.outDate = dateOrNull(dto.outDate, 'Out date');
     if (has('outTime')) d.outTime = this.readTime(dto.outTime, 'Out time') as string;
     if (has('expectedReachingDate')) {
@@ -375,6 +376,7 @@ export class VehicleDispatchService {
 
       await this.applyTransport(m, d, data, true);
       this.applyMovement(d, data, true);
+      if (dispatchType === DispatchType.PURCHASE) d.batchNo = (source.batchNo ?? null) as string;
 
       d.products = this.linesToProducts(m, source.products);
       d.totalQuantity = decimalOrNull(source.totals.quantity) as string;
@@ -469,8 +471,10 @@ export class VehicleDispatchService {
   }
 
   /**
-   * Gate signal for purchase and stock transfer dispatches to a CC / DC. Fills the
-   * reaching time with the current time when it is still empty. Idempotent.
+   * The vehicle of a purchase / stock transfer dispatch reached its CC / DC
+   * (the Arrivals Receive button, docs/arrivals-status-plan.md §3). Sets
+   * `arrivedAt` / `arrivedBy`; `reachingTime` is the expected time and is left
+   * as entered (D6). Idempotent.
    */
   async markArrived(id: string, userId: string): Promise<VehicleDispatch> {
     const d = await this.vehicleDispatchRepository.findOne({ where: { id }, relations: ['toLocation'] });
@@ -487,7 +491,6 @@ export class VehicleDispatchService {
     if (!d.arrivedAt) {
       d.arrivedAt = new Date();
       d.arrivedBy = { id: userId } as any;
-      if (!d.reachingTime) d.reachingTime = moment().tz(IST).format('HH:mm:ss');
       await this.vehicleDispatchRepository.save(d);
       await this.invalidateCache(id);
     }

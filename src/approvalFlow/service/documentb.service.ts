@@ -28,7 +28,7 @@ import { buildQuery, PaginationOptions } from '../../utils/pagination';
 import { getReadableDocumentType } from '../../utils/documentTypeLabel';
 import { CacheService } from '../../global/cache.service';
 import { ParsedQs } from 'qs';
-import { Brackets } from 'typeorm';
+import { Brackets, In } from 'typeorm';
 import e from 'express';
 import logger from '../../utils/logger';
 import { DocumentbRepository } from '../repository/documentb.repository';
@@ -1187,11 +1187,32 @@ function isWithinRange(min: number | string | null, max: number | string | null,
       const rejected = await rejectDispatchesOfSources(this.documentbRepository.manager, sourceDocumentType, sourceIds, reason);
       if (!rejected.length) return;
       await notifyAutoRejected(rejected, reason, (message, userId) => this.notificationService.createNoti(message, userId));
+      await this.notifyAutoRejectedApprovers(rejected, reason);
       await this.cacheService.invalidatePattern('vehicleDispatch:*');
       await this.cacheService.invalidatePattern('singledoc:*');
       await this.cacheService.invalidatePattern('grn:numbers:*');
     } catch (error) {
       logger.error('Auto-rejecting vehicle dispatches failed', error);
+    }
+  }
+
+  /** Tells the approvers of auto-rejected dispatches (single approval: the first approver block) that there is nothing left to approve. */
+  private async notifyAutoRejectedApprovers(
+    rejected: Array<{ documentId: string; vehicleDispatchNo: string | null; creatorId: string | null }>,
+    reason: string,
+  ): Promise<void> {
+    const docs = await this.documentbRepository.find({
+      where: { id: In(rejected.map((r) => r.documentId)) },
+      relations: ['approvalFlow', 'approvalFlow.approvers', 'approvalFlow.approvers.firstApprover', 'approvalFlow.approvers.firstApprover.users'],
+    });
+    for (const r of rejected) {
+      const doc = docs.find((d) => d.id === r.documentId);
+      const ids = (doc?.approvalFlow?.approvers?.firstApprover?.users ?? []).map((u) => u.id).filter((id) => id && id !== r.creatorId);
+      if (!ids.length) continue;
+      await this.notificationService.createBatchNoti(
+        `Vehicle dispatch ${r.vehicleDispatchNo ?? ''} was rejected automatically: ${reason}. No action needed from you`.replace(/\s+/g, ' '),
+        ids,
+      );
     }
   }
 

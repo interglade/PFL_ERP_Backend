@@ -278,29 +278,69 @@ export function buildProductRows(
   return rows;
 }
 
+/** Counting documents of one processing step. */
+export interface StepDocuments {
+  /** Number of counting documents (not deleted, not rejected). */
+  counting: number;
+  /** Every counting document is approved (COMPLETE); false when there is none. */
+  approved: boolean;
+}
+
+export const NO_STEP_DOCUMENTS: StepDocuments = Object.freeze({ counting: 0, approved: false });
+
+/** {@link StepDocuments} of a list of counting documents. */
+export function stepDocuments(counting: CountingDocumentLike[]): StepDocuments {
+  return {
+    counting: counting.length,
+    approved: counting.length > 0 && counting.every((d) => d.status === COMPLETE_STATUS),
+  };
+}
+
 export interface DeriveStateInput {
-  /** The source's `documents.status` is COMPLETE. */
+  /** The source's `documents.status` is receivable (COMPLETE; GRN: fully approved). */
   isComplete: boolean;
-  /** At least one counting processing document exists (any type). */
-  hasCountingDocument: boolean;
-  /** A counting Inward Register exists. */
-  hasInward: boolean;
-  /** A counting Dump Register has a line without net weight (pre-change row). */
-  hasLegacyDumpLine: boolean;
+  /** Receiving may start: the source and, when required, its vehicle dispatch are approved. */
+  canReceive: boolean;
+  /** The vehicle was received (dispatch `arrivedAt` set), or the source needs no dispatch. */
+  arrived: boolean;
+  aqr: StepDocuments;
+  inward: StepDocuments;
+  dump: StepDocuments;
+  rtv: StepDocuments;
+  /** RTV applies (GRN sources only). */
+  rtvApplicable: boolean;
+  /** Dump / RTV marked "not needed". */
+  skipped: { dump: boolean; rtv: boolean };
   products: Pick<ReceivingProductRow, 'differenceKg'>[];
 }
 
+/** A Dump / RTV step is finished when its documents are approved, or it has none and was skipped. */
+function optionalStepFinished(step: StepDocuments, skipped: boolean): boolean {
+  return step.counting > 0 ? step.approved : skipped;
+}
+
 /**
- * `not-received` if the source is not COMPLETE; `not-started` if no counting
- * document; `done` if an Inward exists and every differenceKg is 0; `legacy`
- * if any counting dump line has no netWeight; else `open`.
+ * docs/arrivals-status-plan.md §2:
+ * - `not-received`: the source is not approved, or (without any document yet) its required dispatch is not;
+ * - `done`: AQR and Inward approved, Dump / RTV (GRN) approved or skipped, every differenceKg 0;
+ * - `in-progress`: any other source with a counting document (documents win over arrival, so
+ *   pre-change data without `arrivedAt` still shows its progress);
+ * - `received` when the vehicle was received (or no dispatch is needed), else `in-transit`.
  */
 export function deriveState(input: DeriveStateInput): ReceivingState {
   if (!input.isComplete) return 'not-received';
-  if (!input.hasCountingDocument) return 'not-started';
-  if (input.hasInward && input.products.every((p) => round3(p.differenceKg) === 0)) return 'done';
-  if (input.hasLegacyDumpLine) return 'legacy';
-  return 'open';
+  const hasDocument = input.aqr.counting + input.inward.counting + input.dump.counting + input.rtv.counting > 0;
+  if (hasDocument) {
+    const done =
+      input.aqr.approved &&
+      input.inward.approved &&
+      optionalStepFinished(input.dump, input.skipped.dump) &&
+      (!input.rtvApplicable || optionalStepFinished(input.rtv, input.skipped.rtv)) &&
+      input.products.every((p) => round3(p.differenceKg) === 0);
+    return done ? 'done' : 'in-progress';
+  }
+  if (!input.canReceive) return 'not-received';
+  return input.arrived ? 'received' : 'in-transit';
 }
 
 /** A document counts when its `documents.status` is not REJECT and the business row is not deleted. */

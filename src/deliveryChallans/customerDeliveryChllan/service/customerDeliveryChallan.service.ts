@@ -2,6 +2,8 @@ import { allocationRequestsByLine, releaseDcStock, reserveDcStock } from '../../
 import { priceDcLines } from '../../deliverychllan/service/dcPricing';
 import { assertDirectSaleWithinGrn, isDirectSaleGrn, resolveDcLines } from '../../deliverychllan/service/dcStock';
 import { refId as refIdOf } from '../../../receiving/receiving.helpers';
+import { GrnDeliveryMode } from '../../../grn/entity/grn.entity';
+import { applyDirectSaleSource, assertDirectSaleSource, loadDirectSaleSource } from './directSale';
 import { compactDate, nextSerial, SERIES } from '../../../global/numbering/documentNumber';
 import { assertDcChangeable, dcChangeBlockedReason } from '../../deliverychllan/service/dcChangeGuard';
 import { inject, injectable } from 'inversify';
@@ -52,6 +54,10 @@ import { DocumentbRepository } from '../../../approvalFlow/repository/documentb.
 import { CustomerDeliveryChallan } from '../entity/customerDeliveryChallan.entity';
 
 const CACHE_PREFIX = 'cdc';
+
+/** `grn`: sale from a direct-to-customer GRN; `stock`: sale from CC / DC stock (docs/customer-dc-sale-types-plan.md). */
+const saleTypeOf = (grn: { deliveryMode?: string | null } | null | undefined): 'grn' | 'stock' =>
+  grn?.deliveryMode === GrnDeliveryMode.DIRECT_TO_CUSTOMER ? 'grn' : 'stock';
 const CACHE_TTL = 180;
 const CACHE_TTL_DETAIL = 300;
 
@@ -157,9 +163,19 @@ export class CustomerDeliveryChallanService {
       //   throw new AppError(400, 'No approval flow configured for this user. Please contact the admin to create an approval flow before creating a Customer Delivery Challan.');
       // }
 
-      // 2. Fetch Customer
+      // 1. Sale type (docs/customer-dc-sale-types-plan.md): a Referred GRN makes it a sale from
+      //    GRN (direct sale). Company, From location, customer and addresses then come from the
+      //    GRN and its purchase dispatch, whatever the client sent; 1 GRN = 1 live DC.
+      const referredGrnId = refIdOf(data.grnNo);
+      if (referredGrnId) {
+        applyDirectSaleSource(data, await assertDirectSaleSource(queryRunner.manager, referredGrnId));
+      }
+
+      // 2. Fetch Customer (the form sends it as `customerName`; `partyName` is the older key)
+      const customerId = refIdOf(data.customerName) ?? refIdOf(data.partyName);
+      if (!customerId) throw new AppError(400, 'Select the customer');
       const cus = await queryRunner.manager.findOne(this.customerRepo.target, {
-        where: { id: data.partyName ?? undefined },
+        where: { id: customerId },
         relations: [
           'billingDetails.billingAddress',
           'deliveryDetails.deliveryAddress',
@@ -167,7 +183,7 @@ export class CustomerDeliveryChallanService {
       });
 
       if (!cus) {
-        throw new AppError(400, `Customer with id ${data.partyName} not found`);
+        throw new AppError(400, `Customer with id ${customerId} not found`);
       }
 
       // 2. Auto-set billing / delivery address
@@ -306,7 +322,7 @@ export class CustomerDeliveryChallanService {
         'deliveryAddress.location', 'deliveryAddress.city', 'deliveryAddress.state', 'deliveryAddress.pincode',
         'currentShippingAddress.id', 'currentShippingAddress.address1', 'currentShippingAddress.address2',
         'currentShippingAddress.location', 'currentShippingAddress.city', 'currentShippingAddress.state', 'currentShippingAddress.pincode',
-        'companyName.id', 'office.id', 'grn.id',
+        'companyName.id', 'office.id', 'grn.id', 'grn.deliveryMode',
         'products.id', 'products.quantity', 'products.unitPrice', 'products.amount',
         'products.netWeight', 'products.grossWeight',
         'products.acceptedQty', 'products.rejectedQty', 'products.returnedQty',
@@ -341,6 +357,7 @@ export class CustomerDeliveryChallanService {
       companyName: challan.companyName?.id ?? null,
       office: challan.offices?.id ?? null,
       grnNo: challan.grnNo?.id ?? null,
+      saleType: saleTypeOf(challan.grnNo),
       receiverName: challan.receiverName ?? null,
       rmn: challan.rmn ?? null,
       totalProductAmount: challan.totalProductAmount ?? null,
@@ -428,7 +445,7 @@ export class CustomerDeliveryChallanService {
         'deliveryAddress.location', 'deliveryAddress.city', 'deliveryAddress.state', 'deliveryAddress.pincode',
          'currentShippingAddress.id', 'currentShippingAddress.address1', 'currentShippingAddress.address2',
         'currentShippingAddress.location', 'currentShippingAddress.city', 'currentShippingAddress.state', 'currentShippingAddress.pincode',
-        'company.name', 'office.name', 'grn.grnNo',
+        'company.name', 'office.name', 'grn.grnNo', 'grn.deliveryMode',
         'products.id', 'products.quantity', 'products.unitPrice', 'products.amount',
         'products.netWeight', 'products.grossWeight',
         'products.acceptedQty', 'products.returnedQty', 'products.rejectedQty',
@@ -463,6 +480,7 @@ export class CustomerDeliveryChallanService {
       companyName: challan.companyName?.name ?? null,
       office: challan.offices?.name ?? null,
       grnNo: challan.grnNo?.grnNo ?? null,
+      saleType: saleTypeOf(challan.grnNo),
       receiverName: challan.receiverName ?? null,
       totalProductAmount: challan.totalProductAmount ?? null,
       netProductWeight: challan.netProductWeight ?? null,
@@ -566,6 +584,7 @@ export class CustomerDeliveryChallanService {
           'company.id', 'company.name',
           'office.id', 'office.name',
           'grn.grnNo',
+          'grn.deliveryMode',
           'products.id',
           'products.packagingMaterialQuantity', 'products.packagingMaterialUnitPrice',
           'products.packagingMaterialAmount', 'products.packagingMaterialTotalWeight',
@@ -608,6 +627,7 @@ export class CustomerDeliveryChallanService {
           fromLocation: challan.fromLocation ? { id: challan.fromLocation.id, name: challan.fromLocation.name } : null,
           transitInsuranceNo: challan.transitInsuranceNo ?? null,
           grnNo: challan.grnNo?.grnNo ?? null,
+          saleType: saleTypeOf(challan.grnNo),
           companyName: challan.companyName ? { id: challan.companyName.id, name: challan.companyName.name } : null,
           office: challan.offices?.name ?? null,
           netProductWeight: challan.netProductWeight ?? null,
@@ -646,6 +666,7 @@ export class CustomerDeliveryChallanService {
   async update(id: string, data: UpdateCustomerDeliveryChallanDto & Record<string, any>): Promise<CustomerDeliveryChallan | null> {
     // Not once approved (stock moved) or while an invoice / RBC is against it; outside the try so the 409 reaches the client.
     await assertDcChangeable(this.dataSource.manager, DocumentTypeEnum.DC_TYPE_CUSTOMER, id, 'edit');
+    await this.applySaleTypeOnUpdate(id, data);
     if (Array.isArray(data.deliveryChallanProducts)) {
       await this.assertLinesStillAvailable(id, data);
       data.totalProductAmount = priceDcLines(data.deliveryChallanProducts);
@@ -678,6 +699,41 @@ export class CustomerDeliveryChallanService {
       if (err instanceof AppError) throw err;
       return null;
     }
+  }
+
+  /**
+   * What the form fills in when a GRN is selected (sale from GRN), and why the GRN can't be used.
+   * `excludeDcId` is the DC being edited.
+   */
+  async getDirectSaleSource(grnId: string, excludeDcId: string | null = null) {
+    if (!/^[0-9a-f-]{36}$/i.test(grnId)) throw new AppError(400, 'Invalid GRN id');
+    if (excludeDcId && !/^[0-9a-f-]{36}$/i.test(excludeDcId)) throw new AppError(400, 'Invalid DC id');
+    return loadDirectSaleSource(this.dataSource.manager, grnId, excludeDcId);
+  }
+
+  /**
+   * The sale type is fixed once the DC exists (plan Q6): the Referred GRN can't be set, changed or
+   * cleared on edit. A direct sale keeps copying company, From location, customer and addresses
+   * from its GRN and purchase dispatch.
+   */
+  private async applySaleTypeOnUpdate(id: string, data: Record<string, any>): Promise<void> {
+    const rows: Array<{ grn_id: string | null }> = await this.dataSource.query(
+      `SELECT grn_id::text AS grn_id FROM delivery_challan_purchase WHERE id = $1`,
+      [id],
+    );
+    if (!rows[0]) return;
+    const currentGrnId = rows[0].grn_id ?? null;
+    if ('grnNo' in data && (refIdOf(data.grnNo) ?? null) !== currentGrnId) {
+      throw new AppError(
+        409,
+        currentGrnId
+          ? 'The Referred GRN of a sale from GRN cannot be changed or cleared; delete this DC and create a new one'
+          : 'A sale from CC/DC cannot be turned into a sale from GRN; delete this DC and create a new one',
+      );
+    }
+    // Older DCs may refer to a CC / DC GRN; they stay stock sales as they were (plan Q9).
+    if (!currentGrnId || !(await isDirectSaleGrn(this.dataSource.manager, currentGrnId))) return;
+    applyDirectSaleSource(data, await assertDirectSaleSource(this.dataSource.manager, currentGrnId, id));
   }
 
   /** Edited lines of a pending DC: same line / direct-sale checks as on create, this DC excluded (stock is re-reserved on save). */

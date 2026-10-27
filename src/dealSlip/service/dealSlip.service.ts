@@ -1,11 +1,8 @@
-import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from "inversify";
-import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 import { TYPES } from "../../types";
 import { DealSlipRepository } from "../repository/dealSlip.repository";
 
 import { DeepPartial, In, SelectQueryBuilder, DataSource, EntityManager } from "typeorm";
-import { Status } from "../../utils/status.enum";
 
 import AppError from "../../utils/appError";
 import { buildQueryFromArray, PaginationOptions } from "../../utils/pagination";
@@ -24,10 +21,14 @@ import { DocumentbService, DocumentWithRelatedData } from "../../approvalFlow/se
 import { DocSingalApproverService } from "../../approvalFlow/service/DocSingalApproverService.service";
 import { ApprovalFlowService } from "../../approvalFlow/service/approvalFlow.service";
 import { DocumentbRepository } from "../../approvalFlow/repository/documentb.repository";
-import { ApproveDealSlipResultDto, BulkDeleteDealSlipResultDto, CreateDealSlipDto, DealSlipDetailDto, DealSlipDocumentViewDto, DealSlipListResponseDto, DealSlipNumbersResponseDto, DealSlipRecycleBinResponseDto, UpdateDealSlipDto } from "../dto/dealSlip.dto";
+import { BulkDeleteDealSlipResultDto, DealSlipDetailDto, DealSlipDocumentViewDto, DealSlipUpdateFormDto, DealSlipListResponseDto, DealSlipNumbersResponseDto, DealSlipRecycleBinResponseDto, UpdateDealSlipDto } from "../dto/dealSlip.dto";
 import { DealSlip } from "../entity/dealSlip.entity";
 import { DealSlipProduct } from "../entity/dealSlipProduct.entity";
-import { PaymentInfoForRFPA } from "../../rfpa/entity/rfpaPayementInfo.entity";
+import { UOM } from "../../uom/entity/uom.entity";
+import { assertDocumentEditable } from "../../approvalFlow/documentEditLock";
+import { DetailMode, formatProcurementHeader, formatProcurementLine, PROCUREMENT_HEADER_RELATIONS, procurementLineRelations } from "../../procurement/procurementDetail";
+import { DealSlipState, planDealSlipEdit, toDateOnly } from "../dealSlipEdit";
+import { dealSlipApproverId } from "../dealSlipApprover";
 import { dealSlipAvailableSql, liveGrnForDealSlipExistsSql } from "../dealSlipGrnLink";
 import { isUuid, liveRowSql } from "../../grn/grnLinks.sql";
 
@@ -122,7 +123,6 @@ export class DealSlipService {
           loadingLocation: dealSlip.loadingLocation,
           remark: dealSlip.remark,
           specialRequest: dealSlip.specialRequest,
-          requestingDepartment: dealSlip.requestingDepartment,
           approvalStatus: dealSlip.approvalStatus,
           createdDate,
           createdTime,
@@ -140,90 +140,38 @@ export class DealSlipService {
   /** Relations needed to show everything the deal slip carries from its RFPA. */
   private static readonly DETAIL_RELATIONS = [
     'rfpa',
-    'companyName',
-    'purchaseLocation',
-    'purchaseForSalesLocation',
-    'selectedVendor',
-    'selectedVendor.officeAddress',
-    'selectedVendor.vendorSaleInfo',
-    'selectedFarmer',
-    'selectedFarmer.residensialAddress',
-    'selectedFarmer.farmAddress',
-    'paymentInfo',
-    'dealSlipProducts',
-    'dealSlipProducts.productName',
-    'dealSlipProducts.variant',
-    'dealSlipProducts.uom',
+    ...PROCUREMENT_HEADER_RELATIONS,
+    ...procurementLineRelations('dealSlipProducts'),
     'dealSlipProducts.rfpaProduct',
+    'dealSlipProducts.rfpaProduct.uom',
   ];
 
   /**
-   * The RFPA-derived part of a deal slip response (same shape the RFPA view uses). Each product
-   * line carries the deal slip's quantity / price plus the RFPA's, so the two can be compared.
+   * The RFPA-derived part of a deal slip response, in the RFPA's shape (shared formatter). Each product
+   * line carries the deal slip's agreed values plus the RFPA's, so the two can be compared.
    */
-  private formatRfpaDetails(dealSlip: DealSlip): Record<string, any> {
-    const vendor: any = dealSlip.selectedVendor;
-    const farmer: any = dealSlip.selectedFarmer;
-    const payment: any = dealSlip.paymentInfo;
-
-    const vendorInfo = vendor ? {
-      companyName: vendor.companyName || null,
-      vendorCode: vendor.vendorCode || null,
-      contactPersonName: `${vendor.vendorSaleInfo?.contactFName ?? ''} ${vendor.vendorSaleInfo?.contactLName ?? ''}`.trim() || null,
-      officeContactNo: vendor.officeContactNo || null,
-      officeEmail: vendor.officeEmail || null,
-      officeAddress: vendor.officeAddress || null,
-    } : null;
-
-    const farmerInfo = farmer ? {
-      fullName: `${farmer.farmerfName ?? ''} ${farmer.farmermName ?? ''} ${farmer.farmerlName ?? ''}`.trim(),
-      primaryMobileNo: farmer.primaryMobileNo || null,
-      email: farmer.email || null,
-      farmerCode: farmer.farmerCode || null,
-      residensialAddress: farmer.residensialAddress || null,
-      farmAddress: farmer.farmAddress || null,
-    } : null;
-
+  private formatRfpaDetails(dealSlip: DealSlip, mode: DetailMode): Record<string, any> {
+    const lines = [...(dealSlip.dealSlipProducts ?? [])].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
     return {
-      source: dealSlip.source || null,
-      companyName: dealSlip.companyName?.name || null,
-      purchaseLocation: dealSlip.purchaseLocation?.name || null,
-      purchaseForSalesLocation: dealSlip.purchaseForSalesLocation?.name || null,
-      otherPurchaseLoc: dealSlip.otherPurchaseLoc || null,
-      otherPurchaseForSalesLoc: dealSlip.otherPurchaseForSalesLoc || null,
-      deliveryReceivingPerson: dealSlip.deliveryReceivingPerson || null,
-      packingInstruction: dealSlip.packingInstruction || null,
-      selectedParty: dealSlip.source === 'vendor' ? vendorInfo : farmerInfo,
-      paymentInfo: payment ? {
-        paymentMode: payment.paymentMode || null,
-        paymentDate: payment.paymentDate || null,
-        advancePaidAmt: payment.advancePaidAmt || null,
-        paymentTerms: payment.paymentTerms || null,
-        dueDate: payment.dueDate || null,
-        creditPeriod: payment.creditPeriod || null,
-        validityOfQuote: payment.validityOfQuote || null,
-      } : null,
-      dealSlipProducts: (dealSlip.dealSlipProducts ?? []).map((p) => ({
-        id: p.id,
-        productName: p.productName?.name || null,
-        variant: (p.variant as any)?.variantName || null,
-        grade: p.grade || null,
-        quantity: p.quantity,
+      ...formatProcurementHeader(dealSlip, mode),
+      dealSlipProducts: lines.map((p) => ({
+        ...formatProcurementLine(p, mode),
         rfpaQuantity: p.rfpaProduct?.quantity ?? null,
-        uom: (p.uom as any)?.unit || null,
-        unitPrice: p.unitPrice,
         rfpaUnitPrice: p.rfpaProduct?.unitPrice ?? null,
-        amount: p.amount,
-        count: p.count || null,
-        size: p.size || null,
-        origin: p.origin || null,
-        variety: p.variety || null,
-        purchaseDate: p.purchaseDate || null,
-        expectedHarvestDate: p.expectedHarvestDate || null,
-        dispatchDate: p.dispatchDate || null,
-        deliveryDate: p.deliveryDate || null,
+        rfpaUom: p.rfpaProduct?.uom?.unit ?? null,
       })),
     };
+  }
+
+  /** The deal slip's approval document (status decides Draft / editable) with who approved it. */
+  private findDealSlipDocument(id: string): Promise<Documentb | null> {
+    return this.documentbRepository.findOne({
+      where: { type: DocumentTypeEnum.DEAL_SLIP, document_type_id: id },
+      relations: ['approvalInfo', 'approvalInfo.firstApproved'],
+      order: { createdAt: 'DESC' },
+    });
   }
 
   async findDealSlipByIdforView(id: string): Promise<DealSlipDetailDto | null> {
@@ -246,219 +194,113 @@ export class DealSlipService {
           loadingLocation: dealSlip.loadingLocation,
           remark: dealSlip.remark,
           specialRequest: dealSlip.specialRequest,
-          requestingDepartment: dealSlip.requestingDepartment,
           approvalStatus: dealSlip.approvalStatus,
           createdDate,
           createdTime,
           dealSlipNo: dealSlip.dealSlipNo,
           rfpa: dealSlip.rfpa?.rfpaId || null,
-          ...this.formatRfpaDetails(dealSlip),
+          ...this.formatRfpaDetails(dealSlip, 'view'),
       };
       await this.cacheService.set(key, response, CACHE_TTL_DETAIL);
       return response;
   }
 
-  async findDealSlipByIdforUpdate(id: string): Promise<DealSlipDetailDto | null> {
+  /**
+   * Edit form data: the RFPA update-form shape (relations as ids) plus the slip's own fields. The
+   * document status is read fresh on every call (approvals change it without touching this cache).
+   */
+  async findDealSlipByIdforUpdate(id: string): Promise<DealSlipUpdateFormDto | null> {
       const key = `${CACHE_PREFIX}:update:${id}`;
-      const cached = await this.cacheService.get<any>(key);
-      if (cached) return cached;
+      let response = await this.cacheService.get<any>(key);
 
-      const dealSlip = await this.dealSlipRepository.findOne({
-          where: { id },
-          relations: DealSlipService.DETAIL_RELATIONS,
-      });
+      if (!response) {
+        const dealSlip = await this.dealSlipRepository.findOne({
+            where: { id },
+            relations: DealSlipService.DETAIL_RELATIONS,
+        });
 
-      if (!dealSlip) return null;
+        if (!dealSlip) return null;
 
-      const { createdDate, createdTime } = formatDateTime(dealSlip.createdAt);
-      const response: any = {
-          id: dealSlip.id,
-          lotNo: dealSlip.lotNo,
-          approvalNote: dealSlip.approvalNote,
-          loadingLocation: dealSlip.loadingLocation,
-          remark: dealSlip.remark,
-          specialRequest: dealSlip.specialRequest,
-          requestingDepartment: dealSlip.requestingDepartment,
-          approvalStatus: dealSlip.approvalStatus,
-          createdDate,
-          createdTime,
-          dealSlipNo: dealSlip.dealSlipNo,
-          rfpa: dealSlip.rfpa?.id || null,
-          ...this.formatRfpaDetails(dealSlip),
+        const { createdDate, createdTime } = formatDateTime(dealSlip.createdAt);
+        response = {
+            id: dealSlip.id,
+            dealSlipNo: dealSlip.dealSlipNo,
+            rfpa: dealSlip.rfpa?.rfpaId || null,
+            lotNo: dealSlip.lotNo,
+            loadingLocation: dealSlip.loadingLocation,
+            specialRequest: dealSlip.specialRequest,
+            remark: dealSlip.remark,
+            createdDate,
+            createdTime,
+            ...this.formatRfpaDetails(dealSlip, 'form'),
+        };
+        await this.cacheService.set(key, response, CACHE_TTL_DETAIL);
+      }
+
+      const document = await this.findDealSlipDocument(id);
+      return {
+        ...response,
+        documentId: document?.id ?? null,
+        overAllStatus: document?.status ?? null,
+        approvedBy: dealSlipApproverId(document),
       };
-      await this.cacheService.set(key, response, CACHE_TTL_DETAIL);
-      return response;
   }
     
 
   
 
-  private async checkApprovalFlowExists(userId: string | null | undefined, documentType: DocDefEnum): Promise<void> {
-    if (!userId) {
-      throw new AppError(400, 'Creator is required to validate the approval flow before creating this document.');
+    /** The values the edit rules look at, from a slip loaded with its product lines. */
+    private static editState(dealSlip: DealSlip): DealSlipState {
+      const lines = [...(dealSlip.dealSlipProducts ?? [])].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      );
+      return {
+        source: dealSlip.source ?? null,
+        lotNo: dealSlip.lotNo,
+        loadingLocation: dealSlip.loadingLocation,
+        specialRequest: dealSlip.specialRequest,
+        remark: dealSlip.remark,
+        lines: lines.map((line) => ({
+          id: line.id,
+          productName: line.productName?.id ?? null,
+          variant: line.variant?.id ?? null,
+          grade: line.grade ?? null,
+          uom: line.uom?.id ?? null,
+          quantity: Number(line.quantity),
+          unitPrice: Number(line.unitPrice),
+          purchaseDate: toDateOnly(line.purchaseDate),
+          dispatchDate: toDateOnly(line.dispatchDate),
+          deliveryDate: toDateOnly(line.deliveryDate),
+          expectedHarvestDate: toDateOnly(line.expectedHarvestDate),
+        })),
+      };
     }
-    const approvalFlow = await this.approvalFlowService.getApprovalFlowForUserAndDepartment(userId, documentType);
-    
-    if (!approvalFlow) {
-      throw new AppError(400, `Approval flow not configured for user. Please configure approval flow for ${documentType} type documents before creating.`);
-    }
-  }
-
-  async createDealSlip(dealSlipData: CreateDealSlipDto & Record<string, any>): Promise<CreatedWithApproval<DealSlip>> {
-    // Check if approval flow exists for the user
-    await this.checkApprovalFlowExists(dealSlipData.requestedBy, DocDefEnum.PROCUREMENT);
-
-      // const approvalFlow = await this.approvalFlowService.findApprovalFlowForLoggedUser(dealSlipData.requestedBy, DocDefEnum.PROCUREMENT);
-
-      // if (!approvalFlow) {
-      //   throw new AppError(400, 'No approval flow configured for this user. Please contact the admin to create an approval flow before creating a Deal Slip.');
-      // }
-        const queryRunner = this.dataSource.createQueryRunner();
-        await queryRunner.connect();
-        await queryRunner.startTransaction();
-
-        try {
-              const rfpaId=dealSlipData.rfpa
-
-              if(!rfpaId)
-              {
-                throw new Error("id not found")
-              }
-
-          const rfpa = await queryRunner.manager.findOne(this.rfpaRepository.target, { where: { id: rfpaId } }); 
-
-              if (!rfpa) {
-                  throw new Error('RFPA not found');
-              }
-
-              if (rfpa.isDealSlipCreated) {
-                  throw new AppError(409, 'Deal slip already created for this RFPA. Please check existing deal slips.');
-              }
-
-              const dealSlipId = await this.generateDealSlipId();
-              dealSlipData.dealSlipNo = dealSlipId;
-
-              const dealSlip = queryRunner.manager.create(this.dealSlipRepository.target, {
-                  ...dealSlipData,
-                  rfpa
-              } as any) as unknown as DealSlip;
-
-              const savedDealSlip= await queryRunner.manager.save(dealSlip);
-
-              rfpa.isDealSlipCreated = true;
-              await queryRunner.manager.save(rfpa);
-
-                     const document = await this.documentbService.createDocument({
-                            type: DocumentTypeEnum.DEAL_SLIP,
-                            docDef: DocDefEnum.PROCUREMENT,
-                            status: DocumentStatus.HOLD,
-                            remarks: 'Document auto-created with Deal Slip',
-                            lastActionBy: { id: dealSlipData.requestedBy },
-                            document_type_id: Array.isArray(savedDealSlip) ? (savedDealSlip[0] as DealSlip)?.id : (savedDealSlip as DealSlip).id
-                          });
-
-          await queryRunner.commitTransaction();
-
-          const assignment = await this.documentbService.startApprovalFlow(document.id);
-          await this.invalidateDealSlipCache();
-
-                          return withApproval(savedDealSlip, assignment);
-        } catch (error: any) {
-          await queryRunner.rollbackTransaction();
-          throw error;
-        } finally {
-          await queryRunner.release();
-        }
-      }
-
-    
-    
-
-      /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
-      async generateDealSlipId(): Promise<string> {
-        return nextDocumentNumber(this.dealSlipRepository.manager, SERIES.dealSlip, `DL${compactDate()}`, 5);
-      }
-
-  
-  public async approveDealSlip(dealSlipId: string, userId: string, data: { approvalStatus: string; approvalNote?: string }): Promise<ApproveDealSlipResultDto> {
-  const dealSlip = await this.dealSlipRepository.findOne({ where: { id: dealSlipId } });
-
-  if (!dealSlip) {
-    throw new Error('Deal Slip not found');
-  }
-
-  if (data.approvalStatus !== Status.APPROVED && data.approvalStatus !== Status.REJECTED) {
-    throw new Error('Invalid approval status. It must be either APPROVED or REJECTED.');
-  }
-
-  dealSlip.approvalStatus = data.approvalStatus;
-  dealSlip.approvalNote = data.approvalNote || '';
-  dealSlip.dealSlipApprovedAt = new Date();
-
-  await this.dealSlipRepository.save(dealSlip);
-  await this.invalidateDealSlipCache(dealSlipId);
-
-  const user = await this.userService.findUserById(userId) as any;
-  if (!user) throw new Error('User not found');
-
-  return {
-    message: `Deal Slip status updated to ${data.approvalStatus}`,
-    approvalStatus: dealSlip.approvalStatus,
-    approvalNote: dealSlip.approvalNote,
-    user: {
-      name: `${user.firstName} ${user.lastName}`,
-      department: user.selectDepartment,
-    },
-  };
-}
 
     /**
-     * Every Deal Slip data field the update endpoint accepts; the frontend decides which of them
-     * a user may actually change. Not accepted: identity / workflow fields (id, dealSlipNo, the
-     * rfpa link, createdBy, approvalStatus, approvalNote, dealSlipApprovedAt, isGrnCreated,
-     * isDeleted, timestamps) - those are set by the system and the approval flow.
+     * Saves a Deal Slip edit. Only the slip's own fields and the editable product line values may change
+     * (rules in dealSlipEdit.ts). Saving a Draft is its submit: the slip moves to Hold and goes to the
+     * approvers; until then approvers never see it. Approved or rejected slips are locked (409).
      */
-    private static readonly SCALAR_FIELDS = [
-      'lotNo', 'loadingLocation', 'specialRequest', 'remark', 'requestingDepartment',
-      'otherPurchaseLoc', 'otherPurchaseForSalesLoc', 'deliveryReceivingPerson', 'packingInstruction', 'source',
-    ] as const;
-
-    /** Many-to-one fields, sent as an id (or { id }); null / '' clears them. */
-    private static readonly RELATION_FIELDS = [
-      'companyName', 'purchaseLocation', 'purchaseForSalesLocation', 'selectedVendor', 'selectedFarmer',
-    ] as const;
-
-    private static readonly PAYMENT_FIELDS = [
-      'paymentMode', 'paymentDate', 'advancePaidAmt', 'paymentTerms', 'dueDate', 'creditPeriod', 'validityOfQuote',
-    ] as const;
-
-    private static readonly PRODUCT_SCALAR_FIELDS = [
-      'grade', 'count', 'size', 'origin', 'variety',
-      'purchaseDate', 'expectedHarvestDate', 'dispatchDate', 'deliveryDate',
-    ] as const;
-
-    private static readonly PRODUCT_RELATION_FIELDS = ['productName', 'variant', 'uom'] as const;
-
-    private static toRef(value: any): { id: string } | null {
-      if (value === null || value === undefined || value === '') return null;
-      const id = typeof value === 'object' ? value.id : value;
-      return id ? { id } : null;
-    }
-
     public async updateDealSlip(
       id: string,
       dealSlipData: UpdateDealSlipDto & Record<string, any>,
       updatedBy: string,
       actor?: { userId: string; isAdmin: boolean },
-    ): Promise<DealSlip | null> {
-      const existingDealSlip = await this.dealSlipRepository.findOne({ where: { id }, relations: ['createdBy', 'paymentInfo'] });
+    ): Promise<{ dealSlip: DealSlip; submitted: boolean } | null> {
+      const existingDealSlip = await this.dealSlipRepository.findOne({
+        where: { id },
+        relations: ['createdBy', 'dealSlipProducts', 'dealSlipProducts.productName', 'dealSlipProducts.variant', 'dealSlipProducts.uom'],
+      });
       if (!existingDealSlip) {
         return null;
       }
 
-      const document = await this.documentbRepository.findOne({
-        where: { type: DocumentTypeEnum.DEAL_SLIP, document_type_id: id },
-      });
+      const document = await assertDocumentEditable(
+        this.dataSource.manager,
+        DocumentTypeEnum.DEAL_SLIP,
+        id,
+        `Deal Slip ${existingDealSlip.dealSlipNo ?? ''}`.trim(),
+      );
       const wasDraft = document?.status === DocumentStatus.DRAFT;
 
       // A draft is the RFPA creator's to complete (admins can too); nobody else may touch it.
@@ -466,26 +308,55 @@ export class DealSlipService {
         throw new AppError(403, 'Only the RFPA creator can edit this draft Deal Slip');
       }
 
-      const originalDealSlip = { ...existingDealSlip };
+      const plan = planDealSlipEdit(dealSlipData, DealSlipService.editState(existingDealSlip));
 
-      for (const field of DealSlipService.SCALAR_FIELDS) {
-        if (dealSlipData[field] !== undefined) {
-          (existingDealSlip as any)[field] = dealSlipData[field];
+      if (plan.uomIds.length) {
+        const found = await this.dataSource.manager.count(UOM, { where: { id: In(plan.uomIds) } });
+        if (found !== plan.uomIds.length) throw new AppError(400, 'One or more selected units do not exist');
+      }
+
+      // A submitted slip must reach approvers: startApprovalFlow quietly does nothing without a flow.
+      if (wasDraft) {
+        const withFlow = await this.documentbRepository.findOne({ where: { id: document!.id }, relations: ['approvalFlow'] });
+        if (!withFlow?.approvalFlow) {
+          throw new AppError(400, 'No approval flow is configured for the Deal Slip creator; it cannot be submitted for approval');
         }
       }
-      for (const field of DealSlipService.RELATION_FIELDS) {
-        if (dealSlipData[field] !== undefined) {
-          (existingDealSlip as any)[field] = DealSlipService.toRef(dealSlipData[field]);
-        }
-      }
+
+      const originalDealSlip = { ...existingDealSlip };
+      let submitted = false;
 
       await this.dataSource.transaction(async (manager) => {
-        if (dealSlipData.paymentInfo && typeof dealSlipData.paymentInfo === 'object') {
-          existingDealSlip.paymentInfo = await this.savePaymentInfo(manager, existingDealSlip.paymentInfo, dealSlipData.paymentInfo);
+        if (Object.keys(plan.header).length) {
+          await manager.update(DealSlip, { id }, plan.header);
+          Object.assign(existingDealSlip, plan.header);
         }
-        await manager.save(existingDealSlip);
-        await this.updateProducts(manager, existingDealSlip, dealSlipData);
+        for (const line of plan.lines) {
+          await manager.update(DealSlipProduct, { id: line.id }, {
+            uom: line.uom ? ({ id: line.uom } as UOM) : null,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            amount: parseFloat((line.quantity * line.unitPrice).toFixed(2)),
+            purchaseDate: line.purchaseDate as any,
+            dispatchDate: line.dispatchDate as any,
+            deliveryDate: line.deliveryDate as any,
+            expectedHarvestDate: line.expectedHarvestDate as any,
+          } as any);
+        }
+        // Draft -> Hold with the edit, guarded on the status so a double submit releases only once.
+        if (wasDraft) {
+          const result = await manager.update(
+            Documentb,
+            { id: document!.id, status: DocumentStatus.DRAFT },
+            { status: DocumentStatus.HOLD, remarks: 'Deal Slip submitted for approval' },
+          );
+          submitted = (result.affected ?? 0) > 0;
+        }
       });
+
+      if (submitted) {
+        await this.startApprovalForSubmittedDraft(document!);
+      }
 
       await this.auditLogService.logChange(
         'DealSlip',
@@ -495,113 +366,26 @@ export class DealSlipService {
         updatedBy
       );
 
-      // Draft -> Hold: once lot no and loading location are both filled in, the slip is sent to
-      // the approvers. Only ever fires from DRAFT, so it happens exactly once.
-      if (document && wasDraft && existingDealSlip.lotNo?.trim() && existingDealSlip.loadingLocation?.trim()) {
-        await this.releaseDraftToApprovers(document);
-      }
-
       await this.invalidateDealSlipCache(id);
-      return existingDealSlip;
+      return { dealSlip: existingDealSlip, submitted };
     }
 
-    /**
-     * Updates the deal slip's own copy of the payment info (never the RFPA's row). Creates the
-     * row when the deal slip has none yet.
-     */
-    private async savePaymentInfo(
-      manager: EntityManager,
-      current: PaymentInfoForRFPA | null | undefined,
-      edits: Record<string, any>,
-    ): Promise<PaymentInfoForRFPA> {
-      const payment = current ?? manager.create(PaymentInfoForRFPA, {});
-      for (const field of DealSlipService.PAYMENT_FIELDS) {
-        if (edits[field] !== undefined) {
-          (payment as any)[field] = edits[field];
-        }
-      }
-      return manager.save(payment);
-    }
-
-    /**
-     * Applies product line changes from the request:
-     *  - dealSlipProducts[] with an id  -> updates that line (any product field)
-     *  - dealSlipProducts[] without id  -> adds a new line (quantity and unitPrice required)
-     *  - deletedDealSlipProductIds[]    -> removes those lines
-     * `amount` is always recomputed here as quantity x unitPrice; the client's value is ignored.
-     */
-    private async updateProducts(
-      manager: EntityManager,
-      dealSlip: DealSlip,
-      body: { dealSlipProducts?: Record<string, any>[]; deletedDealSlipProductIds?: string[] },
-    ): Promise<void> {
-      const deletedIds = Array.isArray(body.deletedDealSlipProductIds) ? body.deletedDealSlipProductIds : [];
-      if (deletedIds.length) {
-        const owned = await manager.count(DealSlipProduct, { where: { id: In(deletedIds), dealSlip: { id: dealSlip.id } } });
-        if (owned !== deletedIds.length) {
-          throw new AppError(400, 'One or more product lines to remove do not belong to this Deal Slip');
-        }
-        await manager.delete(DealSlipProduct, { id: In(deletedIds) });
-      }
-
-      const edits = Array.isArray(body.dealSlipProducts) ? body.dealSlipProducts : [];
-      for (const edit of edits) {
-        let product: DealSlipProduct;
-        if (edit.id) {
-          const existing = await manager.findOne(DealSlipProduct, { where: { id: edit.id, dealSlip: { id: dealSlip.id } } });
-          if (!existing) {
-            throw new AppError(400, `Product line ${edit.id} does not belong to this Deal Slip`);
-          }
-          product = existing;
-        } else {
-          if (edit.quantity === undefined || edit.unitPrice === undefined) {
-            throw new AppError(400, 'A new product line needs quantity and unitPrice');
-          }
-          product = manager.create(DealSlipProduct, { dealSlip });
-        }
-
-        for (const field of DealSlipService.PRODUCT_SCALAR_FIELDS) {
-          if (edit[field] !== undefined) (product as any)[field] = edit[field];
-        }
-        for (const field of DealSlipService.PRODUCT_RELATION_FIELDS) {
-          if (edit[field] !== undefined) (product as any)[field] = DealSlipService.toRef(edit[field]);
-        }
-
-        const quantity = edit.quantity !== undefined ? Number(edit.quantity) : Number(product.quantity);
-        const unitPrice = edit.unitPrice !== undefined ? Number(edit.unitPrice) : Number(product.unitPrice);
-        if (!Number.isInteger(quantity) || quantity < 0) {
-          throw new AppError(400, 'Quantity must be a non-negative whole number');
-        }
-        if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-          throw new AppError(400, 'Unit price must be a non-negative number');
-        }
-
-        product.quantity = quantity;
-        product.unitPrice = unitPrice;
-        product.amount = parseFloat((quantity * unitPrice).toFixed(2));
-        await manager.save(product);
-      }
-    }
-
-    /** DRAFT -> HOLD and assign the approvers. Rolls the status back if the approvers cannot be assigned. */
-    private async releaseDraftToApprovers(document: Documentb): Promise<void> {
-      document.status = DocumentStatus.HOLD;
-      document.remarks = 'Deal Slip completed; sent for approval';
-      await this.documentbRepository.save(document);
-
+    /** Assigns the approvers of a just-submitted draft; puts it back to Draft if that fails, so it can be resubmitted. */
+    private async startApprovalForSubmittedDraft(document: Documentb): Promise<void> {
       try {
         await this.documentbService.startApprovalFlow(document.id);
       } catch (error) {
-        document.status = DocumentStatus.DRAFT;
-        document.remarks = 'Deal Slip auto-created as draft; waiting for lot no and loading location';
-        await this.documentbRepository.save(document);
+        await this.documentbRepository.update(
+          { id: document.id },
+          { status: DocumentStatus.DRAFT, remarks: 'Deal Slip auto-created as draft; waiting for lot no and loading location' },
+        );
         throw error;
+      } finally {
+        await Promise.all([
+          this.cacheService.del(`doc:byid:${document.id}`),
+          this.cacheService.invalidatePattern(`singledoc:view:${document.id}:*`),
+        ]);
       }
-
-      await Promise.all([
-        this.cacheService.del(`doc:byid:${document.id}`),
-        this.cacheService.invalidatePattern(`singledoc:view:${document.id}:*`),
-      ]);
     }
 
 public async getAllDealSlipsNo(
@@ -955,7 +739,6 @@ public async getRecycleBinDealSlips(queryOptions: PaginationOptions, userId: str
         loadingLocation: rd.loadingLocation || null,
         remark: rd.remark || null,
         specialRequest: rd.specialRequest || null,
-        requestingDepartment: rd.requestingDepartment || null,
         approvalStatus: rd.approvalStatus || null,
         dealSlipCreatedAt: rd.dealSlipCreatedAt || null,
         dealSlipApprovedAt: rd.dealSlipApprovedAt || null,
@@ -1037,13 +820,12 @@ public async getDealSlipByIdForView(docid: string, userId: string, isAdmin: bool
       loadingLocation: dealSlip.loadingLocation,
       remark: dealSlip.remark,
       specialRequest: dealSlip.specialRequest,
-      requestingDepartment: dealSlip.requestingDepartment,
       approvalStatus: dealSlip.approvalStatus,
       dealSlipCreatedAt: dealSlip.dealSlipCreatedAt,
       dealSlipApprovedAt: dealSlip.dealSlipApprovedAt,
       dealSlipNo: dealSlip.dealSlipNo,
       rfpa: dealSlip.rfpa?.rfpaId || null,
-      ...this.formatRfpaDetails(dealSlip),
+      ...this.formatRfpaDetails(dealSlip, 'view'),
     };
     await this.cacheService.set(key, viewResult, CACHE_TTL_DETAIL);
     return viewResult;

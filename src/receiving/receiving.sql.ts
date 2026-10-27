@@ -127,57 +127,92 @@ export function anyCountingDocumentSql(sourceIdExpr: string, sourceType: Receivi
   return `(${parts.join(' OR ')})`;
 }
 
+/** Newest live `documents.status` of the processing document `alias` (NULL when it has none). */
+function latestStatusSql(alias: string, docType: ProcessingDocType): string {
+  const type = quote(PROCESSING_DOCUMENT_TYPE[docType]);
+  return (
+    `(SELECT rs_d.status::text FROM documents rs_d WHERE rs_d.document_type_id = ${alias}.id::text AND rs_d.type::text = ${type} ` +
+    `AND rs_d."deletedAt" IS NULL ORDER BY rs_d."createdAt" DESC LIMIT 1)`
+  );
+}
+
 /**
  * Same rule as {@link countingDocumentExistsSql}, evaluated like the status
  * service does it in JS (`isCountingDocument`): the document counts when its
  * *newest* live `documents` row is not REJECT (or it has none). Used by the
  * Arrivals state classification, which must agree with the computed state.
+ * `statusCondition` (optional) is a further condition on the newest status,
+ * written against `$status`.
  */
 export function countingDocumentLatestSql(
   sourceIdExpr: string,
   sourceType: ReceivingSourceType,
   docType: ProcessingDocType,
-  extraWhere = '',
+  statusCondition = '',
 ): string | null {
   const spec = PROCESSING_TABLE[docType];
   const fk = spec.fk[sourceType];
   if (!fk) return null;
   const alias = `rs_${docType}`;
-  const type = quote(PROCESSING_DOCUMENT_TYPE[docType]);
   const reject = quote(DocumentStatus.REJECT);
   const live = [`${alias}."isDeleted" = false`, `${alias}."deletedAt" IS NULL`, ...spec.extraLive.map((p) => `${alias}.${p}`)].join(' AND ');
-  const latest =
-    `(SELECT rs_d.status::text FROM documents rs_d WHERE rs_d.document_type_id = ${alias}.id::text AND rs_d.type::text = ${type} ` +
-    `AND rs_d."deletedAt" IS NULL ORDER BY rs_d."createdAt" DESC LIMIT 1)`;
+  const latest = latestStatusSql(alias, docType);
   return (
     `EXISTS (SELECT 1 FROM ${spec.table} ${alias} WHERE ${alias}.${fk} = (${sourceIdExpr}) AND ${live} ` +
-    `AND COALESCE(${latest}, '') <> ${reject}${extraWhere ? ` AND ${extraWhere.replace(/\$doc/g, alias)}` : ''})`
+    `AND COALESCE(${latest}, '') <> ${reject}${statusCondition ? ` AND ${statusCondition.replace(/\$status/g, `COALESCE(${latest}, '')`)}` : ''})`
   );
 }
 
 /**
- * Arrivals state as far as SQL can tell it exactly (see `deriveState`):
- * `not-started` without any counting document; without a counting Inward the
- * source cannot be `done`, so it is `legacy` (a counting dump line without net
- * weight) or `open`. NULL when an Inward counts: done / open / legacy then
- * depends on the per-product kg matching, which only the status service computes.
+ * The step is approved: at least one counting document of `docType`, and every
+ * counting one is COMPLETE (same rule as `stepDocuments` in the helpers).
+ * `FALSE` when the doc type does not apply to the source type.
  */
-export function sqlStateExpr(sourceIdExpr: string, sourceType: ReceivingSourceType): string {
-  const any = processingTypesFor(sourceType)
+export function stepApprovedSql(sourceIdExpr: string, sourceType: ReceivingSourceType, docType: ProcessingDocType): string {
+  const complete = quote(DocumentStatus.COMPLETE);
+  const anyApproved = countingDocumentLatestSql(sourceIdExpr, sourceType, docType, `$status = ${complete}`);
+  const anyPending = countingDocumentLatestSql(sourceIdExpr, sourceType, docType, `$status <> ${complete}`);
+  if (!anyApproved || !anyPending) return 'FALSE';
+  return `(${anyApproved} AND NOT ${anyPending})`;
+}
+
+/** `EXISTS (...)`: the Dump / RTV step of the source was marked "not needed" (`receiving_skip`). */
+export function stepSkippedSql(sourceIdExpr: string, sourceType: ReceivingSourceType, docType: 'dump' | 'rtv'): string {
+  return (
+    `EXISTS (SELECT 1 FROM receiving_skip rs_sk WHERE rs_sk.source_type = ${quote(sourceType)} ` +
+    `AND rs_sk.source_id = (${sourceIdExpr}) AND rs_sk.doc_type = ${quote(docType)})`
+  );
+}
+
+/**
+ * Arrivals state as far as SQL can tell it exactly (see `deriveState`). The
+ * list only holds receivable sources, so `not-received` never occurs here:
+ * - no counting document: `received` when `arrivedSql` holds, else `in-transit`;
+ * - a step not finished (AQR / Inward not approved, Dump / RTV neither approved
+ *   nor skipped): `in-progress`;
+ * - otherwise NULL: done / in-progress then depends on the per-product kg
+ *   matching, which only the status service computes.
+ */
+export function sqlStateExpr(sourceIdExpr: string, sourceType: ReceivingSourceType, arrivedSql: string): string {
+  const types = processingTypesFor(sourceType);
+  const any = types
     .map((docType) => countingDocumentLatestSql(sourceIdExpr, sourceType, docType))
     .filter((sql): sql is string => Boolean(sql))
     .join(' OR ');
-  const inward = countingDocumentLatestSql(sourceIdExpr, sourceType, 'inward');
-  // Line FK and columns from DumpProduct (dump_product.dump_register_id, product_id, "netWeight").
-  const legacyDump = countingDocumentLatestSql(
-    sourceIdExpr,
-    sourceType,
-    'dump',
-    `EXISTS (SELECT 1 FROM dump_product rs_dp WHERE rs_dp.dump_register_id = $doc.id AND rs_dp.product_id IS NOT NULL AND rs_dp."netWeight" IS NULL)`,
-  );
+  const optional = (docType: 'dump' | 'rtv'): string => {
+    const counting = countingDocumentLatestSql(sourceIdExpr, sourceType, docType);
+    if (!counting) return 'TRUE';
+    return `(${stepApprovedSql(sourceIdExpr, sourceType, docType)} OR (NOT ${counting} AND ${stepSkippedSql(sourceIdExpr, sourceType, docType)}))`;
+  };
+  const finished = [
+    stepApprovedSql(sourceIdExpr, sourceType, 'aqr'),
+    stepApprovedSql(sourceIdExpr, sourceType, 'inward'),
+    optional('dump'),
+    ...(types.includes('rtv') ? [optional('rtv')] : []),
+  ].join(' AND ');
   return (
-    `(CASE WHEN NOT (${any}) THEN 'not-started' ` +
-    `WHEN NOT ${inward} THEN (CASE WHEN ${legacyDump} THEN 'legacy' ELSE 'open' END) ` +
+    `(CASE WHEN NOT (${any}) THEN (CASE WHEN ${arrivedSql} THEN 'received' ELSE 'in-transit' END) ` +
+    `WHEN NOT (${finished}) THEN 'in-progress' ` +
     `ELSE NULL END)`
   );
 }

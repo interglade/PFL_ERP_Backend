@@ -537,27 +537,8 @@ export class VehicleDispatchController {
     }
   }
 
-  /** Gate signal: the vehicle reached the CC / DC (purchase and stock transfer only). */
-  @httpPost('/:id/arrive')
-  public async markArrived(
-    @requestParam('id') id: string,
-    @request() req: Request,
-    @response() res: Response,
-    @next() next: NextFunction,
-  ) {
-    try {
-      const dispatch = await this.vehicleDispatchService.markArrived(id, res.locals.user.id);
-      ControllerLogger.logSuccess('Vehicle Dispatch marked arrived', id, req, res);
-      res.status(200).json({
-        status: 'success',
-        message: 'Vehicle marked as arrived',
-        data: { id: dispatch.id, arrivedAt: dispatch.arrivedAt, reachingTime: dispatch.reachingTime },
-      });
-    } catch (err) {
-      ControllerLogger.logError('Vehicle Dispatch mark arrived', err, req, res);
-      next(err);
-    }
-  }
+  // The vehicle's arrival is recorded by POST /receiving/receive (the Arrivals
+  // Receive button, docs/arrivals-status-plan.md D7), not here.
 
 @httpDelete('/delete/multiple')
     public async deleteMultipleVehicleDispatch(

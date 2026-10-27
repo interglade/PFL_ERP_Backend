@@ -5,17 +5,17 @@
  * columns and yields the ordered source keys; phase 2 computes the expensive
  * per-source status (slots, kg, dispatch) for the visible page only.
  *
- * The receiving `state` is partly known in SQL (`sqlStateExpr`): `not-started`
- * and, without a counting Inward, `open` / `legacy` are exact there. A source
- * with a counting Inward has `sql_state = NULL` and its state (done / open /
- * legacy) needs the per-product kg matching of the status service. The plan
- * says whether a state filter can be answered by SQL alone.
+ * The receiving `state` is partly known in SQL (`sqlStateExpr`): `in-transit`,
+ * `received` and, while a step is unfinished, `in-progress` are exact there. A
+ * source whose every step is approved (or skipped) has `sql_state = NULL`: done
+ * or in-progress then needs the per-product kg matching of the status service.
+ * The plan says whether a state filter can be answered by SQL alone.
  */
 
 import { ReceivingState, SkipFlags, SlotState } from './receiving.types';
 
-/** States that only the status service can tell apart once an Inward counts. */
-const INWARD_STATES: ReceivingState[] = ['open', 'done', 'legacy'];
+/** States that only the status service can tell apart once every step is approved. */
+const UNRESOLVED_STATES: ReceivingState[] = ['in-progress', 'done'];
 
 export interface StateFilterPlan {
   /** No filter on state. */
@@ -41,10 +41,10 @@ export function planStateFilter(value: ReceivingState | ReceivingState[] | null 
   // The list only contains COMPLETE sources, so `not-received` never matches.
   const states = requested.filter((s) => s !== 'not-received');
   if (!states.length) return { any: false, none: true, states, includeUnresolved: false, needsCompute: false };
-  const inwardStates = states.filter((s) => INWARD_STATES.includes(s));
-  const includeUnresolved = inwardStates.length > 0;
-  // Every state an Inward-holding source can have is wanted: no need to tell them apart.
-  const needsCompute = includeUnresolved && inwardStates.length < INWARD_STATES.length;
+  const unresolvedStates = states.filter((s) => UNRESOLVED_STATES.includes(s));
+  const includeUnresolved = unresolvedStates.length > 0;
+  // Both states an unresolved source can have are wanted: no need to tell them apart.
+  const needsCompute = includeUnresolved && unresolvedStates.length < UNRESOLVED_STATES.length;
   return { any: false, none: false, states, includeUnresolved, needsCompute };
 }
 

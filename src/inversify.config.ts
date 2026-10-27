@@ -380,6 +380,8 @@ import { StockCorrectionController } from "./stockCorrection/controller/stockCor
 import { GrnProductHistoryRepository } from "./grn/repository/grnProductHistory.repository";
 import { GrnProductHistoryService } from "./grn/service/grnProductHistory.service";
 import { GrnProductHistory } from "./grn/entity/grnProductHistory.entity";
+import { GrnPaymentService } from "./grn/service/grnPayment.service";
+import { GrnPaymentController } from "./grn/controller/grnPayment.controller";
 import { ReceivingStatusService } from "./receiving/service/receivingStatus.service";
 import { ReceivingGuardService } from "./receiving/service/receivingGuard.service";
 import { ReceivingController } from "./receiving/controller/receiving.controller";
@@ -1399,6 +1401,9 @@ container.bind<GrnProductHistoryRepository>(TYPES.GrnProductHistoryRepository).t
   return dataSource.getRepository(GrnProductHistory).extend(GrnProductHistoryRepository);
 }).inRequestScope();
 container.bind<GrnProductHistoryService>(TYPES.GrnProductHistoryService).to(GrnProductHistoryService).inSingletonScope();
+// GRN payment history (docs/grn-payment-history-plan.md)
+container.bind<GrnPaymentService>(TYPES.GrnPaymentService).to(GrnPaymentService);
+container.bind<GrnPaymentController>(TYPES.GrnPaymentController).to(GrnPaymentController);
 
 // Receiving links: live source status, Arrivals worklist and the one-per-source guard
 container.bind<ReceivingStatusService>(TYPES.ReceivingStatusService).to(ReceivingStatusService).inSingletonScope();

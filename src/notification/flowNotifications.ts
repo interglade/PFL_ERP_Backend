@@ -177,16 +177,15 @@ export async function documentStatusOf(dataSource: DataSource, documentId: strin
 }
 
 /**
- * Daily reminder (D-9): sources whose goods can be received (approved, dispatch
- * approved) but whose receiving has not started or is still open, dated before
- * today. One message per source to its creator and approval-flow users.
+ * Daily reminder (D-9): Arrivals not done yet (In Transit, Received or In
+ * Progress; docs/arrivals-status-plan.md), dated before today. One message per
+ * source to its creator and approval-flow users.
  */
 export async function remindOpenReceiving(
   dataSource: DataSource,
   notifier: Notifier,
   listArrivals: (filter: {
-    state: Array<'not-started' | 'open'>;
-    readiness: 'ready';
+    state: Array<'in-transit' | 'received' | 'in-progress'>;
     endDate: string;
     page: number;
     limit: number;
@@ -200,11 +199,14 @@ export async function remindOpenReceiving(
   };
   let sent = 0;
   for (let page = 1; page <= 10; page += 1) {
-    const { data } = await listArrivals({ state: ['not-started', 'open'], readiness: 'ready', endDate: yesterday, page, limit: 100 });
+    const { data } = await listArrivals({ state: ['in-transit', 'received', 'in-progress'], endDate: yesterday, page, limit: 100 });
     for (const row of data) {
       const type = typeOf[row.sourceType];
       if (!type) continue;
-      const what = row.state === 'open' ? 'is still open' : 'has not started';
+      const what =
+        row.state === 'in-transit' ? 'is waiting: the vehicle has not been received'
+          : row.state === 'received' ? 'has not started'
+            : 'is still in progress';
       await notifyDocumentPeople(dataSource.manager, notifier, type, row.sourceId,
         `Reminder: receiving of ${row.sourceNo ?? 'a source'}${row.locationName ? ` at ${row.locationName}` : ''} ${what}`);
       sent += 1;

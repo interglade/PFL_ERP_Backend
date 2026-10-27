@@ -66,6 +66,8 @@ const SINGLE_APPROVER_TYPES = new Set([
 ]);
 
 export const FINISHED_STATUSES = ['COMPLETE', 'REJECT', 'disapproved'];
+/** Not sent to approvers yet (an auto-created Deal Slip), so not in approval either. */
+export const NOT_IN_APPROVAL_STATUSES = [...FINISHED_STATUSES, 'draft'];
 
 /** The document's own overallStatus, as the admin reads it. */
 export function statusLabel(status: string): string {
@@ -200,7 +202,7 @@ export async function loadInFlightDocuments(ds: DataSource): Promise<InFlightDoc
        LEFT JOIN approval_stage_info a3 ON a3.id = w.third_approved_id
       WHERE d."isDeleted" = false
         AND d.status::text <> ALL($1)`,
-    [FINISHED_STATUSES],
+    [NOT_IN_APPROVAL_STATUSES],
   );
 
   const flows = await loadFlows(ds, rows.map((r) => r.flowId).filter(Boolean));

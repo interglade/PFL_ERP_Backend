@@ -135,7 +135,7 @@ export class ReturnToVendorService {
 
       try {
           const grnId = refId(returnData.grnNo);
-          // Receiving links R1–R7: a COMPLETE cc-dc GRN, every product of it once,
+          // Receiving links R1–R7: a COMPLETE cc / dc GRN, every product of it once,
           // net kg within what is still unaccounted for. The GRN row is locked
           // inside this transaction so concurrent creates serialise.
           const resolvedSource = await this.receivingGuardService.resolveAndAssert({

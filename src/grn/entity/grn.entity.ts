@@ -15,9 +15,8 @@ import { parse, format } from 'date-fns';
 import Model from '../../global/model.entity';
 import { Company } from '../../company/entity/company.entity';
 import { User } from '../../employee/entity/user.entity';
-import { ammountStatus, Source } from '../../utils/status.enum';
+import { GrnPaymentStatus, Source } from '../../utils/status.enum';
 import { DealSlip } from '../../dealSlip/entity/dealSlip.entity';
-import { RFPA } from '../../rfpa/entity/rfpa.entity';
 import { Branches } from '../../branch/entity/branches.entity';
 import { Vendor } from '../../vendor/createVendor/entity/vendor.entity';
 import { Farmer } from '../../farmer/entity/farmer.entity';
@@ -41,20 +40,25 @@ export enum GrnType {
 }
 
 /**
- * Where the goods physically go. Only `cc-dc` GRNs are received at a CC/DC
- * (AQR / Inward / Dump / RTV); `direct-to-customer` GRNs never appear on the
- * Arrivals worklist or in the receiving pickers.
+ * Where the goods physically go; it drives the workflow and the colour of the GRN print
+ * (`cc` red, `dc` and `direct-to-customer` green). `cc` and `dc` GRNs are received at that
+ * centre (AQR / Inward / Dump / RTV); `direct-to-customer` GRNs bypass the centres and never
+ * appear on the Arrivals worklist or in the receiving pickers.
  */
 export enum GrnDeliveryMode {
-  CC_DC = 'cc-dc',
+  CC = 'cc',
+  DC = 'dc',
   DIRECT_TO_CUSTOMER = 'direct-to-customer',
 }
+
+/** Modes whose goods are received at a collection / distribution centre. */
+export const CENTRE_DELIVERY_MODES: readonly GrnDeliveryMode[] = [GrnDeliveryMode.CC, GrnDeliveryMode.DC];
 
 @Entity('grns')
 // Dashboard / report filters
 @Index(['createdAt'])
 @Index(['companyName'])
-@Index(['location'])
+@Index(['purchaseLocation'])
 @Index(['createdBy'])
 // Batch no lookups per company. Uniqueness (one live, non-rejected GRN per
 // company + batch no) is enforced by GrnService.assertBatchNoUnique: a rejected
@@ -114,7 +118,7 @@ export class GRN extends Model {
   @Column({
     type: 'enum',
     enum: GrnDeliveryMode,
-    default: GrnDeliveryMode.CC_DC,
+    default: GrnDeliveryMode.CC,
     nullable: false,
   })
   deliveryMode: GrnDeliveryMode;
@@ -122,10 +126,6 @@ export class GRN extends Model {
   @ManyToOne(() => DealSlip, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'deal_slip_id' })
   dealSlipId: DealSlip;
-
-  @ManyToOne(() => RFPA, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'rfpa_id' })
-  rfpa: RFPA;
 
   @Column({ nullable: true })
   securityPerson: string;
@@ -281,10 +281,6 @@ timeIn: string | null;
   grnProducts: GrnProduct[];
 
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
-  @JoinColumn({ name: 'purchase_id' })
-  purchaseBy: User;
-
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'createdby_id' })
   createdBy: User;
 
@@ -300,13 +296,6 @@ timeIn: string | null;
   @ManyToOne(() => Levels, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'current_level_id' })
   currentLevel: Levels;
-
-  @ManyToOne(() => Branches, (branch) => branch.grns, {
-    nullable: true,
-    onDelete: 'SET NULL',
-  })
-  @JoinColumn({ name: 'branch_id' })
-  location: Branches;
 
   @OneToOne(() => PaymentInfoForGRN, { onDelete: 'SET NULL', cascade: true })
   @JoinColumn({ name: 'payment_info_id' })
@@ -344,13 +333,19 @@ timeIn: string | null;
   @Column({ default: false })
   isVehicleDispatchCreated: boolean;
 
-    @Column( {
-         type: 'enum',
-         enum: ammountStatus,
-         default:ammountStatus.UNPAID,
-         nullable:true
-        })
-        ammountStatus:ammountStatus   
+  /** unpaid / partial / paid, worked out from the GRN's payments (GrnPaymentService). */
+  @Column({
+    type: 'enum',
+    enum: GrnPaymentStatus,
+    enumName: 'grns_ammountstatus_enum',
+    default: GrnPaymentStatus.UNPAID,
+    nullable: true,
+  })
+  ammountStatus: GrnPaymentStatus;
+
+  /** Sum of the live (not voided) recorded payments; the advance is not included. */
+  @Column('decimal', { name: 'paid_amount', precision: 15, scale: 2, default: 0 })
+  paidAmt: number;
 }
 // @Column({
 //   type: "timestamp",

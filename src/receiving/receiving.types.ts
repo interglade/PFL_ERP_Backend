@@ -16,8 +16,16 @@ export type ProcessingDocType = 'aqr' | 'inward' | 'dump' | 'rtv';
 export const RECEIVING_SOURCE_TYPES: ReceivingSourceType[] = ['grn', 'stock-transfer-dc', 'rbc'];
 export const PROCESSING_DOC_TYPES: ProcessingDocType[] = ['aqr', 'inward', 'dump', 'rtv'];
 
-export type ReceivingState = 'not-received' | 'not-started' | 'open' | 'done' | 'legacy';
-export const RECEIVING_STATES: ReceivingState[] = ['not-received', 'not-started', 'open', 'done', 'legacy'];
+/**
+ * Receiving state of a source (docs/arrivals-status-plan.md §2):
+ * - `not-received`: the source (or its required dispatch) is not approved yet; never listed on Arrivals.
+ * - `in-transit`: approved, the vehicle has not been received yet (dispatch `arrivedAt` empty).
+ * - `received`: the vehicle was received (or the source needs no dispatch); no processing document yet.
+ * - `in-progress`: at least one counting AQR / Inward / Dump / RTV exists, not done yet.
+ * - `done`: AQR and Inward approved, Dump / RTV approved or skipped, every difference 0.
+ */
+export type ReceivingState = 'not-received' | 'in-transit' | 'received' | 'in-progress' | 'done';
+export const RECEIVING_STATES: ReceivingState[] = ['not-received', 'in-transit', 'received', 'in-progress', 'done'];
 
 export type PartyType = 'vendor' | 'farmer' | 'customer' | 'branch' | null;
 
@@ -41,7 +49,11 @@ export interface DispatchSummary {
   driverMobNo: string | null;
   transporterName: string | null;
   outTime: string | null;
+  /** Expected reaching date (`YYYY-MM-DD`), entered with `reachingTime`. */
+  expectedReachingDate: string | null;
+  /** Expected reaching time (`HH:mm:ss`). */
   reachingTime: string | null;
+  /** When the vehicle was received (Receive on Arrivals). */
   arrivedAt: Date | string | null;
   netWeightKg: number | null;
 }
@@ -169,9 +181,11 @@ export interface ReceivingSourceStatus {
   dispatchRequired: boolean;
   /** Receiving may start: source COMPLETE and, when required, its dispatch COMPLETE. */
   canReceive: boolean;
+  /** The vehicle was received (dispatch `arrivedAt` set), or the source needs no dispatch. */
+  arrived: boolean;
   /** Why receiving cannot start yet (empty when it can). */
   blockers: string[];
-  /** Optional steps marked "not needed". Informational: `done` still needs an Inward and every difference 0. */
+  /** Optional steps marked "not needed"; a skipped Dump / RTV counts towards `done`. */
   skipped: SkipFlags;
 }
 
@@ -193,7 +207,10 @@ export interface ArrivalRow {
   partyName: string | null;
   date: Date | string | null;
   productCount: number;
+  /** Net kg the source sent. */
   receivedKg: number;
+  /** Σ net kg that arrived (AQR); null until an AQR counts. */
+  arrivedKg: number | null;
   differenceKg: number;
   /** Σ transit loss kg of the products (sent − arrived); null until an AQR counts. */
   transitLossKg: number | null;
@@ -205,16 +222,14 @@ export interface ArrivalRow {
   dispatchState: DispatchState;
   dispatchRequired: boolean;
   canReceive: boolean;
+  arrived: boolean;
   blockers: string[];
   skipped: SkipFlags;
 }
 
-export type ArrivalReadiness = 'ready' | 'blocked';
-export const ARRIVAL_READINESS: ArrivalReadiness[] = ['ready', 'blocked'];
-
 export interface ArrivalsFilter {
   locationId?: string;
-  /** One or more states (`state=not-started,open`). */
+  /** One or more states (`state=in-transit,received`). */
   state?: ReceivingState | ReceivingState[];
   sourceType?: ReceivingSourceType | ReceivingSourceType[];
   /** yyyy-MM-dd (inclusive) */
@@ -223,9 +238,6 @@ export interface ArrivalsFilter {
   endDate?: string;
   /** Matches the source number and the party name (ILIKE). */
   search?: string;
-  dispatchState?: DispatchState;
-  /** `ready`: receiving may start; `blocked`: the vehicle dispatch is missing or not approved. */
-  readiness?: ArrivalReadiness;
   page?: number;
   limit?: number;
   /** `field:asc|desc`; fields: date, sourceNo, partyName, locationName, companyName, receivedKg, productCount. Default `date:desc`. */

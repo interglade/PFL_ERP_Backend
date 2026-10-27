@@ -57,7 +57,7 @@ describe('copying source lines', () => {
   it('GRN line: decimals become numbers, no packaging material name, weights kept', () => {
     const line = grnLine({
       productName: product, variant, uom,
-      quantity: '100.00', revisedQuantity: null, unitPrice: '12.50', revisedRate: null, amount: '1250.00',
+      quantity: '100.00', unitPrice: '12.50', amount: '1250.00',
       packingMaterialWeight: '500.000', grossWeight: '1050.000', netWeight: '1000.000',
     } as any);
     expect(line).toEqual({
@@ -66,13 +66,6 @@ describe('copying source lines', () => {
       packagingMaterialId: null, packagingMaterialName: null,
       packingMaterialWeight: 500, grossWeight: 1050, netWeight: 1000,
     });
-  });
-
-  it('GRN line: revised quantity and rate win when present', () => {
-    const line = grnLine({ productName: product, quantity: '100', revisedQuantity: '90', unitPrice: '12', revisedRate: '11', amount: '990' } as any);
-    expect(line.quantity).toBe(90);
-    expect(line.unitPrice).toBe(11);
-    expect(line.amount).toBe(990);
   });
 
   it('GRN line: missing relations and values become null', () => {

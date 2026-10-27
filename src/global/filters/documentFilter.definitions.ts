@@ -11,9 +11,10 @@
  */
 
 import { DocumentTypeEnum } from '../../approvalFlow/entity/docuemnt.entity';
-import { Department, Source, Status, ammountStatus } from '../../utils/status.enum';
+import { Department, Source, Status, ammountStatus, GrnPaymentStatus } from '../../utils/status.enum';
 import { RFPA } from '../../rfpa/entity/rfpa.entity';
 import { RFPAProduct } from '../../rfpa/entity/rfpaProduct.entity';
+import { DealSlipProduct } from '../../dealSlip/entity/dealSlipProduct.entity';
 import { DealSlip } from '../../dealSlip/entity/dealSlip.entity';
 import { GRN, GrnType, LocationType, PurchaseType } from '../../grn/entity/grn.entity';
 import { GrnProduct } from '../../grn/entity/grnProduct.entity';
@@ -155,7 +156,6 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
     },
     fields: [
       enumOf('source', 'rec.source', Source, 'Source: vendor or farmer'),
-      departmentField(),
       ...companyFields(),
       ...vendorFields(),
       ...farmerFields(),
@@ -172,17 +172,18 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
     entity: DealSlip,
     numberColumn: 'dealSlipNo',
     businessDate: { expr: 'COALESCE(rec.dealSlipCreatedAt, rec.createdAt)', kind: 'timestamp', source: 'deal_slips.dealSlipCreatedAt' },
+    // Every filter reads the deal slip's own copy of the RFPA details, never the RFPA's.
+    // The RFPA join is used only for the linked RFPA number.
     joins: {
       rfpa: 'rec.rfpa',
-      company: 'rfpa.companyName',
-      vendor: 'rfpa.selectedVendor',
-      farmer: 'rfpa.selectedFarmer',
-      purchaseLocation: 'rfpa.purchaseLocation',
-      purchaseForSalesLocation: 'rfpa.purchaseForSalesLocation',
+      company: 'rec.companyName',
+      vendor: 'rec.selectedVendor',
+      farmer: 'rec.selectedFarmer',
+      purchaseLocation: 'rec.purchaseLocation',
+      purchaseForSalesLocation: 'rec.purchaseForSalesLocation',
     },
     fields: [
       enumOf('approvalStatus', 'rec.approvalStatus', Status, 'Deal slip approval status'),
-      departmentField(),
       text('dealSlipNo', ['rec.dealSlipNo'], 'Deal slip number (partial)'),
       text('lotNo', ['rec.lotNo'], 'Lot number (partial)'),
       text('loadingLocation', ['rec.loadingLocation'], 'Loading location (partial)'),
@@ -190,11 +191,13 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       ...companyFields(),
       ...vendorFields(),
       ...farmerFields(),
-      ...locationFields(['purchaseLocation', 'purchaseForSalesLocation']),
+      ...locationFields(['purchaseLocation', 'purchaseForSalesLocation'], ['rec.otherPurchaseLoc', 'rec.otherPurchaseForSalesLoc']),
+      enumOf('source', 'rec.source', Source, 'Source: vendor or farmer'),
       flag('isGrnCreated', 'rec.isGrnCreated', 'A GRN has been raised'),
     ],
     search: ['rec.lotNo', 'rec.loadingLocation', 'rfpa.rfpaId', 'company.name', 'vendor.companyName', 'vendor.vendorCode', farmerFullName('farmer')],
-    lineItems: { entity: RFPAProduct, parentRelation: 'rfpa', parentIdExpr: 'rfpa.id', product: 'productName', variant: 'variant' },
+    // The deal slip's own product lines (its copy of the RFPA's), never the RFPA's.
+    lineItems: { entity: DealSlipProduct, parentRelation: 'dealSlip', product: 'productName', variant: 'variant' },
     sortable: standardSort('dealSlipNo', 'rec.dealSlipNo', { dealSlipCreatedAt: 'rec.dealSlipCreatedAt' }),
   },
   {
@@ -206,8 +209,8 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
     joins: {
       company: 'rec.companyName',
       dealSlip: 'rec.dealSlipId',
-      rfpa: 'rec.rfpa',
-      location: 'rec.location',
+      // The GRN's RFPA is the one its deal slip was made from.
+      rfpa: 'dealSlip.rfpa',
       purchaseLocation: 'rec.purchaseLocation',
       purchaseForSalesLocation: 'rec.purchaseForSalesLocation',
       vendor: 'rec.selectedVendor',
@@ -218,7 +221,7 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       enumOf('purchaseType', 'rec.purchaseType', PurchaseType, 'Purchase type'),
       enumOf('locationType', 'rec.locationType', LocationType, 'Location type'),
       enumOf('source', 'rec.source', Source, 'Source: vendor or farmer'),
-      enumOf('paymentStatus', 'rec.ammountStatus', ammountStatus, 'Payment status'),
+      enumOf('paymentStatus', 'rec.ammountStatus', GrnPaymentStatus, 'Payment status: unpaid, partial (partially paid) or paid'),
       ...companyFields(),
       // Historic GRN list parameter: accepts a company id or a (partial) company name.
       { param: 'companyName', kind: 'id', exprs: ['company.id'], nameExprs: ['company.name'], description: 'Company id or name' },
@@ -226,12 +229,12 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       text('rfpaNo', ['rfpa.rfpaId'], 'RFPA number (partial)'),
       ...vendorFields(),
       ...farmerFields(),
-      ...locationFields(['location', 'purchaseLocation', 'purchaseForSalesLocation']),
+      ...locationFields(['purchaseLocation', 'purchaseForSalesLocation']),
       text('batchNo', ['rec.batchNo'], 'Batch number (partial)'),
       text('billNo', ['rec.billNo'], 'Bill number (partial)'),
       ...amountRange('rec.totalAmt', 'GRN total amount'),
     ],
-    search: ['rec.billNo', 'rec.batchNo', 'company.name', 'dealSlip.dealSlipNo', 'rfpa.rfpaId', 'vendor.companyName', 'vendor.vendorCode', farmerFullName('farmer'), 'location.name'],
+    search: ['rec.billNo', 'rec.batchNo', 'company.name', 'dealSlip.dealSlipNo', 'rfpa.rfpaId', 'vendor.companyName', 'vendor.vendorCode', farmerFullName('farmer'), 'purchaseLocation.name'],
     lineItems: { entity: GrnProduct, parentRelation: 'grn', product: 'productName', variant: 'variant' },
     sortable: standardSort('grnNo', 'rec.grnNo', { totalAmt: 'rec.totalAmt' }),
   },

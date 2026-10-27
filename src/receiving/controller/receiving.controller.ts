@@ -10,12 +10,8 @@ import logger from '../../utils/logger';
 import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
 import { ARRIVALS_EXPORT_BATCH_SIZE, ARRIVALS_EXPORT_MAX_ROWS, ReceivingStatusService } from '../service/receivingStatus.service';
 import {
-  ARRIVAL_READINESS,
-  ArrivalReadiness,
   ArrivalRow,
   ArrivalsFilter,
-  DISPATCH_STATES,
-  DispatchState,
   RECEIVING_STATES,
   ReceivingSourceType,
   ReceivingState,
@@ -23,6 +19,7 @@ import {
   SkippableDocType,
 } from '../receiving.types';
 import { isReceivingSourceType } from '../receiving.sql';
+import { VehicleDispatchService } from '../../vehicleDispatch/service/vehicleDispatch.service';
 
 const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -32,6 +29,14 @@ const SOURCE_TYPE_TITLE: Record<ReceivingSourceType, string> = {
   rbc: 'RBC',
 };
 
+const STATE_TITLE: Record<ReceivingState, string> = {
+  'not-received': 'Not Received',
+  'in-transit': 'In Transit',
+  received: 'Received',
+  'in-progress': 'In Progress',
+  done: 'Done',
+};
+
 interface ArrivalColumn {
   header: string;
   width: number;
@@ -39,35 +44,43 @@ interface ArrivalColumn {
   numFmt?: string;
 }
 
-/** Same columns as the Arrivals list. */
+/** `YYYY-MM-DD` → `dd-MM-yyyy`. */
+function displayDate(value: string | null | undefined): string | null {
+  const match = value ? /^(\d{4})-(\d{2})-(\d{2})/.exec(value) : null;
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : null;
+}
+
+/** Date / time part of a timestamp as text (server-local wall time, as stored), so Excel shows it unshifted. */
+function timestampPart(value: Date | string | null | undefined, pattern: string): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : format(date, pattern);
+}
+
+/** Same columns, in the same order, as the Arrivals list (the Receive button aside). */
 const ARRIVAL_COLUMNS: ArrivalColumn[] = [
+  { header: 'State', width: 13, get: (r) => STATE_TITLE[r.state] ?? r.state },
   { header: 'Source No', width: 20, get: (r) => r.sourceNo },
+  { header: 'Dispatch No', width: 18, get: (r) => r.dispatch?.dispatchNo ?? null },
   { header: 'Type', width: 14, get: (r) => SOURCE_TYPE_TITLE[r.sourceType] },
   { header: 'Party', width: 28, get: (r) => r.partyName },
   { header: 'Company', width: 24, get: (r) => r.companyName },
-  { header: 'Location', width: 22, get: (r) => r.locationName },
-  { header: 'Date', width: 20, get: (r) => (r.date ? new Date(r.date) : null), numFmt: 'dd-mm-yyyy hh:mm' },
-  { header: 'Products', width: 10, get: (r) => r.productCount, numFmt: '0' },
-  { header: 'Received kg', width: 14, get: (r) => r.receivedKg, numFmt: '#,##0.000' },
-  { header: 'Difference kg', width: 14, get: (r) => r.differenceKg, numFmt: '#,##0.000' },
-  { header: 'Transit Loss kg', width: 15, get: (r) => r.transitLossKg, numFmt: '#,##0.000' },
+  { header: 'Receive Location', width: 22, get: (r) => r.locationName },
+  { header: 'Vehicle No', width: 14, get: (r) => r.dispatch?.vehicleNo ?? null },
+  { header: 'Driver Name', width: 20, get: (r) => r.dispatch?.driverName ?? null },
+  { header: 'Driver Contact No', width: 16, get: (r) => r.dispatch?.driverMobNo ?? null },
+  { header: 'Expected Reaching Date', width: 14, get: (r) => displayDate(r.dispatch?.expectedReachingDate) },
+  { header: 'Expected Reaching Time', width: 14, get: (r) => r.dispatch?.reachingTime?.slice(0, 5) ?? null },
+  { header: 'Received Date', width: 14, get: (r) => timestampPart(r.dispatch?.arrivedAt, 'dd-MM-yyyy') },
+  { header: 'Received Time', width: 12, get: (r) => timestampPart(r.dispatch?.arrivedAt, 'HH:mm') },
+  { header: 'Received Kg', width: 14, get: (r) => r.arrivedKg, numFmt: '#,##0.000' },
+  { header: 'Transit Loss Kg', width: 15, get: (r) => r.transitLossKg, numFmt: '#,##0.000' },
   { header: 'Transit Loss Rs', width: 15, get: (r) => r.transitLossValue, numFmt: '#,##0.00' },
+  { header: 'Difference Kg', width: 14, get: (r) => r.differenceKg, numFmt: '#,##0.000' },
   { header: 'AQR', width: 11, get: (r) => r.slots.aqr },
   { header: 'Inward', width: 11, get: (r) => r.slots.inward },
   { header: 'Dump', width: 11, get: (r) => r.slots.dump },
   { header: 'RTV', width: 11, get: (r) => r.slots.rtv ?? 'n/a' },
-  { header: 'State', width: 13, get: (r) => r.state },
-  { header: 'Dispatch', width: 12, get: (r) => r.dispatchState },
-  { header: 'Can Receive', width: 12, get: (r) => (r.canReceive ? 'Yes' : 'No') },
-  { header: 'Blocked By', width: 40, get: (r) => r.blockers.join('; ') || null },
-  { header: 'Dispatch No', width: 18, get: (r) => r.dispatch?.dispatchNo ?? null },
-  { header: 'Vehicle No', width: 14, get: (r) => r.dispatch?.vehicleNo ?? null },
-  { header: 'Driver', width: 20, get: (r) => r.dispatch?.driverName ?? null },
-  { header: 'Driver Mobile', width: 14, get: (r) => r.dispatch?.driverMobNo ?? null },
-  { header: 'Transporter', width: 22, get: (r) => r.dispatch?.transporterName ?? null },
-  { header: 'Out Time', width: 10, get: (r) => r.dispatch?.outTime ?? null },
-  { header: 'Reaching Time', width: 12, get: (r) => r.dispatch?.reachingTime ?? null },
-  { header: 'Arrived At', width: 20, get: (r) => (r.dispatch?.arrivedAt ? new Date(r.dispatch.arrivedAt) : null), numFmt: 'dd-mm-yyyy hh:mm' },
 ];
 
 function firstString(value: unknown): string | undefined {
@@ -88,6 +101,15 @@ function manyStrings(value: unknown): string[] {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function parseSourceBody(body: unknown): { sourceType: ReceivingSourceType; sourceId: string } {
+  const input = (body ?? {}) as Record<string, unknown>;
+  const sourceType = input.sourceType;
+  const sourceId = typeof input.sourceId === 'string' ? input.sourceId.trim() : '';
+  if (!isReceivingSourceType(sourceType)) throw new AppError(400, 'sourceType must be one of grn, stock-transfer-dc, rbc');
+  if (!UUID.test(sourceId)) throw new AppError(400, 'sourceId must be a uuid');
+  return { sourceType, sourceId };
+}
+
 function parseSkipBody(body: unknown): { sourceType: ReceivingSourceType; sourceId: string; docType: SkippableDocType } {
   const input = (body ?? {}) as Record<string, unknown>;
   const sourceType = input.sourceType;
@@ -107,28 +129,12 @@ function parseArrivalsFilter(query: Request['query']): ArrivalsFilter {
   const locationId = firstString(query.locationId);
   if (locationId) filter.locationId = locationId;
 
-  // One or more states: `state=open`, `state=not-started,open` or `state=open&state=legacy`.
+  // One or more states: `state=received`, `state=in-transit,received` or `state=received&state=in-progress`.
   const states = manyStrings(query.state);
   if (states.length) {
     const invalid = states.find((s) => !RECEIVING_STATES.includes(s as ReceivingState));
     if (invalid) throw new AppError(400, `state must be one or more of ${RECEIVING_STATES.join(', ')}`);
     filter.state = Array.from(new Set(states)) as ReceivingState[];
-  }
-
-  const dispatchState = firstString(query.dispatchState);
-  if (dispatchState) {
-    if (!DISPATCH_STATES.includes(dispatchState as DispatchState)) {
-      throw new AppError(400, `dispatchState must be one of ${DISPATCH_STATES.join(', ')}`);
-    }
-    filter.dispatchState = dispatchState as DispatchState;
-  }
-
-  const readiness = firstString(query.readiness);
-  if (readiness) {
-    if (!ARRIVAL_READINESS.includes(readiness as ArrivalReadiness)) {
-      throw new AppError(400, `readiness must be one of ${ARRIVAL_READINESS.join(', ')}`);
-    }
-    filter.readiness = readiness as ArrivalReadiness;
   }
 
   const types = manyStrings(query.sourceType);
@@ -162,7 +168,41 @@ export class ReceivingController {
   constructor(
     @inject(TYPES.ReceivingStatusService)
     private readonly receivingStatusService: ReceivingStatusService,
+    @inject(TYPES.VehicleDispatchService)
+    private readonly vehicleDispatchService: VehicleDispatchService,
   ) {}
+
+  /**
+   * The Receive button (docs/arrivals-status-plan.md §3): records that the
+   * vehicle of a GRN / Transfer DC reached the receiving location (dispatch
+   * `arrivedAt` / `arrivedBy`; the expected `reachingTime` is kept). In Transit
+   * becomes Received. Idempotent; sources that need no dispatch are already
+   * received. Body: `{ sourceType, sourceId }`. Returns the new status.
+   */
+  @httpPost('/receive')
+  public async receive(
+    @request() req: Request,
+    @response() res: Response,
+    @next() nextFn: NextFunction,
+  ) {
+    try {
+      const { sourceType, sourceId } = parseSourceBody({ ...req.query, ...(req.body ?? {}) });
+      const status = await this.receivingStatusService.getSourceStatus(sourceType, sourceId);
+      if (!status.canReceive) {
+        throw new AppError(400, `Cannot receive yet: ${status.blockers.join('; ')}`);
+      }
+      if (status.arrived) {
+        res.status(200).json({ status: 'success', message: 'Already received', data: status });
+        return;
+      }
+      if (!status.dispatch) throw new AppError(400, 'No vehicle dispatch found for this source');
+      await this.vehicleDispatchService.markArrived(status.dispatch.id, res.locals.user.id);
+      const updated = await this.receivingStatusService.getSourceStatus(sourceType, sourceId);
+      res.status(200).json({ status: 'success', message: 'Vehicle received', data: updated });
+    } catch (error) {
+      nextFn(error);
+    }
+  }
 
   /** Live receiving status of one source: slots, per-product kg, state. */
   @httpGet('/source/:type/:id')
@@ -263,7 +303,7 @@ export class ReceivingController {
     }
   }
 
-  /** Number of Arrivals matching the filters (sidebar badge: `?readiness=ready&state=not-started`). */
+  /** Number of Arrivals matching the filters (sidebar badge, e.g. `?state=received`). */
   @httpGet('/arrivals/count')
   public async countArrivals(
     @request() req: Request,
@@ -311,7 +351,7 @@ export class ReceivingController {
     }
   }
 
-  /** Arrivals worklist: COMPLETE sources (GRN only cc-dc) with their receiving state. */
+  /** Arrivals worklist: receivable sources (GRN only cc / dc) with their receiving state. */
   @httpGet('/arrivals')
   public async listArrivals(
     @request() req: Request,

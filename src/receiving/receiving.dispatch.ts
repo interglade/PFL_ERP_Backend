@@ -58,6 +58,19 @@ export function dispatchReadySql(sourceIdExpr: string, createdAtExpr: string, so
   return `(CASE WHEN ${dispatchRequiredSql(createdAtExpr)} THEN ${approved} ELSE TRUE END)`;
 }
 
+/**
+ * SQL for the Arrivals CTE and the source pickers: the vehicle of the source was
+ * received (its live dispatch has `arrivedAt`), or the source needs no dispatch
+ * (returns, documents from before the go-live date). Constants only.
+ */
+export function dispatchArrivedSql(sourceIdExpr: string, createdAtExpr: string, sourceType: ReceivingSourceType): string {
+  const link = DISPATCH_LINK[sourceType];
+  const live = livePredicate('rl_ad', sourceType);
+  if (!link || !live) return 'TRUE';
+  const arrived = `EXISTS (SELECT 1 FROM dispatch rl_ad WHERE rl_ad."${link.fk}" = ${sourceIdExpr} AND ${live} AND rl_ad."arrivedAt" IS NOT NULL)`;
+  return `(CASE WHEN ${dispatchRequiredSql(createdAtExpr)} THEN ${arrived} ELSE TRUE END)`;
+}
+
 export interface LoadedDispatch {
   summary: DispatchSummary;
   /** Net kg per product key (`productId:variantId`). */
@@ -85,7 +98,7 @@ export async function loadDispatches(
     `SELECT d.id::text AS id, d."${link.fk}"::text AS source_id, d."vehicleDispatchNo" AS no, doc.id::text AS document_id,
             doc.status::text AS status, d."vehicleNo" AS vehicle_no, d."vehicleType" AS vehicle_type, d."driverName" AS driver_name,
             d."driverMobNo" AS driver_mob_no, d."transporterName" AS transporter_name, d."outTime"::text AS out_time,
-            d."reachingTime"::text AS reaching_time, d."arrivedAt" AS arrived_at, d."totalNetWeight" AS net_weight
+            d."expectedReachingDate"::text AS expected_reaching_date, d."reachingTime"::text AS reaching_time, d."arrivedAt" AS arrived_at, d."totalNetWeight" AS net_weight
        FROM dispatch d
        LEFT JOIN LATERAL (SELECT id, status FROM documents WHERE document_type_id = d.id::text AND type::text = $2 AND "deletedAt" IS NULL ORDER BY "createdAt" DESC LIMIT 1) doc ON true
       WHERE d."${link.fk}" = ANY($1::uuid[]) AND ${live}
@@ -107,6 +120,7 @@ export async function loadDispatches(
         driverMobNo: row.driver_mob_no ?? null,
         transporterName: row.transporter_name ?? null,
         outTime: row.out_time ?? null,
+        expectedReachingDate: row.expected_reaching_date ?? null,
         reachingTime: row.reaching_time ?? null,
         arrivedAt: row.arrived_at ?? null,
         netWeightKg: num(row.net_weight),
@@ -162,6 +176,8 @@ export function attachDispatch(status: ReceivingSourceStatus, loaded: LoadedDisp
   }
   status.blockers = blockers;
   status.canReceive = blockers.length === 0;
+  // D3: sources that travel on no tracked vehicle count as received.
+  status.arrived = !status.dispatchRequired || Boolean(status.dispatch?.arrivedAt);
   // Dispatch lines are matched to the products like documents are (product +
   // variant + unit, falling back to the only line of that product + variant).
   const byProduct = new Map(status.products.map((p) => [p.key, { productId: p.productId, variantId: p.variantId }]));

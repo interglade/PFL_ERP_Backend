@@ -11,6 +11,7 @@ import {
   aggregateSourceLines,
   buildProductRows,
   deriveState,
+  DeriveStateInput,
   findDuplicateLines,
   matchSourceKey,
   isCountingDocument,
@@ -21,6 +22,8 @@ import {
   refId,
   round3,
   slotState,
+  stepDocuments,
+  StepDocuments,
   validateLinesAgainstSource,
 } from '../../receiving/receiving.helpers';
 import { AggregatedSourceLine, GuardLine, SourceLineInput } from '../../receiving/receiving.types';
@@ -220,24 +223,74 @@ describe('buildProductRows', () => {
 describe('deriveState', () => {
   const zero = [{ differenceKg: 0 }, { differenceKg: 0 }];
   const short = [{ differenceKg: 0 }, { differenceKg: 50 }];
+  const none: StepDocuments = { counting: 0, approved: false };
+  const pending: StepDocuments = { counting: 1, approved: false };
+  const approved: StepDocuments = { counting: 1, approved: true };
+  const base: DeriveStateInput = {
+    isComplete: true,
+    canReceive: true,
+    arrived: true,
+    aqr: none,
+    inward: none,
+    dump: none,
+    rtv: none,
+    rtvApplicable: true,
+    skipped: { dump: false, rtv: false },
+    products: zero,
+  };
+  const finished: Partial<DeriveStateInput> = { aqr: approved, inward: approved, dump: approved, rtv: approved };
 
-  it('is not-received until the source is COMPLETE, whatever documents exist', () => {
-    expect(deriveState({ isComplete: false, hasCountingDocument: true, hasInward: true, hasLegacyDumpLine: false, products: zero })).toBe('not-received');
+  it('is not-received until the source is approved, whatever documents exist', () => {
+    expect(deriveState({ ...base, ...finished, isComplete: false })).toBe('not-received');
   });
 
-  it('is not-started with no counting document', () => {
-    expect(deriveState({ isComplete: true, hasCountingDocument: false, hasInward: false, hasLegacyDumpLine: false, products: zero })).toBe('not-started');
+  it('is not-received while the required dispatch is missing / not approved (no documents yet)', () => {
+    expect(deriveState({ ...base, canReceive: false, arrived: false })).toBe('not-received');
   });
 
-  it('is done only with an Inward and every difference 0', () => {
-    expect(deriveState({ isComplete: true, hasCountingDocument: true, hasInward: true, hasLegacyDumpLine: false, products: zero })).toBe('done');
-    expect(deriveState({ isComplete: true, hasCountingDocument: true, hasInward: false, hasLegacyDumpLine: false, products: zero })).toBe('open');
-    expect(deriveState({ isComplete: true, hasCountingDocument: true, hasInward: true, hasLegacyDumpLine: false, products: short })).toBe('open');
+  it('is in-transit until the vehicle is received, then received', () => {
+    expect(deriveState({ ...base, arrived: false })).toBe('in-transit');
+    expect(deriveState(base)).toBe('received');
   });
 
-  it('is legacy when a counting dump line has no net weight (unless already done)', () => {
-    expect(deriveState({ isComplete: true, hasCountingDocument: true, hasInward: true, hasLegacyDumpLine: true, products: short })).toBe('legacy');
-    expect(deriveState({ isComplete: true, hasCountingDocument: true, hasInward: true, hasLegacyDumpLine: true, products: zero })).toBe('done');
+  it('is in-progress from the first counting document, even without a recorded arrival', () => {
+    expect(deriveState({ ...base, aqr: pending })).toBe('in-progress');
+    expect(deriveState({ ...base, arrived: false, aqr: approved })).toBe('in-progress');
+  });
+
+  it('is done with AQR, Inward, Dump and RTV approved and every difference 0', () => {
+    expect(deriveState({ ...base, ...finished })).toBe('done');
+    expect(deriveState({ ...base, ...finished, products: short })).toBe('in-progress');
+  });
+
+  it('needs every step approved, not just created (D2)', () => {
+    expect(deriveState({ ...base, ...finished, aqr: pending })).toBe('in-progress');
+    expect(deriveState({ ...base, ...finished, inward: pending })).toBe('in-progress');
+    expect(deriveState({ ...base, ...finished, dump: pending })).toBe('in-progress');
+  });
+
+  it('AQR and Inward are compulsory', () => {
+    expect(deriveState({ ...base, ...finished, aqr: none })).toBe('in-progress');
+    expect(deriveState({ ...base, ...finished, inward: none })).toBe('in-progress');
+  });
+
+  it('a skipped Dump / RTV finishes the step', () => {
+    expect(deriveState({ ...base, ...finished, dump: none, rtv: none })).toBe('in-progress');
+    expect(deriveState({ ...base, ...finished, dump: none, rtv: none, skipped: { dump: true, rtv: true } })).toBe('done');
+    expect(deriveState({ ...base, ...finished, dump: none, skipped: { dump: true, rtv: false } })).toBe('done');
+  });
+
+  it('ignores RTV where it does not apply', () => {
+    expect(deriveState({ ...base, ...finished, rtv: none, rtvApplicable: false })).toBe('done');
+  });
+});
+
+describe('stepDocuments', () => {
+  it('approved only when there is a document and every one is COMPLETE', () => {
+    expect(stepDocuments([])).toEqual({ counting: 0, approved: false });
+    expect(stepDocuments([{ id: 'a', status: 'COMPLETE' }])).toEqual({ counting: 1, approved: true });
+    expect(stepDocuments([{ id: 'a', status: 'COMPLETE' }, { id: 'b', status: 'hold' }])).toEqual({ counting: 2, approved: false });
+    expect(stepDocuments([{ id: 'a', status: null }])).toEqual({ counting: 1, approved: false });
   });
 });
 

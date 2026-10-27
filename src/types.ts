@@ -474,6 +474,8 @@ RegistrationReportsController:Symbol.for("RegistrationReportsController"),
   StockCorrectionController: Symbol.for("StockCorrectionController"),
     GrnProductHistoryRepository:Symbol.for("GrnProductHistoryRepository"),
     GrnProductHistoryService:Symbol.for("GrnProductHistoryService"),
+  GrnPaymentService: Symbol.for("GrnPaymentService"),
+  GrnPaymentController: Symbol.for("GrnPaymentController"),
 
   // Document Excel exports
   DocumentExportService: Symbol.for("DocumentExportService"),

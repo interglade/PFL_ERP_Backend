@@ -21,7 +21,8 @@
     "db:dedupe-uoms": "ts-node --transpile-only src/scripts/dedupeUoms.ts",
     "db:fix-rtv-key": "ts-node --transpile-only src/scripts/fixRtvDocumentKey.ts",
     "db:unique-doc-numbers": "ts-node --transpile-only src/scripts/addDocumentNumberIndexes.ts",
-    "db:receiving-indexes": "ts-node --transpile-only src/scripts/addReceivingIndexes.ts"
+    "db:receiving-indexes": "ts-node --transpile-only src/scripts/addReceivingIndexes.ts",
+    "db:backfill-dispatch-arrival": "ts-node --transpile-only src/scripts/backfillDispatchArrival.ts"
   },
   "keywords": [],
   "author": "",

@@ -1,105 +1,37 @@
-import { Department, Status } from "../../utils/status.enum";
+import { Status } from "../../utils/status.enum";
 
 ;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Create Deal Slip DTO  (POST /dealSlip)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface CreateDealSlipDto {
-  /** RFPA entity ID */
-  rfpa: string;
-  lotNo: string;
-  loadingLocation: string;
-  specialRequest: string;
-  remark?: string | null;
-  approvalNote?: string | null;
-  /** Injected from res.locals by controller */
-  requestedBy?: string;
-  requestingDepartment?: Department | null;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Update Deal Slip DTO  (PATCH /dealSlip/:id)
-// All fields optional.
+// Only these can change (rules in dealSlipEdit.ts); anything else is rejected with 400. Saving a
+// Draft submits it for approval, so lotNo and loadingLocation are required.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** An existing product line (copied from the RFPA); product, variant and grade cannot change. */
 export interface UpdateDealSlipProductDto {
-  /** deal_slip_product id; leave out to add a new line (then quantity and unitPrice are required) */
-  id?: string;
-  /** product / variant / uom ids */
-  productName?: string | null;
-  variant?: string | null;
+  /** deal_slip_product id (lines cannot be added or removed) */
+  id: string;
+  /** uom id */
   uom?: string | null;
-  grade?: string | null;
+  /** whole number > 0 */
   quantity?: number;
+  /** > 0 */
   unitPrice?: number;
-  count?: string | null;
-  size?: string | null;
-  origin?: string | null;
-  variety?: string | null;
   purchaseDate?: string | null;
-  expectedHarvestDate?: string | null;
   dispatchDate?: string | null;
   deliveryDate?: string | null;
+  /** required when the slip's source is farmer */
+  expectedHarvestDate?: string | null;
   // `amount` is not accepted: the server recomputes it as quantity x unitPrice.
 }
 
-export interface UpdateDealSlipPaymentInfoDto {
-  paymentMode?: string;
-  paymentDate?: string | null;
-  advancePaidAmt?: number | null;
-  paymentTerms?: number | null;
-  dueDate?: string | null;
-  creditPeriod?: number | null;
-  validityOfQuote?: string | null;
-}
-
-/**
- * Every deal slip data field can be sent; the frontend decides which are editable.
- * Not accepted (set by the system / approval flow): id, dealSlipNo, rfpa, createdBy,
- * approvalStatus, approvalNote, dealSlipApprovedAt, isGrnCreated, isDeleted and timestamps.
- */
 export interface UpdateDealSlipDto {
   lotNo?: string;
   loadingLocation?: string;
   specialRequest?: string;
   remark?: string | null;
-  requestingDepartment?: Department | null;
-  otherPurchaseLoc?: string | null;
-  otherPurchaseForSalesLoc?: string | null;
-  deliveryReceivingPerson?: string | null;
-  packingInstruction?: string | null;
-  source?: string | null;
-  /** company / branch / vendor / farmer ids; null clears them */
-  companyName?: string | null;
-  purchaseLocation?: string | null;
-  purchaseForSalesLocation?: string | null;
-  selectedVendor?: string | null;
-  selectedFarmer?: string | null;
-  paymentInfo?: UpdateDealSlipPaymentInfoDto;
   dealSlipProducts?: UpdateDealSlipProductDto[];
-  /** deal_slip_product ids to remove */
-  deletedDealSlipProductIds?: string[];
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Approve Deal Slip DTO  (PATCH /dealSlip/approve/:dealSlipId)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface ApproveDealSlipDto {
-  approvalStatus: Status.APPROVED | Status.REJECTED;
-  approvalNote?: string | null;
-}
-
-export interface ApproveDealSlipResultDto {
-  message: string;
-  approvalStatus: Status;
-  approvalNote: string;
-  user: {
-    name: string;
-    department: string | null;
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -114,7 +46,6 @@ export interface DealSlipDetailDto {
   loadingLocation: string;
   remark: string | null;
   specialRequest: string;
-  requestingDepartment: Department | null;
   approvalStatus: Status;
   createdDate: string | null;
   createdTime: string | null;
@@ -132,10 +63,68 @@ export type DealSlipViewDto = DealSlipDetailDto;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Deal Slip update form DTO  (GET /dealSlip/:id/update — findDealSlipByIdforUpdate)
-// Same shape — rfpa as ID for pre-selection.
+// The RFPA update-form shape (relations as ids, shared formatter) plus the slip's own fields.
+// Also the GRN form's pre-fill source.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type DealSlipUpdateFormDto = DealSlipDetailDto;
+export interface DealSlipUpdateFormProductDto {
+  id: string;
+  /** product / variant / uom ids */
+  productName: string | null;
+  variant: string | null;
+  uom: string | null;
+  grade: string | null;
+  quantity: number | null;
+  unitPrice: number | null;
+  amount: number | null;
+  purchaseDate: string | Date | null;
+  expectedHarvestDate: string | Date | null;
+  dispatchDate: string | Date | null;
+  deliveryDate: string | Date | null;
+  /** The RFPA line's planned values, for comparison */
+  rfpaQuantity: number | null;
+  rfpaUnitPrice: number | null;
+  /** unit name */
+  rfpaUom: string | null;
+}
+
+export interface DealSlipUpdateFormDto {
+  id: string;
+  dealSlipNo: string | null;
+  /** RFPA number (rfpaId) */
+  rfpa: string | null;
+  documentId: string | null;
+  overAllStatus: string | null;
+  /** User id of the approver; null until approved. The GRN form maps it to "Requesting person". */
+  approvedBy: string | null;
+  lotNo: string;
+  loadingLocation: string;
+  specialRequest: string;
+  remark: string | null;
+  createdDate: string | null;
+  createdTime: string | null;
+  source: string | null;
+  /** company / branch ids */
+  companyName: string | null;
+  purchaseLocation: string | null;
+  purchaseForSalesLocation: string | null;
+  otherPurchaseLoc: string | null;
+  otherPurchaseForSalesLoc: string | null;
+  deliveryReceivingPerson: string | null;
+  packingInstruction: string | null;
+  /** vendor or farmer id, by source */
+  selectedParty: string | null;
+  paymentInfo: {
+    paymentMode: string | null;
+    paymentDate: string | Date | null;
+    advancePaidAmt: number | null;
+    paymentTerms: number | null;
+    dueDate: string | Date | null;
+    creditPeriod: number | null;
+    validityOfQuote: string | null;
+  } | null;
+  dealSlipProducts: DealSlipUpdateFormProductDto[];
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Deal Slip list item DTO  (GET /dealSlip — getAllDealSlips)
@@ -182,7 +171,6 @@ export interface DealSlipRecycleBinItemDto {
   loadingLocation: string | null;
   remark: string | null;
   specialRequest: string | null;
-  requestingDepartment: Department | null;
   approvalStatus: Status | null;
   dealSlipCreatedAt: Date | null;
   dealSlipApprovedAt: Date | null;
@@ -227,7 +215,6 @@ export interface DealSlipDocumentViewDto {
   loadingLocation: string;
   remark: string | null;
   specialRequest: string;
-  requestingDepartment: Department | null;
   approvalStatus: Status;
   dealSlipCreatedAt: Date | null;
   dealSlipApprovedAt: Date | null;

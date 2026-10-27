@@ -19,6 +19,7 @@ import {
   sqlTs,
   tsText,
   unpaid,
+  grnNotFullyPaid,
 } from './accShared.util';
 
 const GRN_STAGES = [
@@ -90,6 +91,7 @@ export class AccDocumentsService {
               COUNT(*) FILTER (WHERE status::text IN ('REJECT', 'disapproved'))::int AS rejected
          FROM documents
         WHERE "isDeleted" = false
+          AND status::text <> 'draft' -- not sent for approval yet
         GROUP BY type`,
     );
     const byType = new Map(rows.map((r) => [r.type, r]));
@@ -115,7 +117,7 @@ export class AccDocumentsService {
     const [row] = await this.dataSource.query(
       `SELECT
          (SELECT COUNT(*) FROM grns g
-           WHERE g."isDeleted" = false AND ${unpaid('g')} AND ${completeDoc('g', 'grn')})::int AS grn,
+           WHERE g."isDeleted" = false AND ${grnNotFullyPaid('g')} AND ${completeDoc('g', 'grn')})::int AS grn,
          (SELECT COUNT(*) FROM invoices i
            WHERE i."isDeleted" = false AND ${unpaid('i')} AND ${completeDoc('i', 'final-invoice')})::int AS invoice`,
     );

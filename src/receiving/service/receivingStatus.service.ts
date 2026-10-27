@@ -14,7 +14,7 @@ import { DataSource, EntityManager, EntityTarget, ObjectLiteral } from 'typeorm'
 import { TYPES } from '../../types';
 import AppError from '../../utils/appError';
 import { DocumentStatus, DocumentTypeEnum } from '../../approvalFlow/entity/docuemnt.entity';
-import { GRN, GrnDeliveryMode } from '../../grn/entity/grn.entity';
+import { CENTRE_DELIVERY_MODES, GRN, GrnDeliveryMode } from '../../grn/entity/grn.entity';
 import { StockTransferDeliveryChallan } from '../../deliveryChallans/stockTransferDC/entity/stockTransferdeliveryChallan.entity';
 import { PostReturnByCustomer } from '../../returnByCustomer/entity/postReturnByCustomer.entity';
 import { Aqr } from '../../aqr/entity/aqr.entity';
@@ -25,7 +25,6 @@ import { Item } from '../../deliveryChallans/deliverychllan/entity/dItem.entity'
 import { ReturnedProducts } from '../../returnByCustomer/entity/returnProduct.entity';
 import { Source } from '../../utils/status.enum';
 import {
-  AggregatedDocLine,
   ArrivalRow,
   ArrivalsFilter,
   ArrivalsResult,
@@ -49,11 +48,13 @@ import {
   buildProductRows,
   deriveState,
   isCountingDocument,
+  NO_STEP_DOCUMENTS,
   pickSlotAndLegacy,
   round3,
   slotState,
+  stepDocuments,
 } from '../receiving.helpers';
-import { attachDispatch, dispatchReadySql, dispatchStateSql, loadDispatches } from '../receiving.dispatch';
+import { attachDispatch, dispatchArrivedSql, dispatchReadySql, LoadedDispatch, loadDispatches } from '../receiving.dispatch';
 import {
   completeDocumentExistsSql,
   isReceivingSourceType,
@@ -103,26 +104,22 @@ interface ArrivalSqlRow {
   source_date: Date | string | null;
   product_count: string | number | null;
   received_kg: string | number | null;
-  dispatch_state: string | null;
-  dispatch_ready: boolean | null;
 }
 
 /** A source matched by phase 1 of the Arrivals list (cheap columns only). */
 export interface ArrivalKey {
   source_type: ReceivingSourceType;
   source_id: string;
-  /** Exact state when SQL can tell it, NULL when a counting Inward exists (see `sqlStateExpr`). */
+  /** Exact state when SQL can tell it, NULL when every step is approved or skipped (see `sqlStateExpr`). */
   sql_state: ReceivingState | null;
 }
 
 /** Which expensive columns a branch of the Arrivals CTE selects. */
 interface BranchOptions {
-  /** document_id, product_count, received_kg, dispatch_state, dispatch_ready (phase 2). */
+  /** document_id, product_count, received_kg (phase 2). */
   detail?: boolean;
   /** product_count / received_kg (sorting on them in phase 1). */
   kg?: boolean;
-  dispatchState?: boolean;
-  dispatchReady?: boolean;
   /** sql_state (state filter). */
   state?: boolean;
   /** Bound `uuid[]` parameter restricting the branch to these ids (phase 2). */
@@ -137,6 +134,13 @@ const ARRIVAL_SORT_COLUMNS: Record<string, string> = {
   companyName: 'company_name',
   receivedKg: 'received_kg',
   productCount: 'product_count',
+};
+
+/** Table of each source (row lock of `setSkip`). Constants only. */
+const SOURCE_TABLE: Record<ReceivingSourceType, string> = {
+  grn: 'grns',
+  'stock-transfer-dc': 'delivery_challan_purchase',
+  rbc: 'return_by_customer',
 };
 
 /** Hard cap for the Excel export. */
@@ -186,23 +190,22 @@ export class ReceivingStatusService {
     if (type === 'grn' && source.info.deliveryMode === GrnDeliveryMode.DIRECT_TO_CUSTOMER) {
       throw new AppError(400, 'This GRN is delivered directly to the customer');
     }
-    const status = attachDispatch(this.computeStatus(source, docs.get(id) ?? []), dispatches.get(id));
-    status.skipped = skips.get(id) ?? { ...NO_SKIPS };
-    return status;
+    return this.computeStatus(source, docs.get(id) ?? [], dispatches.get(id), skips.get(id));
   }
 
   /**
-   * COMPLETE sources only (GRN only with `deliveryMode = cc-dc`), newest first
+   * Receivable sources only (approved and, when required, their vehicle dispatch
+   * approved; GRN only with `deliveryMode` cc or dc), newest first
    * by default, in two phases: phase 1 filters, sorts, counts and pages on
    * cheap columns in SQL; phase 2 computes the status (slots, kg, dispatch)
    * of the page only.
    *
-   * State filter (one or more states): `not-started`, and `open` / `legacy`
-   * of a source without a counting Inward, are exact in SQL. A source with a
-   * counting Inward can be done / open / legacy depending on the per-product
-   * kg matching, so when the filter needs to tell those apart (e.g. `done`, or
-   * `not-started,open,legacy` = "not done"), the matching sources with an
-   * Inward are classified by the status service (state only, in rounds,
+   * State filter (one or more states): `in-transit`, `received` and, while a
+   * step is unfinished, `in-progress` are exact in SQL. A source whose every
+   * step is approved (or skipped) is done or in-progress depending on the
+   * per-product kg matching, so when the filter needs to tell those apart
+   * (e.g. `done`, or `in-transit,received,in-progress` = "not done"), those
+   * sources are classified by the status service (state only, in rounds,
    * loaders in parallel) *before* paging. Page sizes and `total` are exact.
    */
   async listArrivals(filter: ArrivalsFilter): Promise<ArrivalsResult> {
@@ -213,7 +216,7 @@ export class ReceivingStatusService {
     return { data, total, page, totalPages: Math.ceil(total / limit) };
   }
 
-  /** Number of sources matching the Arrivals filter (sidebar badge: `readiness=ready&state=not-started`). */
+  /** Number of sources matching the Arrivals filter (sidebar badge, e.g. `state=received`). */
   async countArrivals(filter: ArrivalsFilter): Promise<number> {
     const plan = planStateFilter(filter.state);
     if (plan.none) return 0;
@@ -296,30 +299,35 @@ export class ReceivingStatusService {
     if (docType === 'rtv' && sourceType !== 'grn') {
       throw new AppError(400, 'Return To Vendor applies to GRNs only');
     }
-    const em = this.dataSource.manager;
-    const source = await this.loadSource(sourceType, sourceId, em);
-    if (!source || source.isDeleted) throw new AppError(404, `${this.sourceLabel(sourceType)} not found`);
+    // A skipped step counts towards `done`, so the mark and the documents of the
+    // step must not race: the source row is locked like the guard does on create.
+    return this.dataSource.transaction(async (em) => {
+      await em.query(`SELECT id FROM ${SOURCE_TABLE[sourceType]} WHERE id = $1 FOR UPDATE`, [sourceId]);
+      const source = await this.loadSource(sourceType, sourceId, em);
+      if (!source || source.isDeleted) throw new AppError(404, `${this.sourceLabel(sourceType)} not found`);
 
-    if (skip) {
-      const docs = (await this.loadProcessingDocuments(sourceType, [sourceId], em)).get(sourceId) ?? [];
-      const existing = docs.find((d) => d.docType === docType && isCountingDocument(d));
-      if (existing) {
-        const label = docType === 'dump' ? 'A Dump Register' : 'A Return To Vendor';
-        throw new AppError(409, `${label} already exists for ${source.info.no ?? 'this source'} (${existing.docNo ?? existing.id})`);
+      if (skip) {
+        if (!source.info.isComplete) throw new AppError(400, `${source.info.no ?? this.sourceLabel(sourceType)} is not approved yet`);
+        const docs = (await this.loadProcessingDocuments(sourceType, [sourceId], em)).get(sourceId) ?? [];
+        const existing = docs.find((d) => d.docType === docType && isCountingDocument(d));
+        if (existing) {
+          const label = docType === 'dump' ? 'A Dump Register' : 'A Return To Vendor';
+          throw new AppError(409, `${label} already exists for ${source.info.no ?? 'this source'} (${existing.docNo ?? existing.id})`);
+        }
+        await em.query(
+          `INSERT INTO receiving_skip (source_type, source_id, doc_type, skipped_by) VALUES ($1, $2::uuid, $3, $4)
+           ON CONFLICT (source_type, source_id, doc_type) DO NOTHING`,
+          [sourceType, sourceId, docType, userId],
+        );
+      } else {
+        await em.query(`DELETE FROM receiving_skip WHERE source_type = $1 AND source_id = $2::uuid AND doc_type = $3`, [
+          sourceType,
+          sourceId,
+          docType,
+        ]);
       }
-      await em.query(
-        `INSERT INTO receiving_skip (source_type, source_id, doc_type, skipped_by) VALUES ($1, $2::uuid, $3, $4)
-         ON CONFLICT (source_type, source_id, doc_type) DO NOTHING`,
-        [sourceType, sourceId, docType, userId],
-      );
-    } else {
-      await em.query(`DELETE FROM receiving_skip WHERE source_type = $1 AND source_id = $2::uuid AND doc_type = $3`, [
-        sourceType,
-        sourceId,
-        docType,
-      ]);
-    }
-    return (await this.loadSkips(sourceType, [sourceId], em)).get(sourceId) ?? { ...NO_SKIPS };
+      return (await this.loadSkips(sourceType, [sourceId], em)).get(sourceId) ?? { ...NO_SKIPS };
+    });
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -433,7 +441,16 @@ export class ReceivingStatusService {
   // Computation
   // ───────────────────────────────────────────────────────────────────────────
 
-  computeStatus(source: LoadedSource, docs: ProcessingDocument[]): ReceivingSourceStatus {
+  /**
+   * Status of one source from its loaded rows. The state depends on the vehicle
+   * dispatch (arrival, readiness) and the skip marks, so both are inputs.
+   */
+  computeStatus(
+    source: LoadedSource,
+    docs: ProcessingDocument[],
+    dispatch: LoadedDispatch | undefined,
+    skips: SkipFlags | undefined,
+  ): ReceivingSourceStatus {
     const type = source.info.type;
     const rtvApplicable = type === 'grn';
 
@@ -451,16 +468,6 @@ export class ReceivingStatusService {
     const rtvAgg = aggregateDocLines(linesOf(rtv.counting), sourceAgg);
 
     const products = buildProductRows(sourceAgg, aqrAgg, inwardAgg, dumpAgg, rtvAgg);
-    const hasLegacyDumpLine = Array.from(dumpAgg.values()).some((line: AggregatedDocLine) => line.legacy);
-    const hasCountingDocument = aqr.counting.length + inward.counting.length + dump.counting.length + rtv.counting.length > 0;
-
-    const state = deriveState({
-      isComplete: source.info.isComplete,
-      hasCountingDocument,
-      hasInward: inward.counting.length > 0,
-      hasLegacyDumpLine,
-      products,
-    });
 
     const slots: ProcessingSlots = {
       aqr: this.toSlot(aqr.slot),
@@ -475,13 +482,28 @@ export class ReceivingStatusService {
       rtv: rtv.legacy.map((d) => this.toSlot(d)!),
     };
 
-    return {
-      source: source.info, state, rtvApplicable, slots, legacyDocuments, products,
-      // Filled in by `attachDispatch`.
-      dispatch: null, dispatchState: 'none', dispatchRequired: false, canReceive: source.info.isComplete, blockers: [],
-      // Filled in by the callers that load the skip marks.
-      skipped: { ...NO_SKIPS },
-    };
+    const status: ReceivingSourceStatus = attachDispatch(
+      {
+        source: source.info, state: 'not-received', rtvApplicable, slots, legacyDocuments, products,
+        // Filled in by `attachDispatch`.
+        dispatch: null, dispatchState: 'none', dispatchRequired: false, canReceive: source.info.isComplete, arrived: false, blockers: [],
+        skipped: skips ? { ...skips } : { ...NO_SKIPS },
+      },
+      dispatch,
+    );
+    status.state = deriveState({
+      isComplete: source.info.isComplete,
+      canReceive: status.canReceive,
+      arrived: status.arrived,
+      aqr: stepDocuments(aqr.counting),
+      inward: stepDocuments(inward.counting),
+      dump: stepDocuments(dump.counting),
+      rtv: rtvApplicable ? stepDocuments(rtv.counting) : NO_STEP_DOCUMENTS,
+      rtvApplicable,
+      skipped: status.skipped,
+      products,
+    });
+    return status;
   }
 
   /** Statuses for many sources of one type in one go (used by the Arrivals list and export). */
@@ -497,25 +519,30 @@ export class ReceivingStatusService {
         this.loadSkips(type, batch, em),
       ]);
       sources.forEach((source, id) => {
-        const status = attachDispatch(this.computeStatus(source, docs.get(id) ?? []), dispatches.get(id));
-        status.skipped = skips.get(id) ?? { ...NO_SKIPS };
-        result.set(id, status);
+        result.set(id, this.computeStatus(source, docs.get(id) ?? [], dispatches.get(id), skips.get(id)));
       });
     }
     return result;
   }
 
   /**
-   * Receiving state only (no dispatch, no skip marks) for many sources of one
-   * type — the state filter of the Arrivals list. Same computation as the
-   * status, so the filter always agrees with the state shown on the row.
+   * Receiving state only, for many sources of one type — the state filter of
+   * the Arrivals list. Same computation as the status, so the filter always
+   * agrees with the state shown on the row.
    */
   async computeStates(type: ReceivingSourceType, ids: string[], manager?: EntityManager): Promise<Map<string, ReceivingState>> {
     const result = new Map<string, ReceivingState>();
     const em = manager ?? this.dataSource.manager;
     for (const batch of chunk(ids, STATE_BATCH_SIZE)) {
-      const [sources, docs] = await Promise.all([this.loadSources(type, batch, em), this.loadProcessingDocuments(type, batch, em)]);
-      sources.forEach((source, id) => result.set(id, this.computeStatus(source, docs.get(id) ?? []).state));
+      const [sources, docs, dispatches, skips] = await Promise.all([
+        this.loadSources(type, batch, em),
+        this.loadProcessingDocuments(type, batch, em),
+        loadDispatches(em, type, batch),
+        this.loadSkips(type, batch, em),
+      ]);
+      sources.forEach((source, id) =>
+        result.set(id, this.computeStatus(source, docs.get(id) ?? [], dispatches.get(id), skips.get(id)).state),
+      );
     }
     return result;
   }
@@ -560,7 +587,7 @@ export class ReceivingStatusService {
           documentId: null,
           approvalStatus: null,
           isComplete: false,
-          deliveryMode: grn.deliveryMode ?? GrnDeliveryMode.CC_DC,
+          deliveryMode: grn.deliveryMode ?? GrnDeliveryMode.CC,
           companyId: grn.companyName?.id ?? null,
           companyName: grn.companyName?.name ?? null,
           locationId: grn.purchaseForSalesLocation?.id ?? null,
@@ -966,8 +993,6 @@ export class ReceivingStatusService {
 
     const options: BranchOptions = {
       kg: column === 'received_kg' || column === 'product_count',
-      dispatchState: Boolean(filter.dispatchState),
-      dispatchReady: Boolean(filter.readiness),
       state: !plan.any,
     };
     const cteSql = this.requestedSourceTypes(filter)
@@ -995,11 +1020,6 @@ export class ReceivingStatusService {
       if (!DATE_ONLY.test(filter.endDate)) throw new AppError(400, 'endDate must be yyyy-MM-dd');
       conditions.push(`source_date < (${bind(filter.endDate)}::date + INTERVAL '1 day')`);
     }
-    if (filter.dispatchState) {
-      conditions.push(`COALESCE(dispatch_state, 'none') = ${bind(filter.dispatchState)}`);
-    }
-    if (filter.readiness === 'ready') conditions.push('dispatch_ready = TRUE');
-    if (filter.readiness === 'blocked') conditions.push('dispatch_ready = FALSE');
     if (!plan.any) {
       const condition = plan.none ? 'FALSE' : stateConditionSql(plan, bind(plan.states));
       if (condition) conditions.push(condition);
@@ -1130,13 +1150,11 @@ export class ReceivingStatusService {
    */
   private arrivalExtraColumns(
     o: BranchOptions,
-    cols: { documentId: string; productCount: string; receivedKg: string; dispatchState: string; dispatchReady: string; state: string },
+    cols: { documentId: string; productCount: string; receivedKg: string; state: string },
   ): string {
     const extra: string[] = [];
     if (o.detail) extra.push(`${cols.documentId} AS document_id`);
     if (o.detail || o.kg) extra.push(`${cols.productCount} AS product_count`, `${cols.receivedKg} AS received_kg`);
-    if (o.detail || o.dispatchState) extra.push(`${cols.dispatchState} AS dispatch_state`);
-    if (o.detail || o.dispatchReady) extra.push(`${cols.dispatchReady} AS dispatch_ready`);
     if (o.state) extra.push(`${cols.state} AS sql_state`);
     return extra.length ? `, ${extra.join(', ')}` : '';
   }
@@ -1149,9 +1167,7 @@ export class ReceivingStatusService {
           documentId: this.latestDocumentIdSql('g.id', 'grn'),
           productCount: `(SELECT COUNT(DISTINCT gp.product_id::text || ':' || COALESCE(gp.varient_id::text, 'null')) FROM grn_products gp WHERE gp.grn_id = g.id AND gp.product_id IS NOT NULL)`,
           receivedKg: `(SELECT COALESCE(SUM(gp."netWeight"), 0) FROM grn_products gp WHERE gp.grn_id = g.id AND gp.product_id IS NOT NULL)`,
-          dispatchState: dispatchStateSql('g.id', 'grn'),
-          dispatchReady: dispatchReadySql('g.id', 'g."createdAt"', 'grn'),
-          state: sqlStateExpr('g.id', 'grn'),
+          state: sqlStateExpr('g.id', 'grn', dispatchArrivedSql('g.id', 'g."createdAt"', 'grn')),
         });
         return (
           `SELECT 'grn'::text AS source_type, g.id::text AS source_id, g."grnNo" AS source_no, ` +
@@ -1164,8 +1180,10 @@ export class ReceivingStatusService {
           `LEFT JOIN branches b ON b.id = g.${col.grnReceivingLocation} ` +
           `LEFT JOIN vendor v ON v.id = g.${col.grnVendor} ` +
           `LEFT JOIN farmer f ON f.id = g.${col.grnFarmer} ` +
-          `WHERE g."isDeleted" = false AND g."deletedAt" IS NULL AND g."deliveryMode"::text = '${GrnDeliveryMode.CC_DC}' ` +
-          (o.idsParam ? `AND g.id = ANY(${o.idsParam}::uuid[]) ` : '') +
+          `WHERE g."isDeleted" = false AND g."deletedAt" IS NULL AND g."deliveryMode"::text IN (${CENTRE_DELIVERY_MODES.map((m) => `'${m}'`).join(', ')}) ` +
+          // The worklist shows a GRN only once its purchase dispatch is approved too (GRNs from before the
+          // dispatch rule need none); a lookup by id still answers for any approved GRN.
+          (o.idsParam ? `AND g.id = ANY(${o.idsParam}::uuid[]) ` : `AND ${dispatchReadySql('g.id', 'g."createdAt"', 'grn')} `) +
           `AND ${completeDocumentExistsSql('g.id', 'grn')}`
         );
       }
@@ -1174,9 +1192,7 @@ export class ReceivingStatusService {
           documentId: this.latestDocumentIdSql('dc.id', 'stock-transfer-dc'),
           productCount: `(SELECT COUNT(DISTINCT i.product_id::text || ':' || COALESCE(i.varient_id::text, 'null')) FROM item i WHERE i.${col.itemChallan} = dc.id AND i.product_id IS NOT NULL)`,
           receivedKg: `(SELECT COALESCE(SUM(i."netWeight"), 0) FROM item i WHERE i.${col.itemChallan} = dc.id AND i.product_id IS NOT NULL)`,
-          dispatchState: dispatchStateSql('dc.id', 'stock-transfer-dc'),
-          dispatchReady: dispatchReadySql('dc.id', 'dc."createdAt"', 'stock-transfer-dc'),
-          state: sqlStateExpr('dc.id', 'stock-transfer-dc'),
+          state: sqlStateExpr('dc.id', 'stock-transfer-dc', dispatchArrivedSql('dc.id', 'dc."createdAt"', 'stock-transfer-dc')),
         });
         return (
           `SELECT 'stock-transfer-dc'::text AS source_type, dc.id::text AS source_id, dc."challanNo" AS source_no, ` +
@@ -1189,7 +1205,8 @@ export class ReceivingStatusService {
           `LEFT JOIN branches tl ON tl.id = dc.${col.dcToLocation} ` +
           `LEFT JOIN branches fl ON fl.id = dc.${col.dcFromLocation} ` +
           `WHERE dc.type = 'stock-transfer-delivery-challan' AND dc."isDeleted" = false AND dc."deletedAt" IS NULL ` +
-          (o.idsParam ? `AND dc.id = ANY(${o.idsParam}::uuid[]) ` : '') +
+          // Listed only once the stock transfer dispatch is approved too, like GRNs.
+          (o.idsParam ? `AND dc.id = ANY(${o.idsParam}::uuid[]) ` : `AND ${dispatchReadySql('dc.id', 'dc."createdAt"', 'stock-transfer-dc')} `) +
           `AND ${completeDocumentExistsSql('dc.id', 'stock-transfer-dc')}`
         );
       }
@@ -1198,9 +1215,7 @@ export class ReceivingStatusService {
           documentId: this.latestDocumentIdSql('r.id', 'rbc'),
           productCount: `(SELECT COUNT(DISTINCT rp.product_id::text || ':' || COALESCE(rp.varient_id::text, 'null')) FROM returned_products_by_customer rp WHERE rp.${col.returnedPostReturn} = r.id AND rp.product_id IS NOT NULL)`,
           receivedKg: `(SELECT COALESCE(SUM(rp."returnedNetWt"), 0) FROM returned_products_by_customer rp WHERE rp.${col.returnedPostReturn} = r.id AND rp.product_id IS NOT NULL)`,
-          dispatchState: 'NULL::text',
-          dispatchReady: 'TRUE',
-          state: sqlStateExpr('r.id', 'rbc'),
+          state: sqlStateExpr('r.id', 'rbc', 'TRUE'),
         });
         return (
           `SELECT 'rbc'::text AS source_type, r.id::text AS source_id, r."rbcNo" AS source_no, ` +
@@ -1228,6 +1243,8 @@ export class ReceivingStatusService {
     const valued = lossRows.filter((p) => p.transitLossValue !== null);
     const transitLossKg = lossRows.length ? round3(lossRows.reduce((sum, p) => sum + (p.transitLossKg ?? 0), 0)) : null;
     const transitLossValue = valued.length ? Math.round(valued.reduce((sum, p) => sum + (p.transitLossValue ?? 0), 0) * 100) / 100 : null;
+    const arrivedRows = (status?.products ?? []).filter((p) => p.arrivedKg !== null);
+    const arrivedKg = arrivedRows.length ? round3(arrivedRows.reduce((sum, p) => sum + (p.arrivedKg ?? 0), 0)) : null;
     const skipped = status?.skipped ?? { ...NO_SKIPS };
     return {
       sourceType: row.source_type,
@@ -1241,10 +1258,11 @@ export class ReceivingStatusService {
       date: row.source_date,
       productCount: Number(row.product_count ?? 0),
       receivedKg: round3(Number(row.received_kg ?? 0)),
+      arrivedKg,
       differenceKg,
       transitLossKg,
       transitLossValue,
-      state: status ? status.state : 'not-started',
+      state: status ? status.state : 'not-received',
       slots: {
         aqr: slotState(status?.slots.aqr ?? null),
         inward: slotState(status?.slots.inward ?? null),
@@ -1255,6 +1273,7 @@ export class ReceivingStatusService {
       dispatchState: status?.dispatchState ?? 'none',
       dispatchRequired: status?.dispatchRequired ?? false,
       canReceive: status?.canReceive ?? false,
+      arrived: status?.arrived ?? false,
       blockers: status?.blockers ?? [],
       skipped,
     };

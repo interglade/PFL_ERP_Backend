@@ -10,7 +10,7 @@ import {
   } from 'typeorm';
 import Model from '../../global/model.entity';
 import { RFPA } from '../../rfpa/entity/rfpa.entity';
-import { Department, Status } from '../../utils/status.enum';
+import { Status } from '../../utils/status.enum';
 import { User } from '../../employee/entity/user.entity';
 import { Company } from '../../company/entity/company.entity';
 import { Branches } from '../../branch/entity/branches.entity';
@@ -22,8 +22,8 @@ import { DealSlipProduct } from './dealSlipProduct.entity';
 
   @Entity('deal_slips')
   export class DealSlip extends Model {
-   // Relation to RFPA
-   @ManyToOne(() => RFPA, { cascade: true,onDelete: "SET NULL"})
+   // Relation to RFPA. No cascade: saving a deal slip must never write its RFPA.
+   @ManyToOne(() => RFPA, { onDelete: "SET NULL" })
    @JoinColumn({ name: 'rfpa_id' })
    rfpa: RFPA; // Relation to RFPA entity
 
@@ -41,13 +41,6 @@ import { DealSlipProduct } from './dealSlipProduct.entity';
 
     @Column()
     specialRequest: string;
-
-    @Column({
-      type: 'enum',
-      enum: Department,
-      nullable: true
-    })
-    requestingDepartment: Department;
 
     // ── RFPA details, copied when the deal slip is created ───────────────────
     // Read-only afterwards (only the product quantity / unit price can be edited).

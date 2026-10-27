@@ -1066,7 +1066,7 @@ export function buildFilterApiDocs(): string {
     'Inside a single filter, OR applies only where the parameter itself says so:',
     '',
     '- a comma-separated list (`status=COMPLETE,hold`, `vendorId=<id1>,<id2>`) matches any of the values;',
-    '- `locationId` / `location` match any of the module’s location fields (e.g. GRN `location`, `purchaseLocation`, `purchaseForSalesLocation`);',
+    '- `locationId` / `location` match any of the module’s location fields (e.g. GRN `purchaseLocation`, `purchaseForSalesLocation`);',
     '- product filters match when **at least one** line item matches — the parent document is returned once, however many lines match.',
     '',
     '### 4.4 Value formats',

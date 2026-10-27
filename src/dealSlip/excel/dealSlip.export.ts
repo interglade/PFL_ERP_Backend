@@ -15,7 +15,6 @@
 import { DealSlip } from '../entity/dealSlip.entity';
 import { DealSlipProduct } from '../entity/dealSlipProduct.entity';
 import { liveGrnForDealSlipExistsSql } from '../dealSlipGrnLink';
-import { RFPAProduct } from '../../rfpa/entity/rfpaProduct.entity';
 import { ExportDefinition } from '../../excel/export/exportTypes';
 import {
   BRANCH_COLUMNS,
@@ -52,7 +51,6 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
           'rfpa.id',
           'rfpa.rfpaId',
           'rfpa.source',
-          'rfpa.requestingDepartment',
           'rfpa.otherPurchaseLoc',
           'rfpa.otherPurchaseForSalesLoc',
           'rfpa.deliveryReceivingPerson',
@@ -67,8 +65,6 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
         const records: DealSlipRecord[] = await qb.where('dealSlip.id IN (:...ids)', { ids: ctx.ids }).getMany();
 
         const totals = await aggregateLines(ctx.manager, DealSlipProduct, 'dealSlip', 'amount', records.map((r) => r.id));
-        const rfpaIds = records.map((r) => r.rfpa?.id).filter((id): id is string => Boolean(id));
-        const totals = await aggregateLines(ctx.manager, RFPAProduct, 'rfpa', 'amount', rfpaIds);
         // D-6: "GRN created" is derived (a live, non-rejected GRN references the slip).
         const usedRows: Array<{ id: string }> = records.length
           ? await ctx.manager.query(
@@ -107,8 +103,8 @@ export const DEAL_SLIP_EXPORT: ExportDefinition = {
         { header: 'Other Purchase For Sales Location', maps: 'rfpa.otherPurchaseForSalesLoc', get: (r) => r.record.rfpa?.otherPurchaseForSalesLoc },
         { header: 'Delivery Receiving Person', maps: 'rfpa.deliveryReceivingPerson', get: (r) => r.record.rfpa?.deliveryReceivingPerson },
         { header: 'Packing Instruction', maps: 'rfpa.packingInstruction', get: (r) => r.record.rfpa?.packingInstruction },
-        { header: 'Line Items', maps: 'COUNT(rfpa_product)', type: 'integer', get: (r) => r.record.lineCount },
-        { header: 'Items Total Amount', maps: 'SUM(rfpa_product.amount)', type: 'amount', get: (r) => r.record.lineTotal },
+        { header: 'Line Items', maps: 'COUNT(deal_slip_product)', type: 'integer', get: (r) => r.record.lineCount },
+        { header: 'Items Total Amount', maps: 'SUM(deal_slip_product.amount)', type: 'amount', get: (r) => r.record.lineTotal },
         { header: 'Payment Mode', maps: 'payment_info_for_rfpa.paymentMode', get: (r) => r.record.rfpa?.paymentInfo?.paymentMode },
         { header: 'Payment Date', maps: 'payment_info_for_rfpa.paymentDate', type: 'date', get: (r) => r.record.rfpa?.paymentInfo?.paymentDate },
         { header: 'Advance Paid Amount', maps: 'payment_info_for_rfpa.advancePaidAmt', type: 'amount', get: (r) => r.record.rfpa?.paymentInfo?.advancePaidAmt },

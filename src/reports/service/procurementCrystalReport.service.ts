@@ -58,7 +58,6 @@ export interface ProcurementProductDetail {
     grossWeight: number;
     packingMaterialWeight: number;
     unitPrice: number;
-    revisedRate: number;
     amount: number;
     uom: string;
     purchaseDate: string;
@@ -154,9 +153,7 @@ export class ProcurementCrystalReportService {
             .leftJoinAndSelect('grn.selectedVendor', 'vendor')
             .leftJoinAndSelect('grn.selectedFarmer', 'farmer')
             .leftJoinAndSelect('grn.companyName', 'company')
-            .leftJoinAndSelect('grn.location', 'branch')
             .leftJoinAndSelect('grn.purchaseLocation', 'purchaseLocation')
-            .leftJoinAndSelect('grn.purchaseBy', 'purchaseBy')
             .leftJoinAndSelect('grn.createdBy', 'createdBy')
             .leftJoinAndSelect('grn.grnProducts', 'grnProducts')
             .leftJoinAndSelect('grnProducts.productName', 'product')
@@ -361,7 +358,7 @@ export class ProcurementCrystalReportService {
         }
 
         if (filters.branchId) {
-            queryBuilder.andWhere('grn.location = :branchId', { branchId: filters.branchId });
+            queryBuilder.andWhere('purchaseLocation.id = :branchId', { branchId: filters.branchId });
         }
 
         if (filters.companyId) {
@@ -528,7 +525,7 @@ export class ProcurementCrystalReportService {
                 ? `${grn.selectedFarmer.farmerfName} ${grn.selectedFarmer.farmerlName || ''}`.trim()
                 : '',
             companyName: grn.companyName?.name || '',
-            branchName: grn.location?.name || '',
+            branchName: grn.purchaseLocation?.name || '',
             purchaseLocation: grn.purchaseLocation?.name || grn.otherPurchaseLoc || '',
             billNo: grn.billNo || '',
             batchNo: grn.batchNo || '',
@@ -538,10 +535,7 @@ export class ProcurementCrystalReportService {
             subTotalAmount: grn.subTotalAmt || 0,
             freight: grn.freight || 0,
             otherCharges: grn.otherCharges || 0,
-            purchasedBy:
-                grn.purchaseBy
-                    ? `${grn.purchaseBy.firstName || ''} ${grn.purchaseBy.lastName || ''}`.trim()
-                    : '',
+            purchasedBy: grn.purchasedBy || '',
             createdBy:
                 grn.createdBy
                     ? `${grn.createdBy.firstName || ''} ${grn.createdBy.lastName || ''}`.trim()
@@ -559,7 +553,6 @@ export class ProcurementCrystalReportService {
                     grossWeight: product.grossWeight || 0,
                     packingMaterialWeight: product.packingMaterialWeight || 0,
                     unitPrice: product.unitPrice || 0,
-                    revisedRate: product.revisedRate || 0,
                     amount: product.amount || 0,
                     uom: product.uom?.unit || '',
                     purchaseDate: product.purchaseDate

@@ -46,7 +46,7 @@ import { PostReturnByCustomer } from '../entity/postReturnByCustomer.entity';
 import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
 import { refId } from '../../receiving/receiving.helpers';
 import { assertCustomerDcReady } from '../../vehicleDispatch/service/dispatchRules';
-import { completeDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../receiving/receiving.sql';
+import { completeDocumentExistsSql, countingDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../receiving/receiving.sql';
 
 /** Receiving picker filters for `getAllRBCNumbers`. */
 export interface RbcReceivingFilter {
@@ -798,6 +798,8 @@ export class PostReturnByCustomerService {
 
     if (receiving.receivable) qb.andWhere(completeDocumentExistsSql('rbc.id', 'rbc'));
     if (receiving.missing && isProcessingDocType(receiving.missing)) {
+      // R14: Inward / Dump only after the AQR.
+      if (receiving.missing !== 'aqr') qb.andWhere(countingDocumentExistsSql('rbc.id', 'rbc', 'aqr')!);
       qb.andWhere(noCountingDocumentSql('rbc.id', 'rbc', receiving.missing));
     }
     if (receiving.locationId) {

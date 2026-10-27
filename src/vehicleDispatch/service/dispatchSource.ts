@@ -161,9 +161,8 @@ export function grnLine(p: GrnProduct): SourceLine {
     variantName: p.variant?.variantName ?? null,
     uomId: p.uom?.id ?? null,
     uomName: p.uom?.unit ?? null,
-    // Revised values win when the GRN was revised at verification.
-    quantity: num(p.revisedQuantity) ?? num(p.quantity),
-    unitPrice: num(p.revisedRate) ?? num(p.unitPrice),
+    quantity: num(p.quantity),
+    unitPrice: num(p.unitPrice),
     amount: num(p.amount),
     packagingMaterialId: p.packagingMaterial?.id ?? null,
     packagingMaterialName: p.packagingMaterial?.packagingMaterialName ?? null,
@@ -361,7 +360,7 @@ export class DispatchSourceResolver {
         ...base,
         sourceNo: grn.grnNo ?? null,
         company: named(grn.companyName),
-        deliveryMode: grn.deliveryMode ?? GrnDeliveryMode.CC_DC,
+        deliveryMode: grn.deliveryMode ?? GrnDeliveryMode.CC,
         source: grn.source ?? null,
         party: partyRef?.id && grn.source ? { id: partyRef.id, name: party, type: grn.source } : null,
         fromLocation: named(grn.purchaseLocation),
@@ -474,7 +473,7 @@ export class DispatchSourceResolver {
           partyName: partyName(g.source, g.selectedVendor, g.selectedFarmer),
           fromName: g.purchaseLocation?.name ?? g.otherPurchaseLoc ?? null,
           toName: direct ? 'Direct to customer' : g.purchaseForSalesLocation?.name ?? null,
-          deliveryMode: g.deliveryMode ?? GrnDeliveryMode.CC_DC,
+          deliveryMode: g.deliveryMode ?? GrnDeliveryMode.CC,
         };
       });
     }

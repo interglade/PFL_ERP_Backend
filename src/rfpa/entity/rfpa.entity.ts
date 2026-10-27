@@ -9,7 +9,7 @@ import {
 
 import { RFPAProduct } from './rfpaProduct.entity'; // Import the RFPAProduct entity
 import Model from '../../global/model.entity';
-import { Department, Source } from '../../utils/status.enum';
+import { Source } from '../../utils/status.enum';
 import { Company } from '../../company/entity/company.entity';
 import { Branches } from '../../branch/entity/branches.entity';
 import { Vendor } from '../../vendor/createVendor/entity/vendor.entity';
@@ -22,13 +22,6 @@ import { User } from '../../employee/entity/user.entity';
 export class RFPA extends Model {
   @Column()
   rfpaId: string;
-
-  @Column({
-    type: 'enum',
-    enum: Department,
-    nullable: true,
-  })
-  requestingDepartment: Department;
 
   @ManyToOne(() => Company, {
     cascade: true,

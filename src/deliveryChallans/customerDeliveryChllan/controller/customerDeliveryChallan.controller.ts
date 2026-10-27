@@ -114,6 +114,28 @@ export class CustomerDeliveryChallanController {
     }
   }
 
+  /**
+   * Sale from GRN (docs/customer-dc-sale-types-plan.md): what the form fills in from a direct-to-customer
+   * GRN and its purchase dispatch, plus `blockers` (empty when the GRN can be used).
+   * `?excludeDcId=` is the DC being edited.
+   */
+  @httpGet('/direct-sale-source/:grnId')
+  public async getDirectSaleSource(
+    @requestParam('grnId') grnId: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const excludeDcId = typeof req.query.excludeDcId === 'string' && req.query.excludeDcId ? req.query.excludeDcId : null;
+      const data = await this.customerDeliveryChallanService.getDirectSaleSource(grnId, excludeDcId);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Customer DC direct sale source', err, req, res);
+      next(err);
+    }
+  }
+
   @httpGet('/update/:id')
   public async getChallanById(
     @requestParam('id') id: string,

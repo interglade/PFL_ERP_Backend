@@ -266,7 +266,7 @@ export class DocSingalApproverService {
           // repeated or concurrent approval cannot move stock twice.
           await this.inventoryMovementService.completeDocumentWithInventory(document);
 
-          // A completed RFPA auto-creates its Deal Slip (HOLD + approval flow). Never throws.
+          // A completed RFPA auto-creates its Deal Slip as a Draft (sent for approval when its creator submits it). Never throws.
           if (document.type === DocumentTypeEnum.RFPA && document.document_type_id) {
             await this.dealSlipAutoCreateService.createForCompletedRfpa(document.document_type_id);
           }

@@ -20,7 +20,8 @@ import { DocumentTypeEnum as DocDefEnum } from '../../../documentDef/entity/docu
 import { DocumentbRepository } from '../../../approvalFlow/repository/documentb.repository';
 import { DocumentTypeEnum } from '../../../approvalFlow/entity/docuemnt.entity';
 import { StockTransferDeliveryChallan } from '../../stockTransferDC/entity/stockTransferdeliveryChallan.entity';
-import { completeDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../../receiving/receiving.sql';
+import { completeDocumentExistsSql, countingDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../../receiving/receiving.sql';
+import { dispatchArrivedSql, dispatchReadySql } from '../../../receiving/receiving.dispatch';
 
 /** Receiving picker filters for `getDcTypeNumbers` (stock-transfer only). */
 export interface DcReceivingFilter {
@@ -759,9 +760,16 @@ export class DeliveryChallanService {
       .select(['dc.id', 'dc.challanNo', 'dc.createdAt'])
       .where('dc.isDeleted = false');
 
-    if (receiving.receivable) qb.andWhere(completeDocumentExistsSql('dc.id', 'stock-transfer-dc'));
+    if (receiving.receivable) {
+      qb.andWhere(completeDocumentExistsSql('dc.id', 'stock-transfer-dc'));
+      // Receiving starts once the stock transfer dispatch is approved and its vehicle received (R12 / R13).
+      qb.andWhere(dispatchReadySql('dc.id', 'dc."createdAt"', 'stock-transfer-dc'));
+      qb.andWhere(dispatchArrivedSql('dc.id', 'dc."createdAt"', 'stock-transfer-dc'));
+    }
     if (receiving.missing && isProcessingDocType(receiving.missing)) {
       qb.andWhere(noCountingDocumentSql('dc.id', 'stock-transfer-dc', receiving.missing));
+      // R14: Inward / Dump only after the AQR.
+      if (receiving.missing !== 'aqr') qb.andWhere(countingDocumentExistsSql('dc.id', 'stock-transfer-dc', 'aqr')!);
     }
     if (receiving.toLocationId) {
       qb.leftJoin('dc.toLocation', 'toLocation').andWhere('toLocation.id = :toLocationId', { toLocationId: String(receiving.toLocationId) });

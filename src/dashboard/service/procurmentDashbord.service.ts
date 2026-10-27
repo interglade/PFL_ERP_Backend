@@ -288,7 +288,6 @@ public async getFilteredGRNs(filters: any): Promise<any[]> {
     .leftJoinAndSelect('grnProducts.productName', 'productName')
     .leftJoinAndSelect("grnProducts.uom", "uom")
     .leftJoinAndSelect("grn.requestedBy", "requestedBy")
-    .leftJoinAndSelect("grn.purchaseBy", "purchaseBy")
     .orderBy("grn.createdAt", "DESC");
 
   // Apply Filters
@@ -403,10 +402,6 @@ public async getFilteredGRNs(filters: any): Promise<any[]> {
       requestedBy: {
         firstName: (grn as any).requestedBy?.firstName || "",
         lastName: (grn as any).requestedBy?.lastName || "",
-      },
-      purchaseBy: {
-        firstName: grn.purchaseBy?.firstName || "",
-        lastName: grn.purchaseBy?.lastName || "",
       },
       selectedParty: selectedParty,
       grnProducts: grn.grnProducts.map((product) => ({

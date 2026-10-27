@@ -227,6 +227,18 @@ export function unpaid(alias: string): string {
   return `COALESCE(${alias}."ammountStatus"::text, 'unpaid') = 'unpaid'`;
 }
 
+/** A GRN still owed money: unpaid or partially paid (docs/grn-payment-history-plan.md). */
+export function grnNotFullyPaid(alias: string): string {
+  return `COALESCE(${alias}."ammountStatus"::text, 'unpaid') <> 'paid'`;
+}
+
+/** What a GRN still owes: total − advance − recorded payments, never below 0. */
+export function grnDueSql(alias: string): string {
+  return `GREATEST(COALESCE(${alias}."totalAmt", 0)
+    - COALESCE((SELECT pi.advance_paid_amount FROM payment_info_for_grn pi WHERE pi.id = ${alias}.payment_info_id), 0)
+    - COALESCE(${alias}.paid_amount, 0), 0)`;
+}
+
 /**
  * Accepted / returned / rejected kilograms of a customer DC line. The line's
  * returnedQty and rejectedQty are in its own sale unit, so they are converted

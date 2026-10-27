@@ -3,6 +3,7 @@ import { inject, injectable } from 'inversify';
 import { In } from 'typeorm';
 
 import { DataSource } from 'typeorm';
+import { grnPaidAndBalance } from '../../grn/grnPayment';
 
 // ─── Filter Interface ────────────────────────────────────────────────────────
 
@@ -65,7 +66,6 @@ export class GrnReportService {
       .leftJoinAndSelect('grnProducts.uom', 'uom')
       .leftJoinAndSelect('grn.purchaseForSalesLocation', 'purchaseForSalesLocation')
       .leftJoinAndSelect('grn.purchaseLocation', 'purchaseLocation')
-      .leftJoinAndSelect('grn.purchaseBy', 'purchaseBy')
       .leftJoinAndSelect('grn.purchaseInstructionsBy', 'purchaseInstructionsBy')
       .leftJoinAndSelect('grn.paymentInfo', 'paymentInfo')
       .leftJoinAndSelect('grn.createdBy', 'createdBy')
@@ -193,8 +193,9 @@ export class GrnReportService {
       });
     }
 
+    // "Purchase By" is the free-text name typed on the GRN (`purchasedBy`).
     if (filters.purchaseBy) {
-      queryBuilder.andWhere('grn.purchaseBy = :purchaseBy', { purchaseBy: filters.purchaseBy });
+      queryBuilder.andWhere('grn.purchasedBy ILIKE :purchaseBy', { purchaseBy: `%${filters.purchaseBy}%` });
     }
 
     if (filters.receivingPerson) {
@@ -365,15 +366,15 @@ export class GrnReportService {
         purchaseInstructionsBy: grn.purchaseInstructionsBy
           ? `${grn.purchaseInstructionsBy.firstName} ${grn.purchaseInstructionsBy.lastName}`
           : null,
-        purchaseBy: grn.purchaseBy
-          ? `${grn.purchaseBy.firstName} ${grn.purchaseBy.lastName}`
-          : null,
+        purchaseBy: grn.purchasedBy || null,
         createdBy: grn.createdBy
           ? `${grn.createdBy.firstName} ${grn.createdBy.lastName}`
           : null,
         status: documentStatus,
         verifiedBy: verifiedBy,
         approvedBy: approvedBy,
+        ammountStatus: grn.ammountStatus ?? null,
+        ...grnPaidAndBalance(grn.totalAmt, grn.paymentInfo?.advancePaidAmt, grn.paidAmt),
         paymentInfo: grn.paymentInfo
           ? {
               paymentMode: grn.paymentInfo.paymentMode,
@@ -390,9 +391,7 @@ export class GrnReportService {
           productName: product.productName?.name || null,
           variant: product.variant?.variantName || null,
           quantity: product.quantity,
-          revisedQuantity: product.revisedQuantity,
           unitPrice: product.unitPrice,
-          revisedRate: product.revisedRate,
           uom: product.uom?.unit || null,
           amount: product.amount,
           grossWeight: product.grossWeight,

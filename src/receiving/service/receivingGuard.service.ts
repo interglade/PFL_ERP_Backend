@@ -139,6 +139,17 @@ export class ReceivingGuardService {
     if (!excludeDocId && (sourceType === 'grn' || sourceType === 'stock-transfer-dc')) {
       const gate = await dispatchGate(manager, sourceType === 'grn' ? DispatchType.PURCHASE : DispatchType.STOCK_TRANSFER, sourceId);
       if (!gate.ready) throw new AppError(400, `Receiving cannot start yet: ${gate.reasons.join('; ')}`);
+      // R13 — the vehicle must have been received (Receive on Arrivals) first
+      // (docs/arrivals-status-plan.md §4). Sources that need no dispatch are received already.
+      if (gate.required && gate.dispatch) {
+        const rows: Array<{ arrived: boolean }> = await manager.query(
+          `SELECT ("arrivedAt" IS NOT NULL) AS arrived FROM dispatch WHERE id = $1`,
+          [gate.dispatch.id],
+        );
+        if (!rows[0]?.arrived) {
+          throw new AppError(400, `The vehicle of ${source.info.no ?? label} has not been received yet: click Receive on Arrivals first`);
+        }
+      }
     }
 
     const sourceNo = source.info.no ?? `${label} ${sourceId}`;
@@ -150,6 +161,12 @@ export class ReceivingGuardService {
     if (sameType.length > 0) {
       const existing = sameType[0];
       throw new AppError(409, `${DOC_LABEL_WITH_ARTICLE[docType]} already exists for ${sourceNo} (${existing.docNo ?? existing.id})`);
+    }
+
+    // R14 — the AQR comes first: it records what arrived, the basis of Inward / Dump / RTV.
+    // Checked on create only, so documents raised before the rule stay editable.
+    if (!excludeDocId && docType !== 'aqr' && !counting.some((d) => d.docType === 'aqr')) {
+      throw new AppError(400, `Create the Arrival Quality Report of ${sourceNo} first`);
     }
 
     const sourceAgg = aggregateSourceLines(source.lines);

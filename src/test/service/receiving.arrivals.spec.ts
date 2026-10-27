@@ -1,12 +1,13 @@
 /**
  * Arrivals list planning (src/receiving/receiving.arrivals.ts) and the SQL
- * state expression (src/receiving/receiving.sql.ts) — Phase D-7 / D-8.
+ * state expression (src/receiving/receiving.sql.ts) — Phase D-7 / D-8 and
+ * docs/arrivals-status-plan.md.
  */
 
 import 'reflect-metadata';
 
 import { chunk, normaliseStates, planStateFilter, slotWithSkip, stateConditionSql } from '../../receiving/receiving.arrivals';
-import { countingDocumentLatestSql, sqlStateExpr } from '../../receiving/receiving.sql';
+import { countingDocumentLatestSql, sqlStateExpr, stepApprovedSql, stepSkippedSql } from '../../receiving/receiving.sql';
 
 describe('planStateFilter', () => {
   it('no state: anything goes, nothing to compute', () => {
@@ -14,28 +15,29 @@ describe('planStateFilter', () => {
     expect(planStateFilter([])).toMatchObject({ any: true });
   });
 
-  it('not-received alone never matches (the list holds COMPLETE sources only)', () => {
+  it('not-received alone never matches (the list holds receivable sources only)', () => {
     expect(planStateFilter('not-received')).toMatchObject({ any: false, none: true, states: [] });
-    expect(planStateFilter(['not-received', 'open']).states).toEqual(['open']);
+    expect(planStateFilter(['not-received', 'received']).states).toEqual(['received']);
   });
 
-  it('not-started is exact in SQL', () => {
-    expect(planStateFilter('not-started')).toMatchObject({ includeUnresolved: false, needsCompute: false, states: ['not-started'] });
+  it('in-transit and received are exact in SQL', () => {
+    expect(planStateFilter('in-transit')).toMatchObject({ includeUnresolved: false, needsCompute: false, states: ['in-transit'] });
+    expect(planStateFilter(['in-transit', 'received'])).toMatchObject({ includeUnresolved: false, needsCompute: false });
   });
 
-  it('done / open / legacy need the computed state for sources with an Inward', () => {
+  it('done / in-progress need the computed state once every step is approved', () => {
     expect(planStateFilter('done')).toMatchObject({ includeUnresolved: true, needsCompute: true });
-    expect(planStateFilter('open')).toMatchObject({ includeUnresolved: true, needsCompute: true });
-    // "Not done" (the default Arrivals tab)
-    expect(planStateFilter(['not-started', 'open', 'legacy'])).toMatchObject({ includeUnresolved: true, needsCompute: true });
+    expect(planStateFilter('in-progress')).toMatchObject({ includeUnresolved: true, needsCompute: true });
+    // "To do" (the default Arrivals tab)
+    expect(planStateFilter(['in-transit', 'received', 'in-progress'])).toMatchObject({ includeUnresolved: true, needsCompute: true });
   });
 
-  it('all three Inward states together need no computation', () => {
-    expect(planStateFilter(['open', 'done', 'legacy'])).toMatchObject({ includeUnresolved: true, needsCompute: false });
+  it('in-progress and done together need no computation', () => {
+    expect(planStateFilter(['in-progress', 'done'])).toMatchObject({ includeUnresolved: true, needsCompute: false });
   });
 
   it('dedupes repeated states', () => {
-    expect(normaliseStates(['open', 'open', 'done'])).toEqual(['open', 'done']);
+    expect(normaliseStates(['received', 'received', 'done'])).toEqual(['received', 'done']);
   });
 });
 
@@ -46,7 +48,7 @@ describe('stateConditionSql', () => {
   });
 
   it('exact states only, or exact states plus unresolved rows', () => {
-    expect(stateConditionSql(planStateFilter('not-started'), '$3')).toBe('sql_state = ANY($3::text[])');
+    expect(stateConditionSql(planStateFilter('received'), '$3')).toBe('sql_state = ANY($3::text[])');
     expect(stateConditionSql(planStateFilter('done'), '$2')).toBe('(sql_state IS NULL OR sql_state = ANY($2::text[]))');
   });
 });
@@ -72,20 +74,30 @@ describe('chunk', () => {
 });
 
 describe('sqlStateExpr', () => {
-  it('not-started without documents; open / legacy without an Inward; NULL otherwise', () => {
-    const sql = sqlStateExpr('g.id', 'grn');
-    expect(sql).toContain("THEN 'not-started'");
-    expect(sql).toContain("THEN 'legacy' ELSE 'open'");
+  const arrived = 'ARRIVED_SQL';
+
+  it('in-transit / received without documents, in-progress while a step is unfinished, NULL otherwise', () => {
+    const sql = sqlStateExpr('g.id', 'grn', arrived);
+    expect(sql).toContain(`WHEN ${arrived} THEN 'received' ELSE 'in-transit'`);
+    expect(sql).toContain("THEN 'in-progress'");
     expect(sql).toContain('ELSE NULL END');
     expect(sql).toContain('FROM inward_register rs_inward WHERE rs_inward.grn_id = (g.id)');
-    expect(sql).toContain('rs_dp.dump_register_id = rs_dump.id');
-    // GRN sources include RTV in "any document"
+    // Approval: newest status COMPLETE, and no counting document still pending.
+    expect(sql).toContain("= 'COMPLETE'");
+    expect(sql).toContain("<> 'COMPLETE'");
+    // Skip marks finish Dump / RTV.
+    expect(sql).toContain("rs_sk.doc_type = 'dump'");
+    expect(sql).toContain("rs_sk.doc_type = 'rtv'");
+    // GRN sources include RTV.
     expect(sql).toContain('FROM return_to_vendor rs_rtv');
   });
 
   it('RTV does not apply to transfer DCs / returns', () => {
-    expect(sqlStateExpr('dc.id', 'stock-transfer-dc')).not.toContain('return_to_vendor');
+    const sql = sqlStateExpr('dc.id', 'stock-transfer-dc', arrived);
+    expect(sql).not.toContain('return_to_vendor');
+    expect(sql).not.toContain("rs_sk.doc_type = 'rtv'");
     expect(countingDocumentLatestSql('r.id', 'rbc', 'rtv')).toBeNull();
+    expect(stepApprovedSql('r.id', 'rbc', 'rtv')).toBe('FALSE');
   });
 
   it('a document counts by its newest approval row (as the status service does)', () => {
@@ -93,5 +105,11 @@ describe('sqlStateExpr', () => {
     expect(sql).toContain('ORDER BY rs_d."createdAt" DESC LIMIT 1');
     expect(sql).toContain("<> 'REJECT'");
     expect(sql).toContain('rs_aqr."isDeleted" = false');
+  });
+
+  it('skip marks are looked up by source type, id and step', () => {
+    expect(stepSkippedSql('g.id', 'grn', 'dump')).toBe(
+      "EXISTS (SELECT 1 FROM receiving_skip rs_sk WHERE rs_sk.source_type = 'grn' AND rs_sk.source_id = (g.id) AND rs_sk.doc_type = 'dump')",
+    );
   });
 });

@@ -6,14 +6,13 @@ import { Request, Response, NextFunction } from "express";
 import AppError from "../../utils/appError";
 import { captureUser, deserializeUser, requireUser} from "../../middleware/deserializeUser";
 import { isAdminUser } from "../../utils/isAdminUser";
-import { createdMessage } from "../../utils/approvalMessage";
 import { PaginationOptions } from "../../utils/pagination";
 import { ControllerLogger } from "../../utils/controllerLogger";
 
 
 import { UserActivityLogService } from "../../employeeActivity/service/userActivityLog.service";
 import { NotificationService } from "../../notification/service/notification.service";
-import { ApproveDealSlipDto, ApproveDealSlipResultDto, BulkDeleteDealSlipDto, BulkDeleteDealSlipResultDto, CreateDealSlipDto, DealSlipDetailDto, DealSlipDocumentViewDto, DealSlipListResponseDto, DealSlipNumbersResponseDto, DealSlipRecycleBinResponseDto, UpdateDealSlipDto } from "../dto/dealSlip.dto";
+import { BulkDeleteDealSlipDto, BulkDeleteDealSlipResultDto, DealSlipUpdateFormDto, DealSlipDocumentViewDto, DealSlipListResponseDto, DealSlipNumbersResponseDto, DealSlipRecycleBinResponseDto, UpdateDealSlipDto } from "../dto/dealSlip.dto";
 import { ActivityAction, ActivityModule } from "../../employeeActivity/entity/userActivityLog.entity";
 import { DocumentExportService } from '../../excel/export/documentExport.service';
 import { DEAL_SLIP_EXPORT } from '../excel/dealSlip.export';
@@ -50,7 +49,6 @@ export class DealSlipController {
         sort,
         approvalStatus,
         loadingLocation,
-        requestingDepartment,
         dealSlipNo
       } = req.query;
 
@@ -59,7 +57,6 @@ export class DealSlipController {
       const filters: any = {};
       if (approvalStatus) filters.approvalStatus = approvalStatus;
       if (loadingLocation) filters.loadingLocation = loadingLocation;
-      if (requestingDepartment) filters.requestingDepartment = requestingDepartment;
       if (dealSlipNo) filters.dealSlipNo = dealSlipNo;
 
       const queryOptions: PaginationOptions = {
@@ -110,7 +107,7 @@ export class DealSlipController {
     return this.documentExportService.export(req, res, next, {
       entityName: 'Deal Slip',
       definition: DEAL_SLIP_EXPORT,
-      list: { documentType: FilterDocumentType.DEAL_SLIP, filterKeys: ['approvalStatus', 'loadingLocation', 'requestingDepartment', 'dealSlipNo'] },
+      list: { documentType: FilterDocumentType.DEAL_SLIP, filterKeys: ['approvalStatus', 'loadingLocation', 'dealSlipNo'] },
       fetchList: (queryOptions, userId) => this.dealSlipService.getAllDealSlips(queryOptions, userId, isAdminUser(res)),
        // TEMP: testing only, revert after
      //fetchList: async () => ({ data: [{ id: '00000000-0000-0000-0000-000000000000', documentId: null }] }),
@@ -131,7 +128,6 @@ export class DealSlipController {
         sort,
         approvalStatus,
         loadingLocation,
-        requestingDepartment,
         dealSlipNo
       } = req.query;
 
@@ -140,7 +136,6 @@ export class DealSlipController {
       const filters: any = {};
       if (approvalStatus) filters.approvalStatus = approvalStatus;
       if (loadingLocation) filters.loadingLocation = loadingLocation;
-      if (requestingDepartment) filters.requestingDepartment = requestingDepartment;
       if (dealSlipNo) filters.dealSlipNo = dealSlipNo;
 
       const queryOptions: PaginationOptions = {
@@ -202,7 +197,7 @@ export class DealSlipController {
     @next() next: NextFunction
   ): Promise<void> {
     try {
-      const dealSlip: DealSlipDetailDto | null = await this.dealSlipService.findDealSlipByIdforUpdate(id);
+      const dealSlip: DealSlipUpdateFormDto | null = await this.dealSlipService.findDealSlipByIdforUpdate(id);
       
       if (!dealSlip) {
         ControllerLogger.logNotFound('Deal Slip', id, req, res);
@@ -216,74 +211,6 @@ export class DealSlipController {
       });
     } catch (error) {
       ControllerLogger.logError('Get Deal Slip for update', error, req, res);
-      next(error);
-    }
-  }
-
-  // Manual creation is disabled: Deal Slips are auto-created when an RFPA is completed.
-  // (Route decorator removed on purpose; the method body is left untouched.)
-  public async createDealSlip(
-    @requestBody() dealData: CreateDealSlipDto & Record<string, any>,
-    @request() req: Request,
-    @response() res: Response,
-    @next() next: NextFunction
-  ): Promise<void> {
-    try {
-      Object.keys(dealData).forEach((key) => {
-        if (dealData[key] === "null") dealData[key] = null;
-      });
-      
-      const requestedBy = res.locals.user.id;
-      dealData.requestedBy = requestedBy;
-      dealData.requestingDepartment = res.locals.user.selectDepartment;
-      
-      const { record: dealSlip, sentTo } = await this.dealSlipService.createDealSlip(dealData);
-      
-      // 🔔 Send notification for deal slip creation
-      try {
-        const userId = res.locals.user?.id;
-        if (userId) {
-          await this.notificationService.createNoti(
-            `Deal slip "${dealSlip.dealSlipNo}" created successfully`,
-            userId
-          );
-        }
-      } catch (notifError) {
-      }
-
-      const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName || ''}`.trim() || res.locals.user.username || 'Unknown User';
-      
-      //const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName || ''}`.trim() || res.locals.user.username || 'Unknown User';
-     
-      // Single activity log
-      this.activityLogService.logActivity({
-        userId: res.locals.user.id,
-        userName,
-        action: ActivityAction.CREATE,
-        module: ActivityModule.DEAL_SLIP,
-        entityName: 'DealSlip',
-        entityId: dealSlip.id,
-        description: `${userName} has created DealSlip ${dealSlip.dealSlipNo || dealSlip.id}`,
-        ipAddress: req.ip || '',
-        userAgent: req.get('user-agent'),
-        endpoint: req.originalUrl,
-        httpMethod: req.method,
-        statusCode: 200,
-      }).catch(() => {});
-      
-      ControllerLogger.logSuccess('Deal Slip created', dealSlip.id, req, res);
-      res.status(200).json({
-        status: "success",
-        message: createdMessage('Deal Slip', 'DealSlipNo', dealSlip.dealSlipNo, sentTo),
-        data: dealSlip,
-      });
-    } catch (error) {
-      ControllerLogger.logError('Create Deal Slip', error, req, res);
-
-       if (error instanceof Error) {
-         return next(new AppError(400, error.message)); // ← sends 400 with real message
-       }
-
       next(error);
     }
   }
@@ -302,22 +229,25 @@ export class DealSlipController {
       });
       
       const updatedBy = res.locals.updatedBy;
-      const updatedDealSlip = await this.dealSlipService.updateDealSlip(dealSlipId, dealSlipData, updatedBy, {
+      const result = await this.dealSlipService.updateDealSlip(dealSlipId, dealSlipData, updatedBy, {
         userId: res.locals.user.id,
         isAdmin: isAdminUser(res),
       });
 
-      if (!updatedDealSlip) {
+      if (!result) {
         ControllerLogger.logNotFound('Deal Slip', dealSlipId, req, res);
         return next(new AppError(404, "Deal Slip not found"));
       }
+      const { dealSlip: updatedDealSlip, submitted } = result;
       
       // 🔔 Send notification for deal slip update
       try {
         const userId = res.locals.user?.id;
         if (userId) {
           await this.notificationService.createNoti(
-            `Deal slip "${updatedDealSlip.dealSlipNo}" updated successfully`,
+            submitted
+              ? `Deal slip "${updatedDealSlip.dealSlipNo}" submitted for approval`
+              : `Deal slip "${updatedDealSlip.dealSlipNo}" updated successfully`,
             userId
           );
         }
@@ -344,7 +274,7 @@ export class DealSlipController {
       ControllerLogger.logSuccess('Deal Slip updated', dealSlipId, req, res);
       res.status(200).json({
         status: "success",
-        message: "Deal Slip updated successfully",
+        message: submitted ? "Deal Slip submitted for approval" : "Deal Slip updated",
       });
     } catch (error) {
       ControllerLogger.logError('Update Deal Slip', error, req, res);
@@ -352,49 +282,6 @@ export class DealSlipController {
     }
   }
 
-  @httpPatch("/approve/:dealSlipId")
-  public async approveDealSlipHandler(
-    @requestParam("dealSlipId") dealSlipId: string,
-    @request() req: Request,
-    @response() res: Response,
-    @next() next: NextFunction
-  ): Promise<void> {
-    try {
-      const userId = res.locals.user.id;
-      const { approvalStatus, approvalNote }: ApproveDealSlipDto = req.body;
-      
-      const result: ApproveDealSlipResultDto = await this.dealSlipService.approveDealSlip(dealSlipId, userId, { approvalStatus, approvalNote: approvalNote ?? undefined });
-
-      if (!result) {
-        ControllerLogger.logOperationFailed('Approve', 'Deal Slip', 'Cannot be approved', req, res);
-        return next(new AppError(404, "Deal Slip not found or cannot be approved"));
-      }
-      
-      // 🔔 Send notification for deal slip approval
-      // try {
-      //   const userId = res.locals.user?.id;
-      //   if (userId) {
-      //     await this.notificationService.createNoti(
-      //       `Deal slip approved with status: ${approvalStatus}`,
-      //       userId
-      //     );
-      //   }
-      // } catch (notifError) {
-      //   console.log('Deal slip approval notification error:', notifError);
-      // }
-      
-      ControllerLogger.logSuccess('Deal Slip approved', dealSlipId, req, res);
-      res.status(200).json({
-        status: "success",
-        data: result,
-      });
-    } catch (error) {
-      ControllerLogger.logError('Approve Deal Slip', error, req, res);
-      next(error);
-    }
-  }
-
-  
   @httpGet("/dealslipno/getAlldealslipNo")
   public async getAllDealSlipNumbers(
     @request() req: Request,

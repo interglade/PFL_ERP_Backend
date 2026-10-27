@@ -661,16 +661,15 @@ They filter the GRN-number dropdown, but **nothing ever sets them to true**. The
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/rfpa` | Requires `checkPermission('rfpa','create')`. See the body below this table. The controller sets `createdBy`/`requestingDepartment` from the user and maps `selectedParty` to `selectedVendor` or `selectedFarmer`. Returns 201 `{status, message, data: RFPA}`. |
-| PATCH | `/rfpa/:id` | Requires `checkPermission('rfpa','edit')`. Partial update. `rfpaProducts`, if sent, **replaces all lines**. `paymentInfo: null` removes the payment row. Dates may be sent as `dd-MM-yyyy`. Approval is **not** reset. |
+| POST | `/rfpa` | Requires `checkPermission('rfpa','create')`. See the body below this table. The controller sets `createdBy` from the user and maps `selectedParty` to `selectedVendor` or `selectedFarmer`. Returns 201 `{status, message, data: RFPA}`. |
+| PATCH | `/rfpa/:id` | Requires `checkPermission('rfpa','edit')`. Partial update. `rfpaProducts`, if sent, **replaces all lines**. `paymentInfo: null` removes the payment row. Dates may be sent as `dd-MM-yyyy`. Approval is **not** reset. Returns **409** once the RFPA's document is `COMPLETE` or `REJECT` (locked for every user, `approvalFlow/documentEditLock.ts`). |
 | DELETE | `/rfpa/:id` | Requires `checkPermission('rfpa','delete')`. Schedules deletion. |
-| GET | `/rfpa` | List. Filters: `source`, department, company, vendor, farmer, locations, `isDealSlipCreated`. The business date is `createdAt`. |
+| GET | `/rfpa` | List. Filters: `source`, company, vendor, farmer, locations, `isDealSlipCreated`. The business date is `createdAt`. |
 | GET | `/rfpa/view/:docid` | Full view with `approvalSummary`, party details, payment info and products. Returns `data: null` if the user has no access. |
 | GET | `/rfpa/:id/update` | Form DTO with ids. |
 | GET | `/rfpa/rfpanumbers/getAllRfpaNo` | Dropdown for the Deal Slip form. Query `isDealSlipCreated`, `overAllStatus`, `employeeBaseHirechey`, `page`, `limit`, `search`. Returns `[{id, rfpaId, documentId}]`. |
 | GET | `/rfpa/recyclebin`, `/rfpa/export/excel` | Recycle bin and export. |
 | DELETE | `/rfpa/delete/multiple` | Bulk delete. |
-| PATCH | `/rfpa/approve/:rfpaId`, GET `/rfpa/rfpas/approved` | **Stubs**: they return hard-coded `10`. |
 
 **POST `/rfpa` body:**
 ```jsonc
@@ -679,20 +678,20 @@ They filter the GRN-number dropdown, but **nothing ever sets them to true**. The
   "deliveryReceivingPerson": "", "packingInstruction": "", "specialReq": "", "remark": "",
   "paymentInfo": { "paymentMode": "", "paymentDate": "", "advancePaidAmt": 0, "paymentTerms": 0, "dueDate": "", "creditPeriod": 0, "validityOfQuote": "" }, // REQUIRED
   "rfpaProducts": [{ "productName": "<productId>", "variant": "<variantId>", "uom": "<uomId>", "grade": "", "quantity": 10, "unitPrice": 25.5,
-                     "amount": 255, "count": "", "size": "", "origin": "", "variety": "",
+                     "amount": 255,
                      "purchaseDate": "", "expectedHarvestDate": "", "dispatchDate": "", "deliveryDate": "" }] }
 ```
 
 **Tables:**
 - **`rfpa`**:
-  - `rfpaId` (the business number, not unique), `requestingDepartment`
+  - `rfpaId` (the business number, not unique)
   - `company_id`, `purchaselocation_id`, `purchaseforwhich_id` (branches)
   - `otherPurchaseLoc*`, `delivery_receiving_person`, `packing_instruction`
   - `vendor_id` / `farmer_id`, `source`, `special_request`
   - `payment_info_id` (1:1), `remark`
   - `isDealSlipCreated` (default false)
-  - `created_by` (**never populated**)
-- **`rfpa_product`**: `product_id`, `varient_id`, `uom_id`, `grade`, `quantity` (**int**), `unit_price` numeric(10,2), `count`, `size`, `origin`, `variety`, `total_value` (`amount`), the four dates, `rfpa_id`.
+  - `created_by` (set on create; older rows backfilled from the RFPA document by migration `1792800100000`)
+- **`rfpa_product`**: `product_id`, `varient_id`, `uom_id`, `grade`, `quantity` (**int**), `unit_price` numeric(10,2), `total_value` (`amount`), the four dates, `rfpa_id`.
 - **`payment_info_for_rfpa`**: `payment_mode` (NOT NULL), `payment_date`, `advance_paid_amount`, `payment_terms` numeric, `payment_dute_date`, `credite_period`, `validity_of_quote`.
 
 **Logic:**
@@ -702,26 +701,25 @@ They filter the GRN-number dropdown, but **nothing ever sets them to true**. The
 - **`employeeBaseHirechey` filter** on the numbers dropdown works out the caller's level in the creator's Procurement flow:
   - 1 creator, 2 verifier, 3–5 approvers, 6–7 finalizers
   - Level 0 is excluded.
-  - Because `createdBy` is never set, this filter drops every record.
+  - It relies on `rfpa.created_by`, which is saved on create.
 
 #### Deal Slip (`/dealSlip`, `src/dealSlip/`)
-**Purpose:** confirms the lot for an RFPA, with `lotNo`, `loadingLocation` and `specialRequest`.
-- **Only one deal slip may exist per RFPA.** A second one returns 409 when `rfpa.isDealSlipCreated` is already true.
+**Purpose:** confirms the lot for an RFPA. It is **auto-created** (status `draft`) when the RFPA completes approval, carrying a copy of every RFPA detail except `specialReq` / `remark` (`service/dealSlipAutoCreate.service.ts`, `service/dealSlipRfpaCopy.ts`). Its own fields are `lotNo`, `loadingLocation`, `specialRequest`, `remark`. Full rules: `docs/rfpa-deal-slip-sync-plan.md` in the workspace.
+- **Only one deal slip may exist per RFPA.** Auto-create skips an RFPA whose `isDealSlipCreated` is already true. There is no manual create endpoint.
+- **Drafts never reach approvers:** they are hidden from approver lists and views, cannot be approved, and are excluded from the admin control center's in-approval counts.
 - Approval: engine A, category `Procurement`.
 - Deleting a deal slip does **not** reset the RFPA flag.
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/dealSlip` | Body `{ rfpa: <rfpaId>, lotNo, loadingLocation, specialRequest, remark?, approvalNote? }`. `lotNo`, `loadingLocation` and `specialRequest` are NOT NULL. Returns 200 `{status, data}`. |
-| PATCH | `/dealSlip/:id` | Uses `captureUser`. Applies a raw `Object.assign`. |
-| PATCH | `/dealSlip/approve/:id` | Legacy stand-alone approval: `{approvalStatus: 'approved'\|'notapproved', approvalNote}` sets `dealSlipApprovedAt`. No role check. |
+| PATCH | `/dealSlip/:id` | Uses `captureUser`. Body `{ lotNo, loadingLocation, specialRequest?, remark?, dealSlipProducts?: [{ id, uom?, quantity?, unitPrice?, purchaseDate?, dispatchDate?, deliveryDate?, expectedHarvestDate? }] }`. Any other key (copied header fields, payment info, product / variant / grade changes, new or removed lines) returns **400** listing the keys (`dealSlipEdit.ts`). `lotNo` and `loadingLocation` are required; quantity is a whole number > 0, unit price > 0, dates in RFPA order, harvest date required for farmer slips. Saving a `draft` **submits** it: status -> `hold` and approvers are assigned (message `Deal Slip submitted for approval`). Draft: creator or admin only (403). `COMPLETE` / `REJECT`: **409** for everyone. |
 | GET | `/dealSlip` | List. Filters: `approvalStatus`, `dealSlipNo`, `lotNo`, `loadingLocation`, `rfpaNo`, party, `isGrnCreated`. Returns rows `{documentId, overAllStatus, createdBy, createdDate, createdTime, id, rfpa, lotNo, loadingLocation, remark, specialRequest, dealSlipNo}`. |
 | GET | `/dealSlip/view/:docid` | View; 403 if no access. |
-| GET | `/dealSlip/:id/update` | Form DTO. |
+| GET | `/dealSlip/:id/update` | Form DTO (ids) plus `documentId`, `overAllStatus` and `approvedBy` (user id of the approver, `null` until approved). The GRN form uses it to pre-fill, and maps `approvedBy` to `purchaseInstructionsBy`. |
 | GET | `/dealSlip/dealslipno/getAlldealslipNo` | GRN-form dropdown `[{id, dealSlipNo, documentId, rfpaId}]`. Returns 404 when empty. |
 | GET / DELETE | `recyclebin`, `export/excel`, `:id`, `delete/multiple` | Standard. |
 
-**Table `deal_slips`:** `rfpa_id`, `lotNo`, `approvalNote`, `loadingLocation`, `remark`, `specialRequest`, `requestingDepartment`, `approval_status` (Status, default pending), `dealSlipCreatedAt`, `dealSlipApprovedAt`, `dealSlipNo`, `isGrnCreated`, `created_by`.
+**Table `deal_slips`:** `rfpa_id` (linked by id only, no cascade: saving a deal slip never writes its RFPA), `lotNo`, `approvalNote`, `loadingLocation`, `remark`, `specialRequest`, `approval_status` (Status, default pending), `dealSlipCreatedAt`, `dealSlipApprovedAt`, `dealSlipNo`, `isGrnCreated`, `created_by`.
 
 **Number format:** `DL{yyyyMMdd}{5-digit}`.
 
@@ -748,27 +746,27 @@ Approval runs through **engine C** (verifier → amount-banded approvers → 2 f
 | GET / DELETE | `/grns/recycle-bin`, `/grns/export/excel`, `/grns/:id`, `/grns/delete/multiple` | Standard. |
 
 **POST `/grns` body** (multipart):
-- Header: `companyName`, `purchaseInstructionsBy` (user), `locationType` (`cc|dc`), `grnType` (`transfer|purchase`), `purchaseType` (`fixed price sales | consignment sales / bikri | mgp sales`)
+- Header: `companyName`, `purchaseInstructionsBy` (user), `locationType` (`cc|dc`, a label only), `deliveryMode` (`cc|dc|direct-to-customer`, default `cc`: `cc` / `dc` GRNs are received at that centre, `direct-to-customer` bypasses the centres; the GRN print is red for `cc`, green otherwise), `grnType` (`transfer|purchase`), `purchaseType` (`fixed price sales | consignment sales / bikri | mgp sales`)
 - Links: `dealSlipId`, `rfpaId`
 - Locations: **`purchaseLocation` (a branch id, required because it drives numbering)**, `purchaseForSalesLocation`, `otherPurchaseLoc*`
 - Party: `source` + `selectedParty` (400 if a vendor/farmer source is given without a party)
 - Amounts: `billNo`, `subTotalAmt`, `freight`, `otherCharges`, `totalAmt`, `amtWords`
-- Logistics: `purchasedBy`, `approvalNote`, `receivedThrough`, `vehicleNo`, `timeIn` (`HH:mm` or `h:mm am/pm`), `cratesIn`, `deliveryReceivingPerson`, `baseLocation`, `remark`, `purchaseBy` (user), `securityPerson`, `specialReq`
+- Logistics: `purchasedBy`, `approvalNote`, `receivedThrough`, `vehicleNo`, `timeIn` (`HH:mm` or `h:mm am/pm`), `cratesIn`, `deliveryReceivingPerson`, `baseLocation`, `remark`, `securityPerson`, `specialReq`
 - `paymentInfo {paymentMode, paymentDate, advancePaidAmt, remainingAmt, paymentTerms, dueDate, creditPeriod}`
-- `grnProducts[] {productName, variant, uom, quantity, unitPrice, amount, rtv, netWeight, grossWeight, packingMaterialWeight, revisedRate, revisedQuantity, purchaseDate, dispatchDate, deliveryDate, expectedHarvestDate}`
+- `grnProducts[] {productName, variant, uom, grade, quantity, unitPrice, amount, rtv, netWeight, grossWeight, packingMaterialWeight, purchaseDate, dispatchDate, deliveryDate, expectedHarvestDate}`
 
 **Tables:**
 - **`grns`**:
   - Header: `company_id`, `purchaseInstructionsBy_id`, `requestingDepartment`, `grnNo`, `locationType`, `grnType`, `purchaseType`
-  - Links: `deal_slip_id`, `rfpa_id` (never set, because the DTO key is `rfpaId`)
-  - Locations: `purchaselocation_id`, `purchaseforwhich_id`, `branch_id` (never set)
+  - Links: `deal_slip_id` (the RFPA is reached through it: `deal_slips.rfpa_id`; the unused `grns.rfpa_id` was dropped, migration `1792800400000`)
+  - Locations: `purchaselocation_id`, `purchaseforwhich_id` (the old `branch_id` was removed, migration `1792800200000`)
   - Party: `source`, `vendor_id`, `farmer_id`
   - Amounts: `billNo`, `billImage`, `subTotalAmt`/`freight`/`otherCharges` decimal(12,2) default 0, `totalAmt`, `amtWords`
   - Logistics: `timeIn` (timestamp; the transformer shows it as IST `HH:mm`), `cratesIn`, `vehicleNo`, `rmn`, `baseLocation`
-  - People: `purchase_id`, `createdby_id`, `current_level_id` (Levels)
+  - People: `purchaseInstructionsBy_id`, `createdby_id`, `current_level_id` (Levels)
   - Payment: `payment_info_id`, `ammountStatus` (`paid|unpaid`, default unpaid)
   - The 8 `is*Created` flags
-- **`grn_products`**: `grn_id`, `product_id`, `varient_id`, `uom_id`, `quantity`/`revisedQuantity`/`unitPrice`/`revisedRate` decimal(10,2), `amount` decimal(12,2), `grossWeight`/`packingMaterialWeight`/`netWeight` decimal(100,3), `rtv`, the 4 dates.
+- **`grn_products`**: `grn_id`, `product_id`, `varient_id`, `uom_id`, `grade` (free text, pre-filled from the Deal Slip line), `quantity`/`unitPrice` decimal(10,2), `amount` decimal(12,2), `grossWeight`/`packingMaterialWeight`/`netWeight` decimal(100,3), `rtv`, the 4 dates.
 - **`grn_product_history`**: `grn_id`, `grn_product_id`, `product_id`, `variant_id`, `modified_by_id`, `version`, `oldQuantity`, `newQuantity`, `oldRate`, `newRate`, `modifiedAt`.
 - **`payment_info_for_grn`**: `payment_mode`, `payment_date`, `advance_paid_amount`, `remaining_amount`, `payment_terms` (text), `payment_dute_date`, `credite_period`.
 
@@ -2105,7 +2103,7 @@ These issues were found by reading the code. They are grouped by severity. Fix t
    - For Inward, DCs, Dump and RTV this means **stock no longer matches the document**, because the stock movement has already been applied.
 4. **Deletes do not unwind links.** Deleting a Deal Slip, Invoice or Return By Customer leaves `rfpa.isDealSlipCreated`, `dc.isInvoiceCreated` and `dc.isReturnByCustomerCreated` set to true. The parent can then never be used again.
    - Single DC deletes are **hard deletes** and leave the `documents` row orphaned.
-5. **Link flags are never set.** The GRN `is*Created` flags, `dealSlip.isGrnCreated`, `grns.rfpa_id`, `grns.branch_id` and `rfpa/dealSlip.created_by` are never written. Dropdown filters that depend on them therefore return everything.
+5. **Link flags are never set.** The GRN `is*Created` flags, `dealSlip.isGrnCreated` and `rfpa/dealSlip.created_by` are never written. Dropdown filters that depend on them therefore return everything.
 6. **No runtime validation of request bodies.** Most payloads go straight into `repository.create()` or `Object.assign()`. This allows mass assignment of fields such as `status`, `vendorCode` and approval fields.
 7. **Wrong column types.** These columns are integers but receive fractional values:
    - `dump_register.totalQty` and `totalDumpCost`
