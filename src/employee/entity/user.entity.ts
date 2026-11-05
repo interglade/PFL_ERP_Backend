@@ -39,7 +39,10 @@ export enum Role {
   PAYMENT_MANAGER = 'payment_manager',
 }
 
-/** Only Active employees can log in. Draft = created from the form and never activated. */
+/**
+ * Only Active employees can log in. New users (form or import) start Inactive.
+ * Draft is no longer given (2026-11-05); it stays for users saved as Draft before.
+ */
 export enum EmployeeStatus {
   ACTIVE = 'Active',
   INACTIVE = 'Inactive',

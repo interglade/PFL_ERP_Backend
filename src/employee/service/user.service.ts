@@ -154,8 +154,9 @@ const roles: Role[] = normalizeRoles(input.roles);
         .filter((d: string) => Object.values(Department).includes(d as Department)) as Department[];
     }
 
-    // Employee status: always starts as Draft — admin activates/deactivates later
-    const resolvedStatus = EmployeeStatus.DRAFT;
+    // The form has no draft save: Submit creates the user Inactive, like the Excel import
+    // (docs/user-import-plan.md D2). The admin sets permissions, then activates.
+    const resolvedStatus = EmployeeStatus.INACTIVE;
 
     const user = this.userRepository.create({
       ...input,
