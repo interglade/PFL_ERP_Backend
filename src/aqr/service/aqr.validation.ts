@@ -240,6 +240,18 @@ export function validateAqrLines(products: AqrLineInput[] | null | undefined): s
         errors.push(`${where}: ${label} percentage must be a number`);
       }
     });
+
+    // The quality check accounts for the whole sample: parameter kg add up to the sampling kg.
+    const params = line.parameters ?? [];
+    if (params.length && sampling !== undefined && Number.isFinite(sampling)) {
+      const quantities = params.map((param) => parseQuantity(param?.quantity));
+      if (quantities.every((q) => q !== undefined && Number.isFinite(q))) {
+        const sum = Math.round(quantities.reduce((a: number, q) => a + (q as number), 0) * 1000) / 1000;
+        if (Math.abs(sum - sampling) > 0.001) {
+          errors.push(`${where}: quality parameter quantities add up to ${sum}, they must equal the sampling quantity (${sampling})`);
+        }
+      }
+    }
   });
 
   return errors;

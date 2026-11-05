@@ -37,7 +37,7 @@ export async function soldUnitCost(
   const rows: Array<{ qty: string | null; value: string | null }> = await manager.query(
     `SELECT SUM(a.qty) AS qty, SUM(a.qty * COALESCE(a.unit_cost, 0)) AS value
        FROM stock_allocation a JOIN item it ON it.id = a.line_id
-      WHERE a.doc_id = $1 AND a.status = 'CONSUMED' AND it.product_id = $2 AND it.varient_id IS NOT DISTINCT FROM $3`,
+      WHERE a.doc_id = $1 AND a.status = 'Consumed' AND it.product_id = $2 AND it.varient_id IS NOT DISTINCT FROM $3`,
     [dcId, productId, variantId],
   );
   const qty = num(rows[0]?.qty);

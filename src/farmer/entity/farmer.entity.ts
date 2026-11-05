@@ -68,11 +68,11 @@ export class Farmer extends Model {
 })
   dob: Date;
 
-  @Column({ nullable:true })
-  landHoldingStatus:string;
+  @Column({ type: 'enum', enum: LandHoldingStatus, nullable: true })
+  landHoldingStatus: LandHoldingStatus;
 
-  @Column({ nullable:true,})
-  landStatus: string;
+  @Column({ type: 'enum', enum: LandStatus, nullable: true })
+  landStatus: LandStatus;
 
   // One-to-One relation with Address for farmAddress (Geofenced)
   @OneToOne(() => Address, { cascade: true, nullable: true,onDelete: 'SET NULL', })

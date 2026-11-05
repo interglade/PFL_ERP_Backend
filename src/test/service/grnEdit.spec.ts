@@ -150,11 +150,11 @@ describe('who may edit a GRN, and when', () => {
   });
 
   it('refuses anyone but the creator (403)', async () => {
-    await expect(service.assertGrnEditable(manager('hold'), grn(), 'someone-else')).rejects.toMatchObject({
+    await expect(service.assertGrnEditable(manager('Hold'), grn(), 'someone-else')).rejects.toMatchObject({
       statusCode: 403,
       message: 'Only the creator of GRN G-1 can edit it',
     });
-    await expect(service.assertGrnEditable(manager('hold'), grn({ createdBy: null }), 'creator')).rejects.toMatchObject({ statusCode: 403 });
+    await expect(service.assertGrnEditable(manager('Hold'), grn({ createdBy: null }), 'creator')).rejects.toMatchObject({ statusCode: 403 });
   });
 
   it.each([

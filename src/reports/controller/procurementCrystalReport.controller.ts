@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import {
     controller,
@@ -31,7 +32,7 @@ export class ProcurementCrystalReportController {
      * Generate detailed procurement report (Net Weight based)
      * POST /procurement-reports/detailed
      */
-    @httpPost('/detailed')
+    @httpPost('/detailed', checkPermission('purchase-report', 'view'))
     public async generateDetailedReport(
         @request() req: Request,
         @response() res: Response,
@@ -80,7 +81,7 @@ export class ProcurementCrystalReportController {
      * Generate procurement summary report
      * POST /procurement-reports/summary
      */
-    @httpPost('/summary')
+    @httpPost('/summary', checkPermission('purchase-report', 'view'))
     public async generateSummaryReport(
         @request() req: Request,
         @response() res: Response,
@@ -120,7 +121,7 @@ export class ProcurementCrystalReportController {
      * Generate vendor-wise procurement report
      * POST /procurement-reports/vendor-wise
      */
-    @httpPost('/vendor-wise')
+    @httpPost('/vendor-wise', checkPermission('purchase-report', 'view'))
     public async generateVendorWiseReport(
         @request() req: Request,
         @response() res: Response,
@@ -162,7 +163,7 @@ export class ProcurementCrystalReportController {
      * Generate product-wise procurement report
      * POST /procurement-reports/product-wise
      */
-    @httpPost('/product-wise')
+    @httpPost('/product-wise', checkPermission('purchase-report', 'view'))
     public async generateProductWiseReport(
         @request() req: Request,
         @response() res: Response,
@@ -204,7 +205,7 @@ export class ProcurementCrystalReportController {
      * Export detailed procurement report to Excel
      * POST /procurement-reports/export/excel
      */
-    @httpPost('/export/excel')
+    @httpPost('/export/excel', checkPermission('purchase-report', 'export'))
     public async exportToExcel(
         @request() req: Request,
         @response() res: Response,
@@ -388,7 +389,7 @@ export class ProcurementCrystalReportController {
      * Export vendor-wise report to Excel
      * POST /procurement-reports/export/vendor-wise-excel
      */
-    @httpPost('/export/vendor-wise-excel')
+    @httpPost('/export/vendor-wise-excel', checkPermission('purchase-report', 'export'))
     public async exportVendorWiseToExcel(
         @request() req: Request,
         @response() res: Response,
@@ -483,7 +484,7 @@ export class ProcurementCrystalReportController {
      * Get available filter options
      * GET /procurement-reports/filters
      */
-    @httpGet('/filters')
+    @httpGet('/filters', checkPermission('purchase-report', 'view'))
     public async getFilterOptions(
         @request() req: Request,
         @response() res: Response,

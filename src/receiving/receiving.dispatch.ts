@@ -35,13 +35,13 @@ function livePredicate(alias: string, sourceType: ReceivingSourceType): string |
   );
 }
 
-/** SQL expression for the Arrivals CTE: `'in-transit'`, `'arrived'` or NULL (no dispatch). */
+/** SQL expression for the Arrivals CTE: `'In Transit'`, `'Arrived'` or NULL (no dispatch). */
 export function dispatchStateSql(sourceIdExpr: string, sourceType: ReceivingSourceType): string {
   const link = DISPATCH_LINK[sourceType];
   const live = livePredicate('rl_vd', sourceType);
   if (!link || !live) return 'NULL::text';
   return (
-    `(SELECT CASE WHEN rl_vd."arrivedAt" IS NOT NULL THEN 'arrived' ELSE 'in-transit' END FROM dispatch rl_vd ` +
+    `(SELECT CASE WHEN rl_vd."arrivedAt" IS NOT NULL THEN 'Arrived' ELSE 'In Transit' END FROM dispatch rl_vd ` +
     `WHERE rl_vd."${link.fk}" = ${sourceIdExpr} AND ${live} ORDER BY rl_vd."createdAt" DESC LIMIT 1)`
   );
 }
@@ -148,8 +148,8 @@ export async function loadDispatches(
 }
 
 export function dispatchStateOf(summary: DispatchSummary | null): DispatchState {
-  if (!summary) return 'none';
-  return summary.arrivedAt ? 'arrived' : 'in-transit';
+  if (!summary) return 'None';
+  return summary.arrivedAt ? 'Arrived' : 'In Transit';
 }
 
 const SOURCE_LABEL: Record<ReceivingSourceType, string> = {

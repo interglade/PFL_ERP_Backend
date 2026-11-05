@@ -1,3 +1,6 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { guardDocumentDelete, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
 import {
   controller,
   httpPost,
@@ -22,6 +25,7 @@ import {
   captureUser,
 } from '../../middleware/deserializeUser';
 import { isAdminUser } from '../../utils/isAdminUser';
+import { isPaymentManager } from '../../utils/roles';
 import { createdMessage } from '../../utils/approvalMessage';
 import { PaginationOptions } from '../../utils/pagination';
 
@@ -66,7 +70,7 @@ export class FinalInvoiceController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('final-invoice', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -76,11 +80,12 @@ export class FinalInvoiceController {
       entityName: 'Final Invoice',
       definition: FINAL_INVOICE_EXPORT,
       list: { documentType: FilterDocumentType.FINAL_INVOICE },
-      fetchList: (queryOptions, userId) => this.finalInvoiceService.getAll(queryOptions, userId, isAdminUser(res)),
+      fetchList: (queryOptions, userId) =>
+        this.finalInvoiceService.getAll(queryOptions, userId, isAdminUser(res), isPaymentManager(res.locals.user)),
     });
   }
 
-  @httpGet('/')
+  @httpGet('/', checkPermission('final-invoice', 'view'))
   public async getAllInvoices(
     @request() req: Request,
     @response() res: Response,
@@ -101,7 +106,7 @@ export class FinalInvoiceController {
 
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.FINAL_INVOICE);
-      const invoices = await this.finalInvoiceService.getAll(queryOptions, userId, isAdminUser(res));
+      const invoices = await this.finalInvoiceService.getAll(queryOptions, userId, isAdminUser(res), isPaymentManager(res.locals.user));
 
       if (!invoices || invoices.data.length === 0) {
         ControllerLogger.logOperationFailed('Get All', 'Final Invoices', 'No records found', req, res);
@@ -136,7 +141,7 @@ export class FinalInvoiceController {
   }
 
 
-  @httpPost('/export-report')
+  @httpPost('/export-report', checkPermission('sales-report', 'export'))
   public async exportReport(
     @request() req: Request,
     @response() res: Response,
@@ -193,7 +198,7 @@ export class FinalInvoiceController {
     }
   }
 
-  @httpPost('/:deliveryChallanId')
+  @httpPost('/:deliveryChallanId', checkPermission('final-invoice', 'create'))
   public async createInvoice(    @requestParam('deliveryChallanId') deliveryChallanId: string,
     @request() req: Request,
     @response() res: Response,
@@ -257,7 +262,7 @@ export class FinalInvoiceController {
     }
   }
 
-  @httpGet('/view/:id')
+  @httpGet('/view/:id', checkPermission('final-invoice', 'view'), guardDocumentView(ApprovalDocType.FINAL_INVOICE, 'Final Invoice'))
   public async getInvoiceByIdForView(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -297,7 +302,7 @@ export class FinalInvoiceController {
     }
   }
 
-  @httpPost('/pdf/download')
+  @httpPost('/pdf/download', checkPermission('final-invoice', 'download'))
   public async downloadInvoicePdf(
     
     @request() req: Request,
@@ -352,7 +357,7 @@ export class FinalInvoiceController {
     }
   }
    //TODO:Delete Multiple
-@httpDelete('/delete/multiple')
+@httpDelete('/delete/multiple', checkPermission('final-invoice', 'delete'), guardDocumentDelete(ApprovalDocType.FINAL_INVOICE, 'Final Invoice'))
   public async deleteMultipleFinalInvoices(
     @request() req: Request,
     @response() res: Response,
@@ -406,96 +411,12 @@ export class FinalInvoiceController {
       next(error);
     }
   }
+  /**
+   * Retired (client decision 2026-10-29): the payment status of a Final Invoice now follows its
+   * recorded payments (POST /final-invoice/:id/payments, Payment Managers only).
+   */
   @httpPut('/amount-status/:id')
-  public async updateAmountStatus(
-    @requestParam('id') id: string,
-    @request() req: Request<{ id: string }, {}, { ammountStatus: string }>,
-    @response() res: Response,
-    @next() next: NextFunction,
-  ) {
-    try {
-      const { ammountStatus: status } = req.body;
-
-      if (!status || !['paid', 'unpaid'].includes(status)) {
-        return next(new AppError(400, 'Invalid status. Must be "paid" or "unpaid"'));
-      }
-
-      const result = await this.finalInvoiceService.updateAmountStatus(id, status as any);
-
-      ControllerLogger.logSuccess('Invoice amount status updated', id, req, res);
-
-      // Recorded for the admin dashboard's recent activity; never blocks the response.
-      const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName || ''}`.trim() || res.locals.user.username || 'Unknown User';
-      this.activityLogService.logActivity({
-        userId: res.locals.user.id,
-        userName,
-        action: ActivityAction.UPDATE,
-        module: ActivityModule.INVOICE,
-        entityName: 'INVOICE',
-        entityId: id,
-        description: `${userName} marked Final Invoice as ${status === 'paid' ? 'Paid' : 'Unpaid'}`,
-        metadata: { event: 'amount-status', ammountStatus: status },
-        ipAddress: req.ip || '',
-        userAgent: req.get('user-agent'),
-        endpoint: req.originalUrl,
-        httpMethod: req.method,
-        statusCode: 200,
-      }).catch(() => {});
-
-      res.status(200).json({
-        status: 'success',
-        message: `Invoice amount status updated`,
-      });
-    } catch (error) {
-      ControllerLogger.logError('Invoice amount status update', error, req, res);
-      next(error);
-    }
+  public async updateAmountStatus(@next() next: NextFunction) {
+    return next(new AppError(410, 'Marking a Final Invoice paid by hand is retired; record its payments instead'));
   }
 }
-
-
-  // @httpPatch('/:id', captureUser)
-  // public async updateInvoice(
-  //   @requestParam('id') id: string,
-  //   @request() req: Request,
-  //   @response() res: Response,
-  //   @next() next: NextFunction,
-  // ) {
-  //   try {
-  //     const updatedBy = res.locals.updatedBy;
-
-  //     const invoice = await this.finalInvoiceService.update(id, {
-  //       ...req.body,
-  //       updatedBy,
-  //     });
-
-  //     if (!invoice) {
-  //       ControllerLogger.logNotFound('Final Invoice', id, req, res);
-  //       return next(
-  //         new AppError(404, 'Invoice not found or could not be updated'),
-  //       );
-  //     }
-
-  //     // 🔔 Send notification for invoice update
-  //     try {
-  //       const userId = res.locals.user?.id;
-  //       if (userId) {
-  //         await this.notificationService.createNoti(
-  //           `Final invoice updated successfully`,
-  //           userId
-  //         );
-  //       }
-  //     } catch (notifError) {
-  //     }
-
-  //     ControllerLogger.logSuccess('Final Invoice updated', id, req, res);
-  //     res.status(200).json({
-  //       status: 'success',
-  //       message: 'Final invoice updated successfully',
-  //     });
-  //   } catch (err) {
-  //     ControllerLogger.logError('Update Final Invoice', err, req, res);
-  //     next(err);
-  //   }
-  // }
-

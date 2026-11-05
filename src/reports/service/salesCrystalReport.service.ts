@@ -1,4 +1,5 @@
 import { injectable, inject } from 'inversify';
+import { requireStatus } from '../../utils/status.enum';
 import { Repository, Between, In } from 'typeorm';
 
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
@@ -7,6 +8,7 @@ import { CustomerDeliveryChallan } from '../../deliveryChallans/customerDelivery
 import { Item } from '../../deliveryChallans/deliverychllan/entity/dItem.entity';
 import { PostReturnByCustomer } from '../../returnByCustomer/entity/postReturnByCustomer.entity';
 import { ReturnedProducts } from '../../returnByCustomer/entity/returnProduct.entity';
+import { DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 
 export interface SalesReportFilters {
     startDate?: Date;
@@ -289,9 +291,11 @@ export class SalesCrystalReportService {
         }
 
         if (filters.approvalStatus) {
-            queryBuilder.andWhere('dc.approvalStatus = :approvalStatus', {
-                approvalStatus: filters.approvalStatus,
-            });
+            // The DC's approval lives in documents.status (dc.approvalStatus is never updated)
+            queryBuilder.andWhere(
+                `EXISTS (SELECT 1 FROM documents sr_d WHERE sr_d.document_type_id = dc.id::text AND sr_d."isDeleted" = false AND sr_d.status = :approvalStatus)`,
+                { approvalStatus: requireStatus(DocumentStatus, filters.approvalStatus, 'approvalStatus') },
+            );
         }
 
         if (filters.challanNo) {

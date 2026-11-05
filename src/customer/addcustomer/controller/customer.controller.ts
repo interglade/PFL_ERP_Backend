@@ -1,3 +1,9 @@
+import { guardRegistrationEdit } from '../../../middleware/registrationAccess';
+import { Customer } from '../entity/customer.entity';
+import { protectBody } from '../../../middleware/protectBody';
+import { checkPermission } from '../../../middleware/checkPermission';
+import { registrationImportMessage } from '../../../excel/registrationRow';
+import { requireRole } from '../../../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -52,7 +58,7 @@ export class CustomerController {
   ) {}
 
   @httpPost(
-    '/',
+    '/', checkPermission('customers', 'create'),
     handleMulterFields([
       { name: 'customerImage', maxCount: 1 },
       { name: 'bankDetails[cancelledChequeCopy]', maxCount: 1 },
@@ -233,7 +239,7 @@ export class CustomerController {
    * - req.files madhe file asel → S3 var juna delete, nava upload
    * - req.body madhe URL string asel → existing URL tashi rahu de
    */
-  @httpPatch('/submit/:id',
+  @httpPatch('/submit/:id', checkPermission('customers', 'create'),
     handleMulterFields([
       { name: 'customerImage', maxCount: 1 },
       { name: 'bankDetails[cancelledChequeCopy]', maxCount: 1 },
@@ -351,7 +357,7 @@ console.log("submitCustomer body",body);
     }
   }
 
-@httpPatch("/approve/:id")
+@httpPatch("/approve/:id", requireRole(Role.ADMIN, Role.VERIFIER))
 async approveCustomer(
   @request() req: Request, 
   @response() res: Response, 
@@ -377,7 +383,7 @@ async approveCustomer(
     next(error);
   }
 }
-  @httpGet('/')
+  @httpGet('/', checkPermission('customers', 'view'))
   public async getAllCustomers(
     @request() req: Request,
     @response() res: Response,
@@ -528,7 +534,7 @@ async approveCustomer(
 
   // All attachments of a customer in one call, grouped by form section,
   // with the stored URL and a JWT-gated download link via /files/download.
-  @httpGet('/attachments/:id')
+  @httpGet('/attachments/:id', checkPermission('customers', 'view'))
   public async getCustomerAttachments(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -640,7 +646,7 @@ async approveCustomer(
   }
 
 
-  @httpGet('/view/:id')
+  @httpGet('/view/:id', checkPermission('customers', 'view'))
   public async getCustomerByIdforview(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -684,7 +690,7 @@ async approveCustomer(
 
 
 
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', guardRegistrationEdit(Customer, 'customer'), checkPermission('customers', 'edit'))
   public async getCustomerByIdforUpdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -728,7 +734,7 @@ async approveCustomer(
 
 
   @httpPut(
-    '/:id',
+    '/:id', guardRegistrationEdit(Customer, 'customer'), checkPermission('customers', 'edit'),
   handleMulterFields([
       { name: 'customerImage', maxCount: 1 },
       { name: 'bankDetails[cancelledChequeCopy]', maxCount: 1 },
@@ -748,8 +754,7 @@ async approveCustomer(
       { name: 'visitingCardCopy', maxCount: 1 },
       { name: 'lc', maxCount: 1 },
       { name: 'bg', maxCount: 1 },
-    ]),
-  )
+    ]), protectBody)
   public async updateCustomer(
     @request() req: Request, 
     @response() res: Response, 
@@ -872,7 +877,7 @@ customerData.bankDetails ??= {} as BankDetailsDto;
     }
   }
 
-  @httpDelete('/:id')
+  @httpDelete('/:id', requireRole(Role.SUPER_ADMIN))
   public async deleteCustomer(
     @request() req: Request,
     @response() res: Response,
@@ -920,7 +925,8 @@ customerData.bankDetails ??= {} as BankDetailsDto;
       next(error);
     }
   }
-  @httpPost("/upload/customerdata", upload.single('file'))
+  /** Admin only (docs/registration-import-plan.md D8); `?checkOnly=true` checks and saves nothing. */
+  @httpPost("/upload/customerdata", requireRole(Role.ADMIN), upload.single('file'))
     public async uploadFile(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
             if (!req.file) {
                 ControllerLogger.logValidationError('Customer file upload', 'No file uploaded', req, res);
@@ -934,9 +940,11 @@ customerData.bankDetails ??= {} as BankDetailsDto;
 
                 // Every imported customer is owned by whoever ran the import -
                 // the sheet has no say in it.
+                const checkOnly = req.query.checkOnly === 'true';
                 const summary = await this.customerService.upload(
                     (req.file as any).location,
                     userId,
+                    { checkOnly },
                 );
                 
                 // 🔔 Send notification for file upload
@@ -957,21 +965,18 @@ customerData.bankDetails ??= {} as BankDetailsDto;
                 
                 return res.status(200).json({
                     status: 'success',
-                    message:
-                        `${summary.created} customer(s) imported` +
-                        (summary.skipped.length ? `, ${summary.skipped.length} skipped` : '') +
-                        (summary.failed.length ? `, ${summary.failed.length} failed` : ''),
+                    message: registrationImportMessage('Customers', summary, checkOnly),
                     data: summary,
                 });
             } catch (error) {
                 ControllerLogger.logError('Customer file upload', error, req, res);
-                console.error(error);
-                return res.status(500).send("Error uploading file");
+                // Through the error handler, so a blocked import keeps its message and details
+                return next(error);
             }
         }
 
 
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('customers', 'export'))
   public async exportCustomersExcel(
     @request() req: Request,
     @response() res: Response,
@@ -1027,7 +1032,7 @@ customerData.bankDetails ??= {} as BankDetailsDto;
     }
   }
 
-  @httpGet('/download/template')
+  @httpGet('/download/template', requireRole(Role.ADMIN))
   public async downloadExcelTemplate(
     @request() req: Request,
     @response() res: Response,
@@ -1066,7 +1071,7 @@ customerData.bankDetails ??= {} as BankDetailsDto;
     }
   }
 
-  @httpDelete("/delete/multiple")
+  @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
 public async softDeleteMultipleCustomers(
   @request() req: Request,
   @response() res: Response,

@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { NextFunction ,Response,Request} from "express";
 import { controller, httpDelete, httpGet, httpPatch, httpPost, next, requestBody, response ,request} from "inversify-express-utils";
 import { inject } from "inversify";
@@ -13,7 +15,7 @@ export class ApprovalFlowController {
     private approvalFlowService: ApprovalFlowService ,
   ) {}
 
-    @httpPost("/")
+    @httpPost("/", requireRole(Role.ADMIN))
       public async create(
         @request() req:Request,
         @requestBody() data:any,
@@ -139,7 +141,7 @@ export class ApprovalFlowController {
     }
   }
 
-  @httpPatch("/:id")
+  @httpPatch("/:id", requireRole(Role.ADMIN))
   public async update(
     @request() req: Request,
     @requestBody() data: any,
@@ -158,14 +160,18 @@ export class ApprovalFlowController {
       // Log successful update
       ControllerLogger.logSuccess('Approval Flow updated', id, req, res);
       
-      res.status(200).json({ status: "success", data: updated });
+      res.status(200).json({
+        status: "success",
+        data: updated.id,
+        message: "Approval Flow updated successfully",
+      });
     } catch (err) {
       ControllerLogger.logError('Approval Flow update', err, req, res);
       next(err);
     }
   }
 
-  @httpPost('/replace/user')
+  @httpPost('/replace/user', requireRole(Role.ADMIN))
   async findreplace(
      @request() req: Request,
     @requestBody() data: any,
@@ -190,8 +196,8 @@ export class ApprovalFlowController {
       return res.status(200).json({ message: 'User references replaced successfully.' });
     } catch (error) {
       ControllerLogger.logError('User replacement in Approval Flow', error, req, res);
-      console.error('Error replacing user:', error);
-      return res.status(500).json({ message: 'Internal server error', error });
+      // Rule violations (AppError 400) keep their status through the error handler
+      return next(error);
     }
 
   }

@@ -40,6 +40,7 @@ import {
   SkippableDocType,
   Slot,
   SourceLineInput,
+  RECEIVING_SOURCE_TXN_DOC,
 } from '../receiving.types';
 import { chunk, NO_SKIPS, planStateFilter, slotWithSkip, StateFilterPlan, stateConditionSql } from '../receiving.arrivals';
 import {
@@ -54,6 +55,7 @@ import {
   slotState,
   stepDocuments,
 } from '../receiving.helpers';
+import { refreshTransactionOf } from '../../transactions/transaction.core';
 import { attachDispatch, dispatchArrivedSql, dispatchReadySql, LoadedDispatch, loadDispatches } from '../receiving.dispatch';
 import {
   completeDocumentExistsSql,
@@ -290,6 +292,12 @@ export class ReceivingStatusService {
    * applies to GRNs; a step that already has a counting document cannot be
    * skipped. Returns the source's skip flags after the change.
    */
+  /** Recomputes the transaction of a source (after Receive). Never throws. */
+  async refreshSourceTransaction(type: ReceivingSourceType, id: string, manager?: EntityManager): Promise<void> {
+    if (!isReceivingSourceType(type)) return;
+    await refreshTransactionOf(manager ?? this.dataSource.manager, RECEIVING_SOURCE_TXN_DOC[type], id);
+  }
+
   async setSkip(
     input: { sourceType: ReceivingSourceType; sourceId: string; docType: SkippableDocType },
     skip: boolean,
@@ -326,6 +334,8 @@ export class ReceivingStatusService {
           docType,
         ]);
       }
+      // A skip counts towards `done`, so the transaction's stage may move.
+      await refreshTransactionOf(em, RECEIVING_SOURCE_TXN_DOC[sourceType], sourceId);
       return (await this.loadSkips(sourceType, [sourceId], em)).get(sourceId) ?? { ...NO_SKIPS };
     });
   }
@@ -452,7 +462,10 @@ export class ReceivingStatusService {
     skips: SkipFlags | undefined,
   ): ReceivingSourceStatus {
     const type = source.info.type;
-    const rtvApplicable = type === 'grn';
+    const sourceAgg = aggregateSourceLines(source.lines);
+    // RTV applies to a GRN with a line marked RTV = Yes (or one that already has an RTV)
+    const rtvApplicable = type === 'grn' &&
+      ([...sourceAgg.values()].some((line) => line.rtvAllowed) || docs.some((d) => d.docType === 'rtv'));
 
     const pick = (docType: ProcessingDocType) => pickSlotAndLegacy(docs.filter((d) => d.docType === docType));
     const aqr = pick('aqr');
@@ -461,7 +474,6 @@ export class ReceivingStatusService {
     const rtv = rtvApplicable ? pick('rtv') : { slot: null, legacy: [], counting: [] as ProcessingDocument[] };
 
     const linesOf = (list: ProcessingDocument[]): DocLineInput[] => list.flatMap((d) => d.lines);
-    const sourceAgg = aggregateSourceLines(source.lines);
     const aqrAgg = aqr.counting.length ? aggregateDocLines(linesOf(aqr.counting), sourceAgg) : null;
     const inwardAgg = aggregateDocLines(linesOf(inward.counting), sourceAgg);
     const dumpAgg = aggregateDocLines(linesOf(dump.counting), sourceAgg);
@@ -484,9 +496,9 @@ export class ReceivingStatusService {
 
     const status: ReceivingSourceStatus = attachDispatch(
       {
-        source: source.info, state: 'not-received', rtvApplicable, slots, legacyDocuments, products,
+        source: source.info, state: 'Not Received', rtvApplicable, slots, legacyDocuments, products,
         // Filled in by `attachDispatch`.
-        dispatch: null, dispatchState: 'none', dispatchRequired: false, canReceive: source.info.isComplete, arrived: false, blockers: [],
+        dispatch: null, dispatchState: 'None', dispatchRequired: false, canReceive: source.info.isComplete, arrived: false, blockers: [],
         skipped: skips ? { ...skips } : { ...NO_SKIPS },
       },
       dispatch,
@@ -611,6 +623,7 @@ export class ReceivingStatusService {
           qty: line.quantity,
           grossKg: line.grossWeight,
           kg: line.netWeight,
+          rtv: line.rtv,
         })),
       };
     });
@@ -636,7 +649,7 @@ export class ReceivingStatusService {
     const allocations: Array<{ line_id: string | null; batch_no: string; qty: string; net_kg: string; unit_cost: string | null }> = ids.length
       ? await manager.query(
           `SELECT line_id::text AS line_id, batch_no, qty, net_kg, unit_cost FROM stock_allocation
-            WHERE doc_type = $1 AND doc_id = ANY($2::uuid[]) AND status IN ('CONSUMED', 'RESERVED')
+            WHERE doc_type = $1 AND doc_id = ANY($2::uuid[]) AND status IN ('Consumed', 'Reserved')
             ORDER BY created_at, id`,
           [DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER, ids],
         )
@@ -1262,7 +1275,7 @@ export class ReceivingStatusService {
       differenceKg,
       transitLossKg,
       transitLossValue,
-      state: status ? status.state : 'not-received',
+      state: status ? status.state : 'Not Received',
       slots: {
         aqr: slotState(status?.slots.aqr ?? null),
         inward: slotState(status?.slots.inward ?? null),
@@ -1270,7 +1283,7 @@ export class ReceivingStatusService {
         rtv: row.source_type === 'grn' ? slotWithSkip(slotState(status?.slots.rtv ?? null), skipped.rtv) : null,
       },
       dispatch: status?.dispatch ?? null,
-      dispatchState: status?.dispatchState ?? 'none',
+      dispatchState: status?.dispatchState ?? 'None',
       dispatchRequired: status?.dispatchRequired ?? false,
       canReceive: status?.canReceive ?? false,
       arrived: status?.arrived ?? false,

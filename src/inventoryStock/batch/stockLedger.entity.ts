@@ -101,4 +101,9 @@ export class StockLedger {
 
   @Column({ type: 'text', nullable: true })
   remark: string | null;
+
+  /** Transaction number of the posting document (docs/transaction-tracking-plan.md §9.4); null when it has none. */
+  @Index('IDX_stock_ledger_txn_no')
+  @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true })
+  txnNo: string | null;
 }

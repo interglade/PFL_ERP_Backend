@@ -1,4 +1,5 @@
 import { injectable, inject } from 'inversify';
+import { requireStatus } from '../../../utils/status.enum';
 import { format } from 'date-fns';
 import { DataSource } from 'typeorm';
 import path from 'node:path';
@@ -18,7 +19,7 @@ import { formatDateTime } from '../../../utils/dateUtils';
 import { DeleteResultDto } from '../../../global/general.dto';
 import { DocumentTypeEnum as DocDefEnum } from '../../../documentDef/entity/documentdef.entity';
 import { DocumentbRepository } from '../../../approvalFlow/repository/documentb.repository';
-import { DocumentTypeEnum } from '../../../approvalFlow/entity/docuemnt.entity';
+import { DocumentStatus, DocumentTypeEnum } from '../../../approvalFlow/entity/docuemnt.entity';
 import { StockTransferDeliveryChallan } from '../../stockTransferDC/entity/stockTransferdeliveryChallan.entity';
 import { completeDocumentExistsSql, countingDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../../receiving/receiving.sql';
 import { dispatchArrivedSql, dispatchReadySql } from '../../../receiving/receiving.dispatch';
@@ -692,9 +693,7 @@ export class DeliveryChallanService {
       const documentId = doc?.id || null;
       const documentStatus = doc?.status || null;
 
-      // overAllStatus filter — case-insensitive like RFPA
-      const matchesStatus = !overAllStatus ||
-        (documentStatus?.toLowerCase() === overAllStatus.toLowerCase());
+      const matchesStatus = !overAllStatus || documentStatus === overAllStatus;
 
       if (matchesStatus) {
         filteredResults.push({
@@ -776,8 +775,8 @@ export class DeliveryChallanService {
     }
     if (overAllStatus && overAllStatus.trim()) {
       qb.andWhere(
-        `EXISTS (SELECT 1 FROM documents rl_s WHERE rl_s.document_type_id = (dc.id)::text AND rl_s.type::text = '${DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER}' AND LOWER(rl_s.status::text) = LOWER(:overAllStatus) AND rl_s."deletedAt" IS NULL)`,
-        { overAllStatus: overAllStatus.trim() },
+        `EXISTS (SELECT 1 FROM documents rl_s WHERE rl_s.document_type_id = (dc.id)::text AND rl_s.type::text = '${DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER}' AND rl_s.status::text = :overAllStatus AND rl_s."deletedAt" IS NULL)`,
+        { overAllStatus: requireStatus(DocumentStatus, overAllStatus, 'overAllStatus') },
       );
     }
     if (search && search.trim()) {

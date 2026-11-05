@@ -7,6 +7,7 @@ import { InwardRegister } from '../entity/inwardRegister.entity';
 import AppError from '../../utils/appError';
 import { Source } from '../../utils/status.enum';
 import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
+import { attachToReceivingSource, refreshProcessingTransaction } from '../../receiving/receiving.transaction';
 import { ResolvedSource } from '../../receiving/receiving.types';
 import { priceLineFromSource, round2 } from '../../receiving/receiving.helpers';
 
@@ -352,6 +353,15 @@ const serialNo = await this.generateSerialNo();
       lastActionBy: { id: data.requestedBy },
       document_type_id: savedInwardId
     });
+    // The Inward joins its source's transaction (docs/transaction-tracking-plan.md §9.4).
+    const txnNo = await attachToReceivingSource(queryRunner.manager, {
+      sourceType: resolvedSource.sourceType,
+      sourceId: resolvedSource.sourceId,
+      docType: 'inward',
+      docId: savedInwardId,
+      docNo: serialNo,
+    });
+    if (!Array.isArray(savedInward)) (savedInward as InwardRegister).txnNo = txnNo;
 
     // 6. Inventory is NOT touched here.
     //    Stock is added to inventory_stock only when this Inward Register's
@@ -434,6 +444,7 @@ public async getAllRecycleBinInwardRegisters(queryOptions: PaginationOptions, us
         createdTime: formatDateTime(doc.createdAt).createdTime,
         // From relatedData
       id: rd.id || null,
+      txnNo: rd.txnNo ?? null,
       batchNo: rd.batchNo || null,
       inwardType: rd.inwardType || null,
       remarks: rd.remarks || null,
@@ -600,7 +611,7 @@ async getInwardidforupdate(id: string, userId: string): Promise<InwardRegisterUp
       .leftJoin('inwardProducts.variant', 'variant')
       .leftJoin('ir.customerName','customer')
       .select([
-        'ir.id', 'ir.inwardType', 'ir.batchNo', 'ir.source', 'ir.date',
+        'ir.id', 'ir.inwardType', 'ir.batchNo', 'ir.txnNo', 'ir.source', 'ir.date',
         'ir.totalWeightInKg', 'ir.incomingGrossQty', 'ir.incomingNetQty',
         'ir.inwardGrossQty', 'ir.inwardNetQty', 'ir.inwardCost', 'ir.remarks', 'ir.createdAt',
         'grnNo.id', 'location.id', 'fromLocation.id', 'companyName.id',
@@ -632,6 +643,7 @@ async getInwardidforupdate(id: string, userId: string): Promise<InwardRegisterUp
       createdDate,
       createdTime,
       inwardType: inwardRegister.inwardType,
+      txnNo: inwardRegister.txnNo ?? null,
       companyName: inwardRegister.companyName?.id ?? null,
       location: inwardRegister.location?.id ?? null,
       fromLocation: inwardRegister.fromLocation?.id ?? null,
@@ -722,7 +734,16 @@ console.log(transformedInwardRegister)
       this.priceLinesFromSource(data, resolvedSource);
 
       Object.assign(inwardRegister, data);
-      return manager.save(inwardRegister);
+      const saved = await manager.save(inwardRegister);
+      // Re-attach: moves the Inward when its source changed, else refreshes the transaction.
+      saved.txnNo = await attachToReceivingSource(manager, {
+        sourceType: resolvedSource.sourceType,
+        sourceId: resolvedSource.sourceId,
+        docType: 'inward',
+        docId: id,
+        docNo: saved.inwardNo ?? null,
+      });
+      return saved;
     });
 
     await this.auditLogService.logChange(
@@ -816,6 +837,7 @@ console.log(transformedInwardRegister)
     inwardRegister.deletionScheduledAt = sixMonthsFromNow;
     console.log('in delete service', inwardRegister.deletionScheduledAt);
     await this.inwardRegisterRepo.save(inwardRegister);
+    await refreshProcessingTransaction(this.inwardRegisterRepo.manager, 'inward', id);
     console.log(`InwardRegister with ID ${id} marked for deletion.`);
     await this.invalidateCache(id);
     return {No:inwardRegister.inwardNo};
@@ -994,7 +1016,7 @@ public async getAllInwardRegisters(queryOptions: PaginationOptions, userId: stri
         .leftJoin('ir.purchasedBy', 'purchasedBy')
         .leftJoin('ir.inwardBy', 'inwardBy')
         .select([
-          'ir.id', 'ir.batchNo', 'ir.inwardType', 'ir.inwardNo', 'ir.source',
+          'ir.id', 'ir.batchNo', 'ir.inwardType', 'ir.inwardNo', 'ir.txnNo', 'ir.source',
           'ir.inwardNetQty', 'ir.inwardGrossQty', 'ir.incomingNetQty', 'ir.incomingGrossQty',
           'ir.inwardCost', 'ir.totalWeightInKg', 'ir.remarks', 'ir.date',
           'grnNo.grnNo', 'deliveryChallanNo.challanNo', 'rbcNo.rbcNo',
@@ -1022,6 +1044,7 @@ public async getAllInwardRegisters(queryOptions: PaginationOptions, userId: stri
           createdDate,
           createdTime,
           id: rd?.id ?? null,
+          txnNo: rd?.txnNo ?? null,
           batchNo: rd?.batchNo ?? null,
           inwardType: rd?.inwardType ?? null,
           inwardNo: rd?.inwardNo ?? null,
@@ -1128,7 +1151,7 @@ public async getInwardregisterByIdForView(docid: string, userId: string, isAdmin
       .leftJoin('inwardProducts.uom', 'uom')
       .leftJoin('inwardProducts.variant', 'variant')
       .select([
-        'ir.id', 'ir.inwardType', 'ir.inwardNo', 'ir.batchNo', 'ir.remarks', 'ir.source',
+        'ir.id', 'ir.inwardType', 'ir.inwardNo', 'ir.txnNo', 'ir.batchNo', 'ir.remarks', 'ir.source',
         'ir.incomingGrossQty', 'ir.incomingNetQty', 'ir.inwardGrossQty', 'ir.inwardNetQty',
         'ir.inwardCost', 'ir.totalWeightInKg', 'ir.date', 'ir.createdAt',
         'grnNo.grnNo', 'deliveryChallanNo.challanNo', 'rbcNo.rbcNo',
@@ -1211,6 +1234,7 @@ public async getInwardregisterByIdForView(docid: string, userId: string, isAdmin
       id: inwardRegister.id,
       inwardType: inwardRegister.inwardType,
       inwardNo: inwardRegister.inwardNo,
+      txnNo: inwardRegister.txnNo ?? null,
       batchNo: inwardRegister.batchNo,
       remarks: inwardRegister.remarks,
       source: inwardRegister.source,
@@ -1282,6 +1306,7 @@ public async deleteMultipleInwardRegister(ids: string[]): Promise<BulkDeleteResu
 
       await this.inwardRegisterRepo.softDelete(inwardRegister.id);
       await this.inwardRegisterRepo.update(inwardRegister.id, { isDeleted: true } as any);
+      await refreshProcessingTransaction(this.inwardRegisterRepo.manager, 'inward', inwardRegister.id);
        success.push({ id, No: inwardRegister.inwardNo });
     }
     const message = `Deletion completed. Success: ${success.length}, Failed: ${failed.length}`;

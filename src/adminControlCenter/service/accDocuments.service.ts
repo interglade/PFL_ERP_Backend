@@ -87,11 +87,11 @@ export class AccDocumentsService {
     const rows: any[] = await this.dataSource.query(
       `SELECT type::text AS type,
               COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE status::text = 'COMPLETE')::int AS approved,
-              COUNT(*) FILTER (WHERE status::text IN ('REJECT', 'disapproved'))::int AS rejected
+              COUNT(*) FILTER (WHERE status::text = 'Complete')::int AS approved,
+              COUNT(*) FILTER (WHERE status::text = 'Rejected')::int AS rejected
          FROM documents
         WHERE "isDeleted" = false
-          AND status::text <> 'draft' -- not sent for approval yet
+          AND status::text <> 'Draft' -- not sent for approval yet
         GROUP BY type`,
     );
     const byType = new Map(rows.map((r) => [r.type, r]));
@@ -130,12 +130,12 @@ export class AccDocumentsService {
     const monthStart = sqlTs(nowIst().startOf('month'));
     const counts = (type: string, table: string) => `
       SELECT '${type}' AS type,
-             COUNT(*) FILTER (WHERE status::text IN ('approved', 'pending', 'notapproved'))::int AS total,
-             COUNT(*) FILTER (WHERE status::text IN ('approved', 'pending', 'notapproved')
+             COUNT(*) FILTER (WHERE status::text IN ('Approved', 'Pending', 'Rejected'))::int AS total,
+             COUNT(*) FILTER (WHERE status::text IN ('Approved', 'Pending', 'Rejected')
                                 AND "createdAt" >= $1::timestamp)::int AS "thisMonth",
-             COUNT(*) FILTER (WHERE status::text = 'approved')::int AS approved,
-             COUNT(*) FILTER (WHERE status::text = 'pending')::int AS pending,
-             COUNT(*) FILTER (WHERE status::text = 'notapproved')::int AS rejected
+             COUNT(*) FILTER (WHERE status::text = 'Approved')::int AS approved,
+             COUNT(*) FILTER (WHERE status::text = 'Pending')::int AS pending,
+             COUNT(*) FILTER (WHERE status::text = 'Rejected')::int AS rejected
         FROM ${table}
        WHERE "isDeleted" = false`;
 
@@ -163,15 +163,15 @@ export class AccDocumentsService {
       `SELECT 'Farmer Registration' AS "docType", id::text AS id,
               COALESCE(NULLIF("farmerCode", ''), concat_ws(' ', "farmerfName", "farmerlName")) AS "docNo",
               created_by::text AS "creatorId", ${tsText('"createdAt"')} AS "createdAt", ${days} AS "pendingDays"
-         FROM farmer WHERE "isDeleted" = false AND status::text = 'pending'
+         FROM farmer WHERE "isDeleted" = false AND status::text = 'Pending'
        UNION ALL
        SELECT 'Vendor Registration', id::text, COALESCE(NULLIF(vendor_code, ''), company_name),
               created_by::text, ${tsText('"createdAt"')}, ${days}
-         FROM vendor WHERE "isDeleted" = false AND status::text = 'pending'
+         FROM vendor WHERE "isDeleted" = false AND status::text = 'Pending'
        UNION ALL
        SELECT 'Customer Registration', id::text, COALESCE(NULLIF(customercode, ''), organisation_name),
               created_by::text, ${tsText('"createdAt"')}, ${days}
-         FROM customers WHERE "isDeleted" = false AND status::text = 'pending'`,
+         FROM customers WHERE "isDeleted" = false AND status::text = 'Pending'`,
     );
   }
 

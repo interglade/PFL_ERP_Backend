@@ -14,6 +14,13 @@
  *   consumeDocument — the document was approved: reserved quantity leaves
  *                     stock at the batch's cost.
  * Every movement writes one `stock_ledger` row.
+ *
+ * Transactions (docs/transaction-tracking-plan.md §9.4): every ledger row
+ * carries the posting document's `txn_no`, `postIn` gives a new batch the
+ * posting document's number as `origin_txn_no`, and `consumeDocument` links
+ * the batch's origin transaction to the consuming one (`transaction_links`).
+ * The numbers are read in SQL from the document's header table, so documents
+ * without a number simply write NULL / no link.
  */
 
 import { EntityManager } from 'typeorm';
@@ -21,6 +28,7 @@ import AppError from '../../utils/appError';
 import { returnedRows } from '../../utils/queryRows';
 import { StockMovementType } from './stockLedger.entity';
 import { StockOriginType, StockType } from './stockBatch.entity';
+import { consumeLinkKindOf, consumeLinkSql, txnNoSubquerySql } from '../../transactions/transaction.links';
 
 export interface BatchKey {
   companyId: string;
@@ -66,18 +74,22 @@ async function writeLedger(
     remark?: string | null;
   },
 ): Promise<void> {
+  // The posting document's transaction number, read from its header table (NULL for adjustment / repack).
+  const txnNo = row.doc.id ? txnNoSubquerySql(row.doc.type, '$25') : null;
   await manager.query(
     `INSERT INTO stock_ledger
        (posted_at, posted_by, stock_batch_id, company_id, location_id, product_id, variant_id, uom_id, batch_no, stock_type,
         movement_type, doc_type, doc_id, doc_no, doc_line_id, qty_in, qty_out, kg_in, kg_out, value_in, value_out,
-        qty_after, kg_after, value_after, remark)
-     VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+        qty_after, kg_after, value_after, remark, txn_no)
+     VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+             ${txnNo ?? 'NULL'})`,
     [
       row.postedBy ?? null, row.batchId, row.key.companyId, row.key.locationId, row.key.productId, row.key.variantId,
       row.key.uomId, row.key.batchNo, row.key.stockType, row.movementType, row.doc.type, row.doc.id, row.doc.no,
       row.doc.lineId ?? null, round3(row.qtyIn ?? 0), round3(row.qtyOut ?? 0), round3(row.kgIn ?? 0), round3(row.kgOut ?? 0),
       round2(row.valueIn ?? 0), round2(row.valueOut ?? 0), num(row.after.qty), num(row.after.kg), num(row.after.value),
       row.remark ?? null,
+      ...(txnNo ? [row.doc.id] : []),
     ],
   );
 }
@@ -103,15 +115,19 @@ export async function postIn(
   const value = round2(input.value);
   if (qty <= 0 && kg <= 0) return '';
   const key: BatchKey = { ...input, batchNo: input.batchNo.trim().toUpperCase() };
+  // The batch's origin transaction: the posting document's number (purchase / transfer Inward → R/G/T,
+  // return Inward → the Sale), kept once set.
+  const originTxn = input.doc.id ? txnNoSubquerySql(input.doc.type, '$15') : null;
   const rows: Array<{ id: string; qty: string; net_kg: string; value: string }> = await manager.query(
     `INSERT INTO stock_batch
        (stock_key, company_id, location_id, product_id, variant_id, uom_id, batch_no, stock_type,
         origin_type, origin_id, origin_no, qty, reserved_qty, net_kg, value, unit_cost,
-        first_in_at, last_movement_at, created_at, updated_at)
+        first_in_at, last_movement_at, created_at, updated_at, origin_txn_no)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, $13, $14,
              CASE WHEN $12::numeric > 0 THEN $14::numeric / $12::numeric ELSE 0 END,
-             now(), now(), now(), now())
+             now(), now(), now(), now(), ${originTxn ?? 'NULL'})
      ON CONFLICT (stock_key) DO UPDATE SET
+       origin_txn_no = COALESCE(stock_batch.origin_txn_no, EXCLUDED.origin_txn_no),
        qty = stock_batch.qty + EXCLUDED.qty,
        net_kg = stock_batch.net_kg + EXCLUDED.net_kg,
        value = stock_batch.value + EXCLUDED.value,
@@ -125,6 +141,7 @@ export async function postIn(
     [
       stockKeyOf(key), key.companyId, key.locationId, key.productId, key.variantId, key.uomId, key.batchNo, key.stockType,
       input.originType, input.originId ?? null, input.originNo ?? null, qty, kg, value,
+      ...(originTxn ? [input.doc.id] : []),
     ],
   );
   const row = rows[0];
@@ -249,7 +266,7 @@ export async function reserveLines(
     const kgShare = lineQty > 0 ? round3((p.line.kg * p.qty) / lineQty) : 0;
     await manager.query(
       `INSERT INTO stock_allocation (doc_type, doc_id, doc_no, line_id, stock_batch_id, batch_no, qty, net_kg, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'RESERVED', now(), now())`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Reserved', now(), now())`,
       [input.doc.type, input.doc.id, input.doc.no, p.line.lineId, p.batch.id, p.batch.batch_no, p.qty, kgShare],
     );
   }
@@ -260,12 +277,12 @@ export async function releaseDocument(manager: EntityManager, docType: string, d
   await manager.query(
     `UPDATE stock_batch b SET reserved_qty = GREATEST(b.reserved_qty - a.qty, 0), updated_at = now()
        FROM (SELECT stock_batch_id, SUM(qty) AS qty FROM stock_allocation
-              WHERE doc_type = $1 AND doc_id = $2 AND status = 'RESERVED' GROUP BY stock_batch_id) a
+              WHERE doc_type = $1 AND doc_id = $2 AND status = 'Reserved' GROUP BY stock_batch_id) a
       WHERE b.id = a.stock_batch_id`,
     [docType, docId],
   );
   await manager.query(
-    `UPDATE stock_allocation SET status = 'RELEASED', updated_at = now() WHERE doc_type = $1 AND doc_id = $2 AND status = 'RESERVED'`,
+    `UPDATE stock_allocation SET status = 'Released', updated_at = now() WHERE doc_type = $1 AND doc_id = $2 AND status = 'Reserved'`,
     [docType, docId],
   );
 }
@@ -273,7 +290,7 @@ export async function releaseDocument(manager: EntityManager, docType: string, d
 /** True when the document has allocations (reserved or already consumed). */
 export async function hasAllocations(manager: EntityManager, docType: string, docId: string): Promise<boolean> {
   const rows: Array<{ n: string }> = await manager.query(
-    `SELECT COUNT(*) AS n FROM stock_allocation WHERE doc_type = $1 AND doc_id = $2 AND status IN ('RESERVED', 'CONSUMED')`,
+    `SELECT COUNT(*) AS n FROM stock_allocation WHERE doc_type = $1 AND doc_id = $2 AND status IN ('Reserved', 'Consumed')`,
     [docType, docId],
   );
   return num(rows[0]?.n) > 0;
@@ -285,9 +302,11 @@ export async function consumeDocument(
   input: { docType: string; docId: string; docNo: string | null; movementType: StockMovementType; postedBy?: string | null },
 ): Promise<{ qty: number; kg: number; value: number }> {
   const totals = { qty: 0, kg: 0, value: 0 };
+  const linkKind = consumeLinkKindOf(input.docType);
+  const linkSql = linkKind ? consumeLinkSql(input.docType) : null;
   const allocations: Array<{ id: string; line_id: string | null; stock_batch_id: string; qty: string; net_kg: string }> = await manager.query(
     `SELECT id::text AS id, line_id::text AS line_id, stock_batch_id::text AS stock_batch_id, qty, net_kg
-       FROM stock_allocation WHERE doc_type = $1 AND doc_id = $2 AND status = 'RESERVED' ORDER BY stock_batch_id, id`,
+       FROM stock_allocation WHERE doc_type = $1 AND doc_id = $2 AND status = 'Reserved' ORDER BY stock_batch_id, id`,
     [input.docType, input.docId],
   );
   for (const a of allocations) {
@@ -321,7 +340,7 @@ export async function consumeDocument(
       ),
     );
     await manager.query(
-      `UPDATE stock_allocation SET status = 'CONSUMED', unit_cost = $2, updated_at = now() WHERE id = $1`,
+      `UPDATE stock_allocation SET status = 'Consumed', unit_cost = $2, updated_at = now() WHERE id = $1`,
       [a.id, round2(unitCost * 10000) / 10000],
     );
     await writeLedger(manager, {
@@ -336,6 +355,8 @@ export async function consumeDocument(
       after: { qty: after[0]?.qty, kg: after[0]?.net_kg, value: after[0]?.value },
       postedBy: input.postedBy,
     });
+    // Transaction link: the batch's origin deal → the consuming deal (§9.4).
+    if (linkSql && linkKind) await manager.query(linkSql, [b.id, input.docId, linkKind, qty, kgOut]);
     totals.qty = round3(totals.qty + qty);
     totals.kg = round3(totals.kg + kgOut);
     totals.value = round2(totals.value + valueOut);

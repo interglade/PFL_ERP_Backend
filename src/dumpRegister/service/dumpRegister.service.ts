@@ -32,6 +32,7 @@ import { DumpRegister } from "../entity/dumpRegister.entity";
 import { BulkDeleteResultDto, DeleteResultDto } from "../../global/general.dto";
 import AppError from "../../utils/appError";
 import { ReceivingGuardService } from "../../receiving/service/receivingGuard.service";
+import { attachToReceivingSource, refreshProcessingTransaction } from '../../receiving/receiving.transaction';
 import { priceLineFromSource, round2 } from "../../receiving/receiving.helpers";
 import { ResolvedSource } from "../../receiving/receiving.types";
 import { DumpProduct } from "../entity/dumpProduct.entity";
@@ -232,6 +233,14 @@ const serialNo = await this.generateSerialNo();
           lastActionBy: { id: data.requestedBy },
           document_type_id: savedDumpRegister.id,
         });
+        // The Dump joins its source's transaction (docs/transaction-tracking-plan.md §9.4).
+        savedDumpRegister.txnNo = await attachToReceivingSource(queryRunner.manager, {
+          sourceType: resolvedSource.sourceType,
+          sourceId: resolvedSource.sourceId,
+          docType: 'dump',
+          docId: savedDumpRegister.id,
+          docNo: serialNo,
+        });
 
         
 
@@ -354,6 +363,7 @@ const serialNo = await this.generateSerialNo();
               createdTime: formatDateTime(doc.createdAt).createdTime,
               id: doc.relatedData.id,
               dumpNo: doc.relatedData.dumpNo,
+              txnNo: doc.relatedData.txnNo ?? null,
               companyName: doc.relatedData?.companyName?.name ?? null,
               location: doc.relatedData?.location?.name ?? null,
               grn: doc.relatedData?.grn?.grnNo ?? null,
@@ -439,7 +449,7 @@ const serialNo = await this.generateSerialNo();
       .leftJoin('dumpProducts.variant', 'variant')
       .leftJoin('dumpProducts.uom', 'uom')
       .select([
-        'dr.id', 'dr.dumpType', 'dr.date', 'dr.batchNo', 'dr.remark',
+        'dr.id', 'dr.dumpType', 'dr.txnNo', 'dr.date', 'dr.batchNo', 'dr.remark',
         'dr.totalDumpCost', 'dr.totalCostInWords', 'dr.totalQty', 'dr.createdAt',
         'location.id', 'grn.id', 'deliveryChallanNo.id', 'rbcNo.id',
         'requestedBy.id', 'companyName.id',
@@ -458,6 +468,7 @@ const serialNo = await this.generateSerialNo();
       createdDate,
       createdTime,
       dumpType: dumpRegister.dumpType ?? null,
+      txnNo: dumpRegister.txnNo ?? null,
       location: dumpRegister.location?.id ?? null,
       companyName: dumpRegister.companyName?.id ?? null,
       date: dumpRegister.date,
@@ -512,7 +523,7 @@ const serialNo = await this.generateSerialNo();
       .leftJoin('dumpProducts.variant', 'variant')
       .leftJoin('dumpProducts.uom', 'uom')
       .select([
-        'dr.id', 'dr.dumpNo', 'dr.dumpType', 'dr.date', 'dr.batchNo',
+        'dr.id', 'dr.dumpNo', 'dr.txnNo', 'dr.dumpType', 'dr.date', 'dr.batchNo',
         'dr.totalDumpCost', 'dr.totalCostInWords', 'dr.totalQty', 'dr.remark', 'dr.createdAt',
         'location.name', 'grn.grnNo', 'deliveryChallanNo.challanNo', 'rbcNo.rbcNo',
         'companyName.name',
@@ -535,6 +546,7 @@ const serialNo = await this.generateSerialNo();
       createdBy: document.createdBy,
       approvalSummary: document.approvalSummary ?? null,
       dumpNo: dumpRegister.dumpNo ?? null,
+      txnNo: dumpRegister.txnNo ?? null,
       grn: dumpRegister.grn?.grnNo ?? null,
       deliveryChallanNo: dumpRegister.deliveryChallanNo?.challanNo ?? null,
       rbcNo: dumpRegister.rbcNo?.rbcNo ?? null,
@@ -600,7 +612,7 @@ async getAllDumpRegisters(queryOptions: PaginationOptions, userId: string, isAdm
         .leftJoin('dr.deliveryChallanNo', 'deliveryChallanNo')
         .leftJoin('dr.rbcNo', 'rbcNo')
         .select([
-          'dr.id', 'dr.dumpNo', 'dr.date', 'dr.batchNo', 'dr.totalQty',
+          'dr.id', 'dr.dumpNo', 'dr.txnNo', 'dr.date', 'dr.batchNo', 'dr.totalQty',
           'dr.totalDumpCost', 'dr.totalCostInWords', 'dr.remark', 'dr.dumpType',
           'companyName.name', 'location.name',
           'grn.grnNo', 'deliveryChallanNo.challanNo', 'rbcNo.rbcNo',
@@ -628,6 +640,7 @@ async getAllDumpRegisters(queryOptions: PaginationOptions, userId: string, isAdm
           createdTime,
           id: rd.id,
           dumpNo: rd.dumpNo ?? null,
+          txnNo: rd.txnNo ?? null,
           companyName: rd.companyName?.name ?? null,
           location: rd.location?.name ?? null,
           grn: rd.grn?.grnNo ?? null,
@@ -775,7 +788,16 @@ public async updateDumpRegister(
       existingDumpRegister.dumpProducts = newDumpProducts;
     }
 
-    return manager.save(existingDumpRegister);
+    const saved = await manager.save(existingDumpRegister);
+    // Re-attach: moves the Dump when its source changed, else refreshes the transaction.
+    saved.txnNo = await attachToReceivingSource(manager, {
+      sourceType: resolvedSource.sourceType,
+      sourceId: resolvedSource.sourceId,
+      docType: 'dump',
+      docId: id,
+      docNo: saved.dumpNo ?? null,
+    });
+    return saved;
   });
 
 
@@ -817,6 +839,7 @@ async deleteDumpRegister(id: string): Promise<DeleteResultDto | null> {
 
   
   await this.dumpRegisterRepository.save(dumpRegister);
+  await refreshProcessingTransaction(this.dumpRegisterRepository.manager, 'dump', id);
   await this.invalidateDumpCache(id);
 
   //console.log(`Dump Register with ID ${id} marked for deletion in 6 months.`);
@@ -861,6 +884,7 @@ public async deleteMultipleDumpRegisters(ids: string[]): Promise<BulkDeleteResul
 
       await this.dumpRegisterRepository.softDelete(dumpRegister.id);
       await this.dumpRegisterRepository.update(dumpRegister.id, { isDeleted: true } as any);
+      await refreshProcessingTransaction(this.dumpRegisterRepository.manager, 'dump', dumpRegister.id);
       success.push({id,No:dumpRegister.dumpNo});
     } catch (error: any) {
       failed.push({ id, reason: error.message || 'Unknown error' });

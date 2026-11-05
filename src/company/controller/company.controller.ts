@@ -52,7 +52,7 @@ export class CompanyController {
 
   // ─── Get All For Update ───────────────────────────────────────────────────
 
-  @httpGet('/update/getall')
+  @httpGet('/update/getall', requireRole(Role.SUPER_ADMIN))
   async getAllCompany(
     @request() req: Request,
     @response() res: Response,
@@ -100,7 +100,7 @@ export class CompanyController {
 
   // ─── Get By ID ────────────────────────────────────────────────────────────
 
-  @httpGet('/:id')
+  @httpGet('/:id', requireRole(Role.SUPER_ADMIN))
   async getByIdCompany(
     @request() req: Request,
     @response() res: Response,
@@ -123,9 +123,9 @@ export class CompanyController {
     }
   }
 
-  // ─── Write routes: admin only ─────────────────────────────────────────────
+  // ─── Write routes: Super Admin only ─────────────────────────────────────────────
 
-  @httpPatch('/:id', captureUser, requireRole(Role.ADMIN))
+  @httpPatch('/:id', captureUser, requireRole(Role.SUPER_ADMIN))
   async updateCompany(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -144,7 +144,7 @@ export class CompanyController {
     }
   }
 
-  @httpPost('/:id/bank-details', captureUser, requireRole(Role.ADMIN))
+  @httpPost('/:id/bank-details', captureUser, requireRole(Role.SUPER_ADMIN))
   async addBankDetail(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -163,7 +163,7 @@ export class CompanyController {
     }
   }
 
-  @httpPatch('/bank-details/:bankId', captureUser, requireRole(Role.ADMIN))
+  @httpPatch('/bank-details/:bankId', captureUser, requireRole(Role.SUPER_ADMIN))
   async updateBankDetail(
     @requestParam('bankId') bankId: string,
     @request() req: Request,
@@ -182,7 +182,7 @@ export class CompanyController {
     }
   }
 
-  @httpDelete('/bank-details/:bankId', captureUser, requireRole(Role.ADMIN))
+  @httpDelete('/bank-details/:bankId', captureUser, requireRole(Role.SUPER_ADMIN))
   async deleteBankDetail(
     @requestParam('bankId') bankId: string,
     @request() req: Request,

@@ -17,11 +17,11 @@ import { User } from '../../employee/entity/user.entity';
 import { DocumentDefinition } from '../../documentDef/entity/documentdef.entity';
 
 export enum DocumentApprovalStatus {
-  PENDING = 'PENDING',
-  APPROVED = 'APPROVED',
-  REJECTED = 'REJECTED',
-  IN_PROGRESS = 'IN_PROGRESS',
-  ESCALATED = 'ESCALATED',
+  PENDING = 'Pending',
+  APPROVED = 'Approved',
+  REJECTED = 'Rejected',
+  IN_PROGRESS = 'In Progress',
+  ESCALATED = 'Escalated',
 }
 
 export enum ApprovalStage {

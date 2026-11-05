@@ -1,3 +1,7 @@
+import { protectBody } from '../../middleware/protectBody';
+import { checkPermission } from '../../middleware/checkPermission';
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -16,6 +20,7 @@ import { TYPES } from '../../types';
 import AppError from '../../utils/appError';
 import { Status } from '../../utils/status.enum';
 import { ControllerLogger } from '../../utils/controllerLogger';
+import { uploadSingle } from '../../middleware/uploadsingle.middleware';
 import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
 import { readIds, readListOptions } from '../../transport/transport.query';
 import { TransporterService } from '../service/transporter.service';
@@ -28,7 +33,65 @@ export class TransporterController {
     private readonly transporterService: TransporterService,
   ) {}
 
-  @httpPost('/')
+  // ─── Excel (docs/master-data-excel-plan.md Phase 7) ───────────────────────
+
+  @httpGet('/export/excel', checkPermission('transporters', 'export'))
+  public async exportExcel(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const file = await this.transporterService.exportToExcel(res.locals.user.id);
+      ControllerLogger.logList('Transporter Excel export', req, res);
+      res.status(200).json({
+        status: 'success',
+        message: `${file.rowCount} transporter(s) exported successfully`,
+        data: { downloadUrl: file.downloadUrl, fileName: file.fileName, totalRecords: file.rowCount },
+      });
+    } catch (err) {
+      ControllerLogger.logError('Transporter Excel export', err, req, res);
+      next(err);
+    }
+  }
+
+  @httpGet('/download/template', checkPermission('transporters', 'create'))
+  public async downloadExcelTemplate(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const file = await this.transporterService.buildExcelTemplate();
+      ControllerLogger.logList('Transporter Excel template', req, res);
+      res.status(200).json({
+        status: 'success',
+        message: 'Template ready',
+        data: { downloadUrl: file.downloadUrl, fileName: file.fileName, totalRecords: 0 },
+      });
+    } catch (err) {
+      ControllerLogger.logError('Transporter Excel template', err, req, res);
+      next(err);
+    }
+  }
+
+  @httpPost('/upload', checkPermission('transporters', 'create'), uploadSingle.single('file'))
+  public async uploadExcel(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const fileUrl = (req.file as any)?.location as string | undefined;
+      if (!fileUrl) return next(new AppError(400, 'No file uploaded'));
+
+      const summary = await this.transporterService.importFromExcel(fileUrl, res.locals.user.id);
+      ControllerLogger.logSuccess('Transporter Excel uploaded', 'bulk', req, res);
+      res.status(200).json({
+        status: 'success',
+        message:
+          `${summary.created} transporter(s) imported` +
+          (summary.drafted ? `, ${summary.drafted} saved as draft` : '') +
+          (summary.updated ? `, ${summary.updated} draft(s) completed` : '') +
+          (summary.skipped.length ? `, ${summary.skipped.length} skipped` : '') +
+          (summary.failed.length ? `, ${summary.failed.length} failed` : ''),
+        data: summary,
+      });
+    } catch (err) {
+      ControllerLogger.logError('Transporter Excel upload', err, req, res);
+      next(err);
+    }
+  }
+
+  @httpPost('/', checkPermission('transporters', 'create'))
   public async createTransporter(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const transporter = await this.transporterService.create(req.body, res.locals.user.id);
@@ -47,7 +110,7 @@ export class TransporterController {
     }
   }
 
-  @httpGet('/')
+  @httpGet('/', checkPermission('transporters', 'view'))
   public async getAllTransporters(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const options = readListOptions(req, TRANSPORTER_FILTERS);
@@ -78,7 +141,7 @@ export class TransporterController {
     }
   }
 
-  @httpGet('/view/:id')
+  @httpGet('/view/:id', checkPermission('transporters', 'view'))
   public async getTransporterForView(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -96,7 +159,7 @@ export class TransporterController {
     }
   }
 
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkPermission('transporters', 'edit'))
   public async getTransporterForUpdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -115,7 +178,7 @@ export class TransporterController {
   }
 
   /** Submits a draft (pending, or approved straight away for an admin / verifier). */
-  @httpPatch('/submit/:id')
+  @httpPatch('/submit/:id', checkPermission('transporters', 'create'))
   public async submitTransporter(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -136,7 +199,7 @@ export class TransporterController {
     }
   }
 
-  @httpPatch('/approve/:id')
+  @httpPatch('/approve/:id', requireRole(Role.ADMIN, Role.VERIFIER))
   public async approveTransporter(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -160,7 +223,7 @@ export class TransporterController {
     }
   }
 
-  @httpPut('/:id')
+  @httpPut('/:id', checkPermission('transporters', 'edit'), protectBody)
   public async updateTransporter(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -181,7 +244,7 @@ export class TransporterController {
     }
   }
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', requireRole(Role.SUPER_ADMIN))
   public async deleteMultipleTransporters(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const ids = readIds(req);
@@ -198,7 +261,7 @@ export class TransporterController {
     }
   }
 
-  @httpDelete('/:id')
+  @httpDelete('/:id', requireRole(Role.SUPER_ADMIN))
   public async deleteTransporter(
     @requestParam('id') id: string,
     @request() req: Request,

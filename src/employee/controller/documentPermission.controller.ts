@@ -1,3 +1,6 @@
+import { isSuperAdmin } from '../../utils/roles';
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import {
   controller,
   httpGet,
@@ -24,7 +27,7 @@ export class DocumentPermissionController {
     readonly documentPermissionService: DocumentPermissionService,
   ) {}
 
-  @httpGet('/:id')
+  @httpGet('/:id', requireRole(Role.ADMIN))
   public async getDocumentPermissionWithId(
     @request() req: Request,
     @response() res: Response,
@@ -47,7 +50,7 @@ export class DocumentPermissionController {
       next(err);
     }
   }
-  @httpGet('/')
+  @httpGet('/', requireRole(Role.ADMIN))
   public async getAllDocumentPermissions(
     @request() req: Request,
     @response() res: Response,
@@ -68,7 +71,7 @@ export class DocumentPermissionController {
     }
   }
 
-  @httpPost('/')
+  @httpPost('/', requireRole(Role.ADMIN))
   public async createPermission(
     @request() req: Request,
     @response() res: Response,
@@ -76,6 +79,8 @@ export class DocumentPermissionController {
   ) {
     try {
       const data = req.body;
+      // Delete is granted by a Super Admin only (same rule as the employee form)
+      if (data && typeof data === 'object' && !isSuperAdmin(res.locals.user)) data.canDelete = false;
       const result =
         await this.documentPermissionService.createDocumentPermission(data);
         if(!result){

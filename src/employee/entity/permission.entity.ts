@@ -46,6 +46,10 @@ export class DocumentPermission extends Model {
   @Column({ default: false })
   canDownload: boolean;
 
+  /** Excel export of lists and reports (canDownload covers the single-document PDF / print). */
+  @Column({ default: false })
+  canExport: boolean;
+
   /**
    * Only relevant when documentDefinition.documentType === 'INVENTORY'
    * true  → show inventory across all locations

@@ -10,11 +10,11 @@ import { normalizePhone, PHONE_REGEX } from '../transport/transport.utils';
  * added the new `drivers` columns.
  *
  * Driver rows created before the registration flow existed have no creator, no
- * driver code and the old default status `pending`, which would hide them from
+ * driver code and the old default status `Pending`, which would hide them from
  * employees and leave them waiting for an approval nobody will ask for. For every
  * live driver without a creator this script
  *   - gives it the next free `DR-00001` style code,
- *   - sets `pending` to `approved` (other statuses are left alone),
+ *   - sets `Pending` to `Approved` (other statuses are left alone),
  *   - tidies the phone number to ten digits when that yields a valid number that no
  *     other driver already uses; anything else is listed and left as it is.
  *
@@ -70,7 +70,7 @@ async function main(): Promise<void> {
       for (const row of rows) {
         next += 1;
         const code = `DR-${String(next).padStart(5, '0')}`;
-        const nextStatus = row.status === 'pending' ? 'approved' : row.status;
+        const nextStatus = row.status === 'Pending' ? 'Approved' : row.status;
         if (nextStatus !== row.status) approved += 1;
 
         let phone = row.phoneNumber;

@@ -39,6 +39,7 @@ import { Aqr } from "../entity/aqr.entity";
 import { AqrProduct } from "../entity/aqrProduct.entity";
 import { AqrParameter, QualityParameterType } from "../entity/aqrQuality.entity";
 import { ReceivingGuardService } from "../../receiving/service/receivingGuard.service";
+import { attachToReceivingSource, refreshProcessingTransaction } from "../../receiving/receiving.transaction";
 import { ReceivingSourceType, ResolvedSource } from "../../receiving/receiving.types";
 import { isKgCounted, matchSourceKey, productKey, transitLoss } from "../../receiving/receiving.helpers";
 import {
@@ -450,6 +451,14 @@ export class AqrService {
         lastActionBy: { id: requestedBy },
         document_type_id: savedAqr.id,
       });
+      // The AQR joins its source's transaction (docs/transaction-tracking-plan.md §9.4).
+      savedAqr.txnNo = await attachToReceivingSource(queryRunner.manager, {
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
+        docType: "aqr",
+        docId: savedAqr.id,
+        docNo: savedAqr.aqrNo ?? null,
+      });
 
       await queryRunner.commitTransaction();
       const assignment = await this.documentbService.startApprovalFlow(document.id);
@@ -497,7 +506,7 @@ export class AqrService {
       .leftJoin("line.uom", "lineUom")
       .leftJoin("line.parameters", "lineParameters")
       .select([
-        "aqr.id", "aqr.aqrNo", "aqr.aqrFor", "aqr.source", "aqr.arrivalDate",
+        "aqr.id", "aqr.aqrNo", "aqr.txnNo", "aqr.aqrFor", "aqr.source", "aqr.arrivalDate",
         "aqr.arrivedQty", "aqr.samplingQty", "aqr.totalQty",
         "aqr.totalpercent", "aqr.remark", "aqr.createdAt",
         "deliveryChallanNo.id", "deliveryChallanNo.challanNo",
@@ -529,6 +538,7 @@ export class AqrService {
     const response: GetAqrForUpdateResponseDto = {
       id: result.id,
       aqrNo: result.aqrNo ?? null,
+      txnNo: result.txnNo ?? null,
       aqrFor: result.aqrFor,
       companyName: result.companyName?.id || null,
       location: result.location?.id || null,
@@ -667,6 +677,7 @@ export class AqrService {
         id: rd.id,
         aqrFor: rd.aqrFor || null,
         aqrNo: rd.aqrNo || null,
+        txnNo: rd.txnNo ?? null,
         companyName: rd.companyName?.name || null,
         location: rd.location?.name || null,
         source: rd.source || null,
@@ -778,6 +789,7 @@ export class AqrService {
         createdTime: formatDateTime(doc.createdAt).createdTime,
         id: rd.id || null,
         aqrNo: rd.aqrNo || null,
+        txnNo: rd.txnNo ?? null,
         aqrFor: rd.aqrFor || null,
         companyName: rd.companyName?.id || null,
         location: rd.location?.id || null,
@@ -890,7 +902,7 @@ export class AqrService {
       .leftJoin('aqr.qcCheckBy', 'qcCheckBy')
       .leftJoin('aqr.verifiedBy', 'verifiedBy')
       .select([
-        'aqr.id', 'aqr.aqrNo', 'aqr.aqrFor', 'aqr.source', 'aqr.arrivalDate',
+        'aqr.id', 'aqr.aqrNo', 'aqr.txnNo', 'aqr.aqrFor', 'aqr.source', 'aqr.arrivalDate',
         'aqr.arrivedQty', 'aqr.samplingQty', 'aqr.totalQty',
         'aqr.totalpercent', 'aqr.remark', 'aqr.createdAt',
         'deliveryChallanNo.id', 'deliveryChallanNo.challanNo',
@@ -975,6 +987,7 @@ export class AqrService {
       approvalSummary: document.approvalSummary ?? null,
       id: aqr.id,
       aqrNo: aqr.aqrNo ?? null,
+      txnNo: aqr.txnNo ?? null,
       aqrFor: aqr.aqrFor,
       companyName: aqr.companyName?.id ?? null,
       location: aqr.location?.name ?? null,
@@ -1211,7 +1224,16 @@ export class AqrService {
       if (data.verifiedBy !== undefined) existingAqr.verifiedBy = userRef(data.verifiedBy) as Aqr['verifiedBy'];
 
       await this.applyLineUpdate(existingAqr, lines, resolved, manager);
-      return manager.save(existingAqr);
+      const saved = await manager.save(existingAqr);
+      // Re-attach: moves the AQR when its source changed, else refreshes the transaction.
+      saved.txnNo = await attachToReceivingSource(manager, {
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
+        docType: "aqr",
+        docId: id,
+        docNo: saved.aqrNo ?? null,
+      });
+      return saved;
     });
 
     await this.auditLogService.logChange("AQR", id, oldData, updatedAqr, updatedBy);
@@ -1232,6 +1254,7 @@ export class AqrService {
 
     aqr.deletionScheduledAt = sixMonthsFromNow;
     await this.aqrRepo.save(aqr);
+    await refreshProcessingTransaction(this.aqrRepo.manager, "aqr", id);
     await this.invalidateAqrCache(id);
 
     return { aqrNo: aqr.aqrNo };
@@ -1256,6 +1279,7 @@ export class AqrService {
 
         await this.aqrRepo.softDelete(aqr.id);
         await this.aqrRepo.update(aqr.id, { isDeleted: true } as any);
+        await refreshProcessingTransaction(this.aqrRepo.manager, "aqr", aqr.id);
         success.push({ id, aqrNo: aqr.aqrNo });
       } catch (error: any) {
         failed.push({ id, reason: error.message || "Unknown error" });

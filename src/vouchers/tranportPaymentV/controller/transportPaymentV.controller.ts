@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../../approvalFlow/documentAccess';
+import { checkPermission } from '../../../middleware/checkPermission';
+import { requireRole } from '../../../middleware/requireRole';
+import { Role } from '../../../employee/entity/user.entity';
 import { Request,  Response } from 'express';
 import { controller, httpGet, httpPost, httpDelete, requestParam, requestBody, response, next, request, httpPatch } from 'inversify-express-utils';
 import { inject } from 'inversify';
@@ -41,7 +47,7 @@ export class TPVoucherController {
     
   ) {}
 
-  @httpPost('/', uploadAttachments)
+  @httpPost('/', checkPermission('transport-payment-voucher', 'create'), uploadAttachments)
   public async createTPVoucher(
     @requestBody() tpVoucherData:CreateTPVoucherDto ,
     @request() req:Request,
@@ -117,7 +123,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('transport-payment-voucher', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -131,7 +137,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
     });
   }
 
-  @httpGet('/')
+  @httpGet('/', checkPermission('transport-payment-voucher', 'view'))
   public async getAllTPVouchers(
     @request() req:Request,
     @response() res: Response,
@@ -180,7 +186,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
     }
   }
 
-  @httpGet('/recycle-bin')
+  @httpGet('/recycle-bin', requireRole(Role.SUPER_ADMIN))
   public async getAllRecycleBinTPVouchers(
     @request() req:Request,
     @response() res: Response,
@@ -219,7 +225,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
   }
 
 
-  @httpGet('/:id/view')
+  @httpGet('/:id/view', checkPermission('transport-payment-voucher', 'view'), guardDocumentView(ApprovalDocType.TRANSPORT_PAYMENT_VOUCHER, 'voucher'))
   public async getTPVoucherByIdForView(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -247,7 +253,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
     }
   }
 
-  @httpGet('/:id/update')
+  @httpGet('/:id/update', checkPermission('transport-payment-voucher', 'edit'), guardDocumentEdit(ApprovalDocType.TRANSPORT_PAYMENT_VOUCHER, 'voucher'))
   public async getTPVoucherByIdForUpdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -274,7 +280,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
       next(error);
     }
   }
-  @httpPatch('/:id', captureUser, uploadAttachments)
+  @httpPatch('/:id', checkPermission('transport-payment-voucher', 'edit'), guardDocumentEdit(ApprovalDocType.TRANSPORT_PAYMENT_VOUCHER, 'voucher'), captureUser, uploadAttachments, protectBody)
   public async updateTPVoucher(
     @requestParam('id') id: string,
     @requestBody() updateData: any,
@@ -338,7 +344,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
     }
   }
 
-  @httpDelete('/:id')
+  @httpDelete('/:id', checkPermission('transport-payment-voucher', 'delete'), guardDocumentDelete(ApprovalDocType.TRANSPORT_PAYMENT_VOUCHER, 'voucher'))
   public async deleteTPVoucher(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -400,7 +406,7 @@ const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName 
     }
   }
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('transport-payment-voucher', 'delete'), guardDocumentDelete(ApprovalDocType.TRANSPORT_PAYMENT_VOUCHER, 'voucher'))
       public async deleteMultipleTransportPaymentVoucher(
         @request() req: Request,
         @response() res: Response,

@@ -1,4 +1,4 @@
-import { Role } from '../entity/user.entity';
+import { EmployeeStatus, Role } from '../entity/user.entity';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared sub-types
@@ -25,10 +25,11 @@ export interface UserPermissionDto {
   canEdit?: boolean;
   canDelete?: boolean;
   canDownload?: boolean;
+  canExport?: boolean;
 }
 
 /** User status values. */
-export type UserStatus = 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'DRAFT';
+export type UserStatus = EmployeeStatus;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Create User DTO  (POST /employee)
@@ -57,7 +58,7 @@ export interface CreateUserDto {
   employeeId?: string | null;             // generated internally by service
 
   // ── Status ────────────────────────────────────────────────────────────────
-  status?: UserStatus;                     // defaults to INACTIVE
+  status?: UserStatus;                     // defaults to Inactive
 
   // ── Address ───────────────────────────────────────────────────────────────
   isAddressSame?: boolean | null;
@@ -110,6 +111,8 @@ export interface UserListItemDto {
   status: UserStatus;
   /** Temp plain password visible in list (for admin handoff) */
   password: string | null | undefined;
+  /** Any permission tick at all; false after an import until the admin sets them. */
+  permissionsSet: boolean;
   /** Resolved display name: branch name or office name */
   joiningLocation: string | null;
   currentWorkLocation: string | null;
@@ -140,6 +143,7 @@ export interface UserPermissionViewDto {
   canEdit: boolean;
   canDelete: boolean;
   canDownload: boolean;
+  canExport: boolean;
   /** ID of the related document definition */
   documentDefinition: string | null;
 }
@@ -252,40 +256,6 @@ export interface UpdateUserStatusDto {
 
 export interface BulkDeleteUsersDto {
   ids: string[];
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Excel upload row DTO  (POST /employee/user/upload)
-// Shape of one mapped row before it hits the service.
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface UserExcelRowDto {
-  firstName?: string;
-  lastName?: string;
-  username?: string;
-  primaryMobNo?: string;
-  secondaryMobNo?: string;
-  primaryEmail?: string;
-  secondaryEmail?: string;
-  employeeId?: string;
-  designation?: string;
-  cugNo?: string;
-  workEmail?: string;
-  joiningDate?: string;
-  department?: string[];
-  roles?: string[];
-  status?: string;
-  isAddressSame?: boolean;
-  otherWorkLocationInput?: string;
-  residentialAddress?: UserAddressDto;
-  permanentAddress?: UserAddressDto;
-  companyName?: { name?: string; officeAddress?: string };
-  joiningLocation?: { name?: string };
-  joiningOffice?: { name?: string };
-  currentWorkLocation?: { name?: string };
-  currentOfficeLocation?: { name?: string };
-  accessLocation?: string;
-  permissions?: UserPermissionDto[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

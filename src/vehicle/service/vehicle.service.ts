@@ -13,8 +13,10 @@ import { Transporter } from '../../transporter/entity/transporter.entity';
 import {
   CACHE_TTL_DETAIL,
   CACHE_TTL_LIST,
+  TransportExcelConfig,
   TransportRegistrationService,
 } from '../../transport/transportRegistration.service';
+import { VEHICLE_SHEET, vehicleRowBody } from '../../transport/transportExcel';
 import {
   assertMatches,
   blankToNull,
@@ -36,6 +38,13 @@ export class VehicleService extends TransportRegistrationService<Vehicle> {
   protected readonly tableName = 'vehicles';
   protected readonly codeColumn = 'vehicleCode';
   protected readonly codePrefix = 'VH-';
+  protected readonly excel: TransportExcelConfig = {
+    sheet: VEHICLE_SHEET,
+    master: 'vehicle',
+    fileStem: 'Vehicles',
+    relations: ['transporter'],
+    toBody: vehicleRowBody,
+  };
 
   constructor(
     @inject(TYPES.VehicleRepository) vehicleRepository: VehicleRepository,

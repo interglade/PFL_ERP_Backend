@@ -8,7 +8,7 @@ import { Status } from '../../utils/status.enum';
 
 export const VEHICLE_FILTERS: MasterFilterDefinition = {
   fields: [
-    { param: 'status', kind: 'enum', values: Object.values(Status), exprs: ['vehicle.status'] },
+    { param: 'status', kind: 'enum', values: Object.values(Status), exact: true, exprs: ['vehicle.status'] },
     { param: 'createdFrom', aliases: ['startDate', 'dateFrom'], kind: 'dayFrom', exprs: ['vehicle.createdAt'] },
     { param: 'createdTo', aliases: ['endDate', 'dateTo'], kind: 'dayTo', exprs: ['vehicle.createdAt'] },
     { param: 'createdById', kind: 'id', exprs: ['vehicle.createdBy'] },

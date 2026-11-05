@@ -25,7 +25,7 @@ export interface FilterQueryOptions {
 }
 
 const APPROVAL_STAGES = ['verified', 'firstApproved', 'secondApproved', 'thirdApproved', 'firstFinalized', 'secondFinalized'] as const;
-const APPROVED_ACTIONS = [ApproverStatus.APPROVED, ApproverStatus.VERIFIED];
+const APPROVED_ACTIONS = [ApproverStatus.APPROVED];
 
 /** Escapes LIKE wildcards so user input is matched literally. */
 export function likePattern(value: string): string {

@@ -84,9 +84,9 @@ describe('weekWindowsForMonth', () => {
 });
 
 describe('toPlanMonth', () => {
-  // The two plan tables number their months differently and both are live.
-  // Reading procurement as 1-based made a request for July return the August
-  // plan, which is what this guards against.
+  // Both plan tables store 0-based months (the plan forms send the MONTH
+  // dropdown value, January = 0). Reading either one with a 1-12 month finds
+  // the next month's plan, which looks exactly like "no plan".
 
   it('shifts a procurement month down, because that table is 0-based', () => {
     expect(toPlanMonth(1, 'procurement')).toBe(0); // January
@@ -94,21 +94,23 @@ describe('toPlanMonth', () => {
     expect(toPlanMonth(12, 'procurement')).toBe(11); // December
   });
 
-  it('leaves a sales month alone, because that table is 1-based', () => {
-    expect(toPlanMonth(1, 'sales')).toBe(1);
-    expect(toPlanMonth(7, 'sales')).toBe(7);
-    expect(toPlanMonth(12, 'sales')).toBe(12);
+  it('shifts a sales month down too - a November sales plan is stored as 10', () => {
+    expect(toPlanMonth(1, 'sales')).toBe(0);
+    expect(toPlanMonth(11, 'sales')).toBe(10);
+    expect(toPlanMonth(12, 'sales')).toBe(11);
   });
 
-  it('keeps the two conventions exactly one apart', () => {
+  it('uses the same convention for both tables', () => {
     for (let month = 1; month <= 12; month++) {
-      expect(toPlanMonth(month, 'sales') - toPlanMonth(month, 'procurement')).toBe(1);
+      expect(toPlanMonth(month, 'sales')).toBe(toPlanMonth(month, 'procurement'));
     }
   });
 
-  it('never lets a procurement month leak outside 0-11', () => {
-    const stored = Array.from({ length: 12 }, (_, i) => toPlanMonth(i + 1, 'procurement'));
-    expect(stored).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  it('never lets a month leak outside 0-11', () => {
+    for (const plan of ['procurement', 'sales'] as const) {
+      const stored = Array.from({ length: 12 }, (_, i) => toPlanMonth(i + 1, plan));
+      expect(stored).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    }
   });
 });
 
@@ -120,8 +122,9 @@ describe('fromPlanMonth', () => {
     }
   });
 
-  it('reads a stored procurement month back as a human month', () => {
+  it('reads a stored month back as a human month', () => {
     expect(fromPlanMonth(0, 'procurement')).toBe(1); // stored 0 is January
     expect(fromPlanMonth(7, 'procurement')).toBe(8); // stored 7 is August
+    expect(fromPlanMonth(10, 'sales')).toBe(11); // stored 10 is November
   });
 });

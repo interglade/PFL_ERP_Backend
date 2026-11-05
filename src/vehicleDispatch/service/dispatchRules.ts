@@ -458,7 +458,7 @@ export async function notifyAutoRejected(
 
 // ─── Status lists ─────────────────────────────────────────────────────────────
 
-export type SourceDispatchStatus = 'none' | 'pending' | 'approved' | 'not-required';
+export type SourceDispatchStatus = 'None' | 'Pending' | 'Approved' | 'Not Required';
 
 export interface SourceDispatchInfo {
   status: SourceDispatchStatus;
@@ -496,8 +496,8 @@ export async function sourceDispatchStatuses(
     );
   for (const row of rows) {
     const status: SourceDispatchStatus = row.dispatch_no || row.document_id
-      ? row.status === DocumentStatus.COMPLETE ? 'approved' : 'pending'
-      : !row.required || row.direct_sale ? 'not-required' : 'none';
+      ? row.status === DocumentStatus.COMPLETE ? 'Approved' : 'Pending'
+      : !row.required || row.direct_sale ? 'Not Required' : 'None';
     result[row.id] = { status, vehicleDispatchNo: row.dispatch_no ?? null, documentId: row.document_id ?? null };
   }
   return result;

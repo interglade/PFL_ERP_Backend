@@ -1,9 +1,11 @@
 import { inject, injectable } from 'inversify';
+import { requireStatus } from '../../utils/status.enum';
 
 import { In } from 'typeorm';
 
 import { DataSource } from 'typeorm';
 import { grnPaidAndBalance } from '../../grn/grnPayment';
+import { DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 
 // ─── Filter Interface ────────────────────────────────────────────────────────
 
@@ -286,7 +288,7 @@ export class GrnReportService {
 
     // Status filter - filter by document status
     if (filters.status) {
-      queryBuilder.andWhere('document.status = :status', { status: filters.status });
+      queryBuilder.andWhere('document.status = :status', { status: requireStatus(DocumentStatus, filters.status, 'status') });
     }
   }
 
@@ -502,19 +504,20 @@ export class GrnReportService {
 
       // Helper function to get status color
       const getStatusColor = (status: string): string => {
-        const statusLower = status?.toLowerCase() || '';
-        switch (statusLower) {
-          case 'hold':
+        switch (status) {
+          case DocumentStatus.DRAFT:
+            return 'FF757575'; // Grey
+          case DocumentStatus.HOLD:
             return 'FFFF5700'; // Orange
-          case 'verified':
+          case DocumentStatus.VERIFIED:
             return 'FF6A00FF'; // Indigo
-          case 'approved':
+          case DocumentStatus.APPROVED:
             return 'FF40BF40'; // Light Green
-          case 'finalizing':
+          case DocumentStatus.FINALIZING:
             return 'FF0063B1'; // Blue
-          case 'complete':
+          case DocumentStatus.COMPLETE:
             return 'FF006600'; // Dark Green
-          case 'reject':
+          case DocumentStatus.REJECT:
             return 'FFAF0606'; // Red
           default:
             return 'FFFFFFFF'; // White (no color)
@@ -845,7 +848,7 @@ export class GrnReportService {
           const dueDate = toExcelDate(grn.paymentInfo?.dueDate);
           
           row.getCell(1).value = createdAtDate;
-          row.getCell(2).value = grn.status ? grn.status.toUpperCase() : '';
+          row.getCell(2).value = grn.status ?? '';
           row.getCell(3).value = grn.vendorFarmer || '';
           row.getCell(4).value = grn.createdBy || '';
           row.getCell(5).value = grn.source || '';
@@ -931,7 +934,7 @@ export class GrnReportService {
             // Set values for first row only (will be merged)
             if (index === 0) {
               row.getCell(1).value = createdAtDate;
-              row.getCell(2).value = grn.status ? grn.status.toUpperCase() : '';
+              row.getCell(2).value = grn.status ?? '';
               row.getCell(3).value = grn.vendorFarmer || '';
               row.getCell(4).value = grn.createdBy || '';
               row.getCell(5).value = grn.source || '';

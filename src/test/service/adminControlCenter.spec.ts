@@ -95,7 +95,7 @@ describe('admin control center - approval stage', () => {
     firstFinalizers: ['f1'],
     secondFinalizers: ['f2'],
   };
-  const grn = { type: 'grn', status: 'hold', totalAmt: 10000, verified: false, a1: false, a2: false, a3: false };
+  const grn = { type: 'grn', status: 'Hold', totalAmt: 10000, verified: false, a1: false, a2: false, a3: false };
 
   it('uses the amount band to decide how many approvers a GRN needs', () => {
     expect(requiredApprovals(flow, 10000)).toBe(1);
@@ -105,16 +105,16 @@ describe('admin control center - approval stage', () => {
 
   it('walks a GRN through verification, approvals and finalization', () => {
     expect(deriveStage(grn, flow)).toEqual({ stage: 'Verification', waitingOn: ['v1'] });
-    const big = { ...grn, totalAmt: 500000, verified: true, status: 'VERIFIED' };
+    const big = { ...grn, totalAmt: 500000, verified: true, status: 'Verified' };
     expect(deriveStage(big, flow).stage).toBe('Approval L1');
     expect(deriveStage({ ...big, a1: true }, flow)).toEqual({ stage: 'Approval L2', waitingOn: ['a2'] });
     expect(deriveStage({ ...big, a1: true, a2: true }, flow).stage).toBe('Approval L3');
-    expect(deriveStage({ ...grn, status: 'approved' }, flow)).toEqual({ stage: 'Finalization 1', waitingOn: ['f1'] });
-    expect(deriveStage({ ...grn, status: 'FINALIZING' }, flow)).toEqual({ stage: 'Finalization 2', waitingOn: ['f2'] });
+    expect(deriveStage({ ...grn, status: 'Approved' }, flow)).toEqual({ stage: 'Finalization 1', waitingOn: ['f1'] });
+    expect(deriveStage({ ...grn, status: 'Finalizing' }, flow)).toEqual({ stage: 'Finalization 2', waitingOn: ['f2'] });
   });
 
   it('a 2-approver GRN never waits at L3', () => {
-    const mid = { ...grn, totalAmt: 100000, verified: true, status: 'VERIFIED', a1: true, a2: true };
+    const mid = { ...grn, totalAmt: 100000, verified: true, status: 'Verified', a1: true, a2: true };
     expect(deriveStage(mid, flow).stage).toBe('Finalization 1');
   });
 

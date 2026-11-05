@@ -1,3 +1,8 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from 'inversify';
 import {
   controller,
@@ -49,7 +54,7 @@ export class RfpaController {
 
 
 
-  @httpGet('/recyclebin')
+  @httpGet('/recyclebin', requireRole(Role.SUPER_ADMIN))
   public async getRecycleBinRfpa(
     @request() req: Request,
     @response() res: Response,
@@ -259,7 +264,7 @@ export class RfpaController {
     }
   }
 
-  @httpPatch('/:id', checkPermission('rfpa', 'edit'))
+  @httpPatch('/:id', checkPermission('rfpa', 'edit'), guardDocumentEdit(ApprovalDocType.RFPA, 'RFPA'), protectBody)
   public async updateRfpa(
     @requestParam('id') rfpaId: string,
     @requestBody() rfpaData: UpdateRfpaDto & Record<string, any>,
@@ -375,7 +380,7 @@ export class RfpaController {
     }
   }
 
-  @httpGet('/:id/update')
+  @httpGet('/:id/update', checkPermission('rfpa', 'edit'), guardDocumentEdit(ApprovalDocType.RFPA, 'RFPA'))
 public async getRfpaByIdByUpdate(
   @requestParam('id') rfpaId: string,
   @request() req: Request,
@@ -410,7 +415,7 @@ public async getRfpaByIdByUpdate(
   }
 }
 
-  @httpDelete('/:id', checkPermission('rfpa', 'delete'))
+  @httpDelete('/:id', checkPermission('rfpa', 'delete'), guardDocumentDelete(ApprovalDocType.RFPA, 'RFPA'))
   public async deleteRfpas(
     @request() req: Request,
     @response() res: Response,
@@ -661,7 +666,7 @@ public async getRfpaByIdByUpdate(
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('rfpa', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -677,7 +682,7 @@ public async getRfpaByIdByUpdate(
 
   //TODO:By Vaishali
   //TODO: get All RFPA
-  @httpGet('/')
+  @httpGet('/', checkPermission('rfpa', 'view'))
   public async getAllRfpa(
     @request() req: Request,
     @response() res: Response,
@@ -752,7 +757,7 @@ public async getRfpaByIdByUpdate(
 
   //TODO:By Vaishali
   //TODO: RPFA get by id for view
-  @httpGet('/view/:docid')
+  @httpGet('/view/:docid', checkPermission('rfpa', 'view'), guardDocumentView(ApprovalDocType.RFPA, 'RFPA'))
   public async getRfpaByIdForView(
     @requestParam('docid') docid: string,
     @request() req: Request,
@@ -797,7 +802,7 @@ public async getRfpaByIdByUpdate(
 
 
   //pest in rfpa controller
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('rfpa', 'delete'), guardDocumentDelete(ApprovalDocType.RFPA, 'RFPA'))
   public async deleteMultipleRfpas(
     @request() req: Request,
     @response() res: Response,

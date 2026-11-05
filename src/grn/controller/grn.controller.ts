@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from 'inversify';
 import {
   controller,
@@ -22,8 +28,9 @@ import {
   requireUser,
 } from '../../middleware/deserializeUser';
 import { isAdminUser } from '../../utils/isAdminUser';
+import { isPaymentManager } from '../../utils/roles';
 import { createdMessage } from '../../utils/approvalMessage';
-import { Source, CompanyName } from '../../utils/status.enum';
+import { Source, CompanyName, GrnPaymentStatus } from '../../utils/status.enum';
 
 import logger from '../../utils/logger';
 import { http } from 'winston';
@@ -120,7 +127,7 @@ export class GrnController {
   }
 
   //TODO: Create GRN
-  @httpPost('/', uploadSingle.single('billImage'))
+  @httpPost('/', checkPermission('grn', 'create'), uploadSingle.single('billImage'))
   public async createGrn(
     @request() req: Request<{}, {}, CreateGrnDto>,
     @response() res: Response,
@@ -283,7 +290,7 @@ console.log(req.body);
   }
 
   //TODO: Get All Recycle Bin GRN
-  @httpGet('/recycle-bin')
+  @httpGet('/recycle-bin', requireRole(Role.SUPER_ADMIN))
   public async getAllRecycleBinGrns(
     @request() req: Request,
     @response() res: Response,
@@ -353,7 +360,7 @@ console.log(req.body);
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('grn', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -363,12 +370,13 @@ console.log(req.body);
       entityName: 'GRN',
       definition: GRN_EXPORT,
       list: { documentType: FilterDocumentType.GRN, searchFields: ['grn.grnNo'], filterKeys: ['companyName', 'source', 'grnType', 'locationType'] },
-      fetchList: (queryOptions, userId) => this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res)),
+      fetchList: (queryOptions, userId) =>
+        this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res), isPaymentManager(res.locals.user)),
     });
   }
 
   //TODO: GRN get all
-  @httpGet('/')
+  @httpGet('/', checkPermission('grn', 'view'))
   public async getAllGrns(
     @request() req: Request,
     @response() res: Response,
@@ -401,7 +409,7 @@ console.log(req.body);
       };
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.GRN);
-      const grns = await this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res));
+      const grns = await this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res), isPaymentManager(res.locals.user));
       //console.log(grns)
       if (!grns) {
         
@@ -442,7 +450,7 @@ console.log(req.body);
   }
 
   //TODO: GRN get by id for view
-  @httpGet('/view/:docid')
+  @httpGet('/view/:docid', checkPermission('grn', 'view'), guardDocumentView(ApprovalDocType.GRN, 'GRN'))
   public async getGrnByIdForView(
     @requestParam('docid') docid: string,
     @request() req: Request,
@@ -475,7 +483,7 @@ console.log(req.body);
   }
 
   //TODO: GRN get by id for update
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkPermission('grn', 'edit'), guardDocumentEdit(ApprovalDocType.GRN, 'GRN'))
   public async getGrnByIdForupdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -576,7 +584,7 @@ console.log(req.body);
   }
 
   //TODO: Update GRN by Image(Billing)
-  @httpPut('/:id', uploadSingle.single('billImage'), captureUser)
+  @httpPut('/:id', checkPermission('grn', 'edit'), guardDocumentEdit(ApprovalDocType.GRN, 'GRN'), uploadSingle.single('billImage'), captureUser, protectBody)
   public async updateGrn(
     @requestParam('id') id: string,
     @request() req: Request<{}, {}, UpdateGrnDto>,
@@ -653,7 +661,7 @@ console.log(req.body);
 
 
   //TODO: GRN delete by id
-  @httpDelete('/:id')
+  @httpDelete('/:id', checkPermission('grn', 'delete'), guardDocumentDelete(ApprovalDocType.GRN, 'GRN'))
   public async deleteGrn(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -708,7 +716,7 @@ console.log(req.body);
 
 
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('grn', 'delete'), guardDocumentDelete(ApprovalDocType.GRN, 'GRN'))
   public async deleteMultipleGrns(
     @request() req: Request<{}, {}, { ids: string[] }>,
     @response() res: Response,
@@ -771,7 +779,7 @@ console.log(req.body);
    *     oldRate, newRate, modifiedBy, modifiedAt }
    * ]
    */
-  @httpGet('/product-history/:id')
+  @httpGet('/product-history/:id', checkPermission('grn', 'view'))
   public async getGrnProductHistory(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -803,7 +811,7 @@ console.log(req.body);
   ) {
     try {
       const { ammountStatus: status } = req.body;
-      if (status !== 'paid') {
+      if (status !== GrnPaymentStatus.PAID) {
         return next(new AppError(409, 'The payment status follows the recorded payments; void a payment to undo it'));
       }
 

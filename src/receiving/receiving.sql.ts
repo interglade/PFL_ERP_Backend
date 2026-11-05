@@ -211,8 +211,8 @@ export function sqlStateExpr(sourceIdExpr: string, sourceType: ReceivingSourceTy
     ...(types.includes('rtv') ? [optional('rtv')] : []),
   ].join(' AND ');
   return (
-    `(CASE WHEN NOT (${any}) THEN (CASE WHEN ${arrivedSql} THEN 'received' ELSE 'in-transit' END) ` +
-    `WHEN NOT (${finished}) THEN 'in-progress' ` +
+    `(CASE WHEN NOT (${any}) THEN (CASE WHEN ${arrivedSql} THEN 'Received' ELSE 'In Transit' END) ` +
+    `WHEN NOT (${finished}) THEN 'In Progress' ` +
     `ELSE NULL END)`
   );
 }

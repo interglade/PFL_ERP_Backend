@@ -284,7 +284,7 @@
           <%= data.billToAddress.location %>, <%= data.billToAddress.city %>, 
           <%= data.billToAddress.state %>, <%= data.billToAddress.pincode %>
         </p>
-        <p style="font-size: 11px; font-weight: 500; margin-bottom: 2px;">Contact No:</p>
+        <p style="font-size: 11px; font-weight: 500; margin-bottom: 2px;">Contact No: <%= data.contactNo || '' %></p>
         <p style="font-size: 11px; font-weight: 500; margin-bottom: 2px;">GSTN: <%= data.gstn %></p>
         <p style="font-size: 11px; font-weight: 500;">PAN: <%= data.panNo %></p>
       </div>
@@ -296,7 +296,7 @@
           <%= data.shipToAddress.location %>, <%= data.shipToAddress.city %>, 
           <%= data.shipToAddress.state %>, <%= data.shipToAddress.pincode %>
         </p>
-        <p style="font-size: 11px; font-weight: 500; margin-bottom: 2px;">Contact No:</p>
+        <p style="font-size: 11px; font-weight: 500; margin-bottom: 2px;">Contact No: <%= data.contactNo || '' %></p>
         <p style="font-size: 11px; font-weight: 500; margin-bottom: 2px;">GSTN: <%= data.gstn %></p>
         <p style="font-size: 11px; font-weight: 500;">PAN: <%= data.panNo %></p>
       </div>
@@ -384,7 +384,7 @@
           2. Interest @ 24% p.a. will be charged if the payment is not made with in the Due Date.
         </span>
         <span style="display: block; width: 100%; font-size: 11px;">
-          3. Subject to Ahmedabad Jurisdiction only. "This is computar generated invoice No signature required"
+          3. Subject to Ahmedabad Jurisdiction only. "This is computer generated invoice No signature required"
         </span>
       </div>
       <div class="signature-box">

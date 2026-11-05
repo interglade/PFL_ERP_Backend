@@ -1,3 +1,7 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView, restartApprovalAfterEditOf } from '../../../approvalFlow/documentAccess';
+import { checkPermission } from '../../../middleware/checkPermission';
 import {
   controller,
   httpGet,
@@ -88,7 +92,7 @@ export class OtherDeliveryChallanController {
     }
   }
 
-  @httpPost('/', uploadAttachments)
+  @httpPost('/', checkPermission('deliveryChallan-Other', 'create'), uploadAttachments)
   public async createOtherDeliveryChallan(
     @response() res: Response,
     @request() req: Request,
@@ -154,7 +158,7 @@ export class OtherDeliveryChallanController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('deliveryChallan-Other', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -168,7 +172,7 @@ export class OtherDeliveryChallanController {
     });
   }
 
-  @httpGet('/')
+  @httpGet('/', checkPermission('deliveryChallan-Other', 'view'))
   public async getAllOtherDeliveryChallan(
     @response() res: Response,
     @request() req: Request,
@@ -219,7 +223,7 @@ export class OtherDeliveryChallanController {
 
 
 
-  @httpGet('/view/:id')
+  @httpGet('/view/:id', checkPermission('deliveryChallan-Other', 'view'), guardDocumentView(ApprovalDocType.DC_TYPE_OTHER, 'Other DC'))
   public async getOtherDeliveryChallanByIdForView(
     @requestParam('id') id: string,
     @response() res: Response,
@@ -294,7 +298,7 @@ export class OtherDeliveryChallanController {
       next(err);
     }
   }
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkPermission('deliveryChallan-Other', 'edit'), guardDocumentEdit(ApprovalDocType.DC_TYPE_OTHER, 'Other DC'))
   public async getOtherDeliveryChallanByIdForUpdate(
     @requestParam('id') id: string,
     @response() res: Response,
@@ -378,7 +382,7 @@ export class OtherDeliveryChallanController {
     }
   }
 
-  @httpPatch('/:id', uploadAttachments, captureUser)
+  @httpPatch('/:id', checkPermission('deliveryChallan-Other', 'edit'), guardDocumentEdit(ApprovalDocType.DC_TYPE_OTHER, 'Other DC'), uploadAttachments, captureUser, protectBody)
   public async updateOtherDeliveryChallan(
     @requestParam('id') id: string,
     @response() res: Response,
@@ -412,6 +416,8 @@ export class OtherDeliveryChallanController {
       if (!updatedOtherDeliveryChallan) {
         return next(new AppError(404, 'Other Delivery Challan not found or could not be updated'));
       }
+      // Edited before the second approval: the approval starts again
+      await restartApprovalAfterEditOf(ApprovalDocType.DC_TYPE_OTHER, id, 'Other DC edited: approval restarted');
 
       // 🔔 Send SSE notification to updater
       try {
@@ -493,7 +499,7 @@ export class OtherDeliveryChallanController {
     }
   }
 
-  @httpDelete('/:id')
+  @httpDelete('/:id', checkPermission('deliveryChallan-Other', 'delete'), guardDocumentDelete(ApprovalDocType.DC_TYPE_OTHER, 'Other DC'))
   public async deleteOtherDeliveryChallan(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -601,7 +607,7 @@ export class OtherDeliveryChallanController {
 
 
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('deliveryChallan-Other', 'delete'), guardDocumentDelete(ApprovalDocType.DC_TYPE_OTHER, 'Other DC'))
   public async deleteMultipleOtherDeliveryChallans(
     @request() req: Request<{}, {}, { ids: string[] }>,
     @response() res: Response,

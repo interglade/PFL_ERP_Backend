@@ -41,21 +41,27 @@ export interface SecondSaleBranchRefDto {
   branchName?: string | null;
 }
 
-export interface SecondSaleDeliveryChallanRefDto {
-  id?: string | null;
-  challanNo?: string | null;
-}
-
 export interface CreateSecondSaleDto {
   secondSaleNo?: string | null;
   saleDate?: string | Date;
   companyName?: string | null;
   location?: string | null;
-  deliveryChallanNo?: string | null;
   customerName?: string | null;
   customerContactNo?: string | null;
   customerEmail?: string | null;
-  customerAddress?: SecondSaleAddressDto | null;
+  /** 'individual' (default) or 'business' */
+  customerType?: string | null;
+  customerAltContactNo?: string | null;
+  /** Optional; 10-character PAN (ABCDE1234F) */
+  customerPanNo?: string | null;
+  /** Address object (stored in its six columns) or Address entity ID */
+  billingAddress?: SecondSaleAddressDto | string | null;
+  /** Default true: the goods go to the billing address and shippingAddress is ignored */
+  shipToSameAsBilling?: boolean | string | null;
+  /** Required when shipToSameAsBilling is false */
+  shippingAddress?: SecondSaleAddressDto | string | null;
+  /** State supplied to; defaults to the shipping (or billing) address state */
+  placeOfSupply?: string | null;
   reasonForSale?: string | null;
   secondSaleProducts?: SecondSaleProductDto[];
   totalNetWeight?: number | null;
@@ -76,7 +82,6 @@ export type UpdateSecondSaleDto = Partial<CreateSecondSaleDto>;
 //   saleDate?: string | Date | null;
 //   companyName?: string | null;
 //   location?: string | null;
-//   deliveryChallanNo?: string | null;
 //   customerName?: string | null;
 //   customerContactNo?: string | null;
 //   customerEmail?: string | null;
@@ -107,14 +112,27 @@ export interface SecondSaleDetailDto {
     secondFinalized?: { userId: string; name: string; status: string; reason: string | null } | null;
   } | null;
   secondSaleNo?: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo?: string | null;
   saleDate?: string | Date | null;
   companyName?: string | null;
   location?: string | null;
-  deliveryChallanNo?: string | null;
   customerName?: string | null;
   customerContactNo?: string | null;
   customerEmail?: string | null;
-  customerAddress?: SecondSaleAddressDto | null;
+  /** 'individual' (default) or 'business' */
+  customerType?: string | null;
+  customerAltContactNo?: string | null;
+  /** Optional; 10-character PAN (ABCDE1234F) */
+  customerPanNo?: string | null;
+  /** Address object (stored in its six columns) or Address entity ID */
+  billingAddress?: SecondSaleAddressDto | string | null;
+  /** Default true: the goods go to the billing address and shippingAddress is ignored */
+  shipToSameAsBilling?: boolean | string | null;
+  /** Required when shipToSameAsBilling is false */
+  shippingAddress?: SecondSaleAddressDto | string | null;
+  /** State supplied to; defaults to the shipping (or billing) address state */
+  placeOfSupply?: string | null;
   reasonForSale?: string | null;
   secondSaleProducts?: SecondSaleProductDto[];
   totalNetWeight?: number | null;
@@ -134,12 +152,23 @@ export interface SecondSaleListItemDto {
   documentId?: string | null;
   overAllStatus?: string | null;
   secondSaleNo?: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo?: string | null;
   saleDate?: string | Date | null;
   companyName?: string | null;
   location?: string | null;
   customerName?: string | null;
   customerContactNo?: string | null;
   customerEmail?: string | null;
+  customerType?: string | null;
+  customerAltContactNo?: string | null;
+  customerPanNo?: string | null;
+  /** Formatted billing address */
+  billingAddress?: string | null;
+  shipToSameAsBilling?: boolean;
+  /** Formatted address the goods go to (the billing address when shipToSameAsBilling) */
+  shippingAddress?: string | null;
+  placeOfSupply?: string | null;
   reasonForSale?: string | null;
   totalNetWeight?: number | null;
   totalGrossWeight?: number | null;

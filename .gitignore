@@ -10,3 +10,5 @@ build/
 tmp/
 temp/
 docs/
+# Excel import rehearsal output (sample files, run records)
+rehearsal-output/

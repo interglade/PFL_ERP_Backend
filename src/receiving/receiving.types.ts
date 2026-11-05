@@ -16,6 +16,13 @@ export type ProcessingDocType = 'aqr' | 'inward' | 'dump' | 'rtv';
 export const RECEIVING_SOURCE_TYPES: ReceivingSourceType[] = ['grn', 'stock-transfer-dc', 'rbc'];
 export const PROCESSING_DOC_TYPES: ProcessingDocType[] = ['aqr', 'inward', 'dump', 'rtv'];
 
+/** Transaction document type of each receiving source (docs/transaction-tracking-plan.md §9.4). */
+export const RECEIVING_SOURCE_TXN_DOC = {
+  grn: 'grn',
+  'stock-transfer-dc': 'dc-transfer',
+  rbc: 'return-by-customer',
+} as const satisfies Record<ReceivingSourceType, string>;
+
 /**
  * Receiving state of a source (docs/arrivals-status-plan.md §2):
  * - `not-received`: the source (or its required dispatch) is not approved yet; never listed on Arrivals.
@@ -24,8 +31,8 @@ export const PROCESSING_DOC_TYPES: ProcessingDocType[] = ['aqr', 'inward', 'dump
  * - `in-progress`: at least one counting AQR / Inward / Dump / RTV exists, not done yet.
  * - `done`: AQR and Inward approved, Dump / RTV approved or skipped, every difference 0.
  */
-export type ReceivingState = 'not-received' | 'in-transit' | 'received' | 'in-progress' | 'done';
-export const RECEIVING_STATES: ReceivingState[] = ['not-received', 'in-transit', 'received', 'in-progress', 'done'];
+export type ReceivingState = 'Not Received' | 'In Transit' | 'Received' | 'In Progress' | 'Done';
+export const RECEIVING_STATES: ReceivingState[] = ['Not Received', 'In Transit', 'Received', 'In Progress', 'Done'];
 
 export type PartyType = 'vendor' | 'farmer' | 'customer' | 'branch' | null;
 
@@ -34,8 +41,8 @@ export type PartyType = 'vendor' | 'farmer' | 'customer' | 'branch' | null;
  * dispatches for GRNs, stock transfer dispatches for transfer DCs. Informational
  * only - receiving never waits for it.
  */
-export type DispatchState = 'none' | 'in-transit' | 'arrived';
-export const DISPATCH_STATES: DispatchState[] = ['none', 'in-transit', 'arrived'];
+export type DispatchState = 'None' | 'In Transit' | 'Arrived';
+export const DISPATCH_STATES: DispatchState[] = ['None', 'In Transit', 'Arrived'];
 
 export interface DispatchSummary {
   id: string;
@@ -59,7 +66,7 @@ export interface DispatchSummary {
 }
 
 /** How a processing slot is shown on the Arrivals list (`skipped`: no document, step marked not needed). */
-export type SlotState = 'missing' | 'pending' | 'approved' | 'rejected' | 'skipped';
+export type SlotState = 'Missing' | 'Pending' | 'Approved' | 'Rejected' | 'Skipped';
 
 /** Steps that can be marked "not needed" for a source (docs/receiving-links-plan.md; Phase D-8). */
 export type SkippableDocType = 'dump' | 'rtv';
@@ -113,6 +120,8 @@ export interface SuggestedKg {
 export interface ReceivingProductRow {
   /** `${productId}:${variantId ?? 'null'}:${uomId ?? 'null'}` */
   key: string;
+  /** The GRN line is marked for Return To Vendor (only those appear on an RTV). */
+  rtvAllowed: boolean;
   productId: string;
   productName: string | null;
   variantId: string | null;
@@ -270,10 +279,14 @@ export interface SourceLineInput {
   grossKg?: number | string | null;
   /** received net kg of this line */
   kg: number | string | null | undefined;
+  /** GRN line marked for Return To Vendor; undefined for sources without the flag (treated as allowed). */
+  rtv?: boolean | null;
 }
 
 export interface AggregatedSourceLine {
   key: string;
+  /** At least one source line of this key may go back to the vendor (GRN line RTV = Yes). */
+  rtvAllowed: boolean;
   productId: string;
   productName: string | null;
   variantId: string | null;

@@ -6,6 +6,7 @@ import {
     JoinColumn,
     OneToMany,
     OneToOne,
+    Index,
 
   } from 'typeorm';
 import Model from '../../global/model.entity';
@@ -22,6 +23,12 @@ import { DealSlipProduct } from './dealSlipProduct.entity';
 
   @Entity('deal_slips')
   export class DealSlip extends Model {
+    /** Transaction number of the deal this document belongs to (docs/transaction-tracking-plan.md §9). */
+    @Index('IDX_deal_slips_txn_no')
+    // Written only by src/transactions (raw SQL); never from a request body through an entity save.
+    @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true, insert: false, update: false })
+    txnNo: string | null;
+
    // Relation to RFPA. No cascade: saving a deal slip must never write its RFPA.
    @ManyToOne(() => RFPA, { onDelete: "SET NULL" })
    @JoinColumn({ name: 'rfpa_id' })

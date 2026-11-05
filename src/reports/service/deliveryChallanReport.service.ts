@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { requireStatus } from '../../utils/status.enum';
 import * as ExcelJS from 'exceljs';
 import { In } from 'typeorm';
 import { TYPES } from '../../types';
@@ -10,7 +11,7 @@ import { ProductRepository } from '../../product/createproduct/repository/produc
 import { CustomerRepository } from '../../customer/addcustomer/repository/customer.repository';
 import { BranchessRepository } from '../../branch/repository/branches.repository';
 import { CompanyRepository } from '../../company/repository/company.repository';
-import { Documentb } from '../../approvalFlow/entity/docuemnt.entity';
+import { Documentb, DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 
 @injectable()
 export class DeliveryChallanReportService {
@@ -263,9 +264,8 @@ Total Amount Filter using Operator
 
     //have multiple Status
     if (filter.status) {
-      const statuses = Array.isArray(filter.status)
-        ? filter.status
-        : String(filter.status).split(',');
+      const statuses = (Array.isArray(filter.status) ? filter.status : String(filter.status).split(','))
+        .map((s) => requireStatus(DocumentStatus, s, 'status'));
       qb.andWhere('doc.status IN (:...status)', { status: statuses });
     }
 
@@ -601,12 +601,13 @@ STATUS MAPPING (VALUE → LABEL + COLOR)
 */
 
     const STATUS_MAP: Record<string, { label: string; color: string }> = {
-      hold: { label: 'Hold', color: 'FFFF5700' },
-      VERIFIED: { label: 'Verified', color: 'FF6A00FF' },
-      approved: { label: 'Approved', color: 'FF40BF40' },
-      FINALIZING: { label: 'Finalized', color: 'FF0063B1' },
-      COMPLETE: { label: 'Complete', color: 'FF006600' },
-      REJECT: { label: 'Reject', color: 'E74C3C' },
+      [DocumentStatus.DRAFT]: { label: DocumentStatus.DRAFT, color: 'FF757575' },
+      [DocumentStatus.HOLD]: { label: DocumentStatus.HOLD, color: 'FFFF5700' },
+      [DocumentStatus.VERIFIED]: { label: DocumentStatus.VERIFIED, color: 'FF6A00FF' },
+      [DocumentStatus.APPROVED]: { label: DocumentStatus.APPROVED, color: 'FF40BF40' },
+      [DocumentStatus.FINALIZING]: { label: DocumentStatus.FINALIZING, color: 'FF0063B1' },
+      [DocumentStatus.COMPLETE]: { label: DocumentStatus.COMPLETE, color: 'FF006600' },
+      [DocumentStatus.REJECT]: { label: DocumentStatus.REJECT, color: 'FFAF0606' },
     };
 
     /*

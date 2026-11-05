@@ -1,3 +1,7 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView, restartApprovalAfterEditOf } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import {
   controller,
@@ -52,7 +56,7 @@ export class SecondSaleController {
 
   // Create a new second sale
 
-  @httpPost('/')
+  @httpPost('/', checkPermission('second-sale', 'create'))
   public async createSecondSale(
     @request() req: Request<{}, {}, CreateSecondSaleDto>,
     @response() res: Response,
@@ -63,10 +67,7 @@ export class SecondSaleController {
         requestedBy: res.locals.user.id,
       });
 //console.log(req.body)
-      const secondSaleData: CreateSecondSaleDto = {
-        ...req.body,
-        deliveryChallanNo: req.body.deliveryChallanNo === '' ? null : req.body.deliveryChallanNo,
-      };
+      const secondSaleData: CreateSecondSaleDto = { ...req.body };
 
       const requestedBy: string = res.locals.user.id;
 
@@ -126,7 +127,7 @@ export class SecondSaleController {
   // Get second sale by ID
 
 
-  @httpGet('/:id/view')
+  @httpGet('/:id/view', checkPermission('second-sale', 'view'), guardDocumentView(ApprovalDocType.SECOND_SALE, 'Second Sale'))
   public async getSecondSaleByIdForView(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -166,7 +167,7 @@ export class SecondSaleController {
     }
   }
 
-  @httpGet('/:id/update')
+  @httpGet('/:id/update', checkPermission('second-sale', 'edit'), guardDocumentEdit(ApprovalDocType.SECOND_SALE, 'Second Sale'))
   public async getSecondSaleByIdForUpdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -210,7 +211,7 @@ export class SecondSaleController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('second-sale', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -225,7 +226,7 @@ export class SecondSaleController {
   }
 
   // Get all second sales
-  @httpGet('/')
+  @httpGet('/', checkPermission('second-sale', 'view'))
   public async getAllSecondSales(
     @response() res: Response,
     @request() req: Request,
@@ -281,7 +282,7 @@ export class SecondSaleController {
   }
 
   // Update a second sale
-  @httpPatch('/:id', captureUser)
+  @httpPatch('/:id', checkPermission('second-sale', 'edit'), guardDocumentEdit(ApprovalDocType.SECOND_SALE, 'Second Sale'), captureUser, protectBody)
   public async updateSecondSale(
     @requestParam('id') id: string,
     @request() req: Request<{}, {}, UpdateSecondSaleDto>,
@@ -305,6 +306,8 @@ export class SecondSaleController {
           new AppError(404, 'Second sale not found or could not be updated'),
         );
       }
+      // Edited before the second approval: the approval starts again
+      await restartApprovalAfterEditOf(ApprovalDocType.SECOND_SALE, id, 'Second Sale edited: approval restarted');
 
       logger.info('Second sale updated successfully', { secondSale });
 
@@ -348,7 +351,7 @@ export class SecondSaleController {
   }
 
   // Delete a second sale
-  @httpDelete('/:id')
+  @httpDelete('/:id', checkPermission('second-sale', 'delete'), guardDocumentDelete(ApprovalDocType.SECOND_SALE, 'Second Sale'))
   public async deleteSecondSale(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -410,7 +413,7 @@ export class SecondSaleController {
       next(err);
     }
   }
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('second-sale', 'delete'), guardDocumentDelete(ApprovalDocType.SECOND_SALE, 'Second Sale'))
       public async deleteMultipleSecondSale(
         @request() req: Request,
         @response() res: Response,

@@ -39,11 +39,13 @@ import { Role } from "../../../employee/entity/user.entity";
 import { Address } from "../../../address/entity/address.entity";
 import { VendorSaleInfo } from "../entity/vendorsaleinfo.entity";
 import { BankDetailsvend } from "../entity/bankDetailsVend.entity";
-import { PackingMaterial } from "../../../packingMaterial/entity/packingMaterial.entity";
+import { PackingMaterial, UseFor } from "../../../packingMaterial/entity/packingMaterial.entity";
+import { VendorSubcategory } from "../../vendorSubcategory/entity/vendorSubcategory.entity";
 import { Product } from "../../../product/createproduct/entity/product.entity";
 import { VendorClassification } from "../entity/vendor.entity";
 import { AccountType } from "../../../customer/addcustomer/entity/bankDetailsCust.entity";
 import {
+  attachImportReport,
   buildDataWorkbook,
   buildTemplateWorkbook,
   deleteFromSpaces,
@@ -58,7 +60,13 @@ import {
 } from "../../../excel/excelImport.service";
 import { toList } from "../../../excel/excelValue";
 import { VENDOR_SHEET } from "../excel/vendor.columns";
-import { findOrCreateByName } from "../../../excel/lookupByName";
+import { normaliseName } from "../../../excel/lookupByName";
+import { LookupIndex } from "../../../excel/lookupIndex";
+import { DraftLinks } from "../../../excel/draftLinks";
+import { ContactPool, mergeFilled, RegistrationRowReader } from "../../../excel/registrationRow";
+import { WorkbookLists } from "../../../excel/excelColumn";
+import { assertImportPrerequisites } from "../../../excel/importPrerequisites";
+import { countMasterRecords } from "../../../excel/importPrerequisiteCounts";
 
 
 const CACHE_PREFIX = "vendor";
@@ -368,7 +376,7 @@ async createVendor(vendorDto: CreateVendorDto & Record<string, any>): Promise<Ve
 async approveVendor(vendorId: string, approverId: string, status: Status) {
   // Validate status — only approved or rejected are valid outcomes
   if (status !== Status.APPROVED && status !== Status.REJECTED) {
-    throw new AppError(400, `Invalid status '${status}'. Only 'approved' or 'rejected' are allowed.`);
+    throw new AppError(400, `Invalid status '${status}'. Only 'Approved' or 'Rejected' are allowed.`);
   }
 
   const approver = await this.userRepository.findOne({ where: { id: approverId } });
@@ -384,7 +392,7 @@ async approveVendor(vendorId: string, approverId: string, status: Status) {
 
   // Vendor must be in 'pending' status — draft means not yet submitted
   if (vendor.status !== Status.PENDING) {
-    throw new AppError(400, `Vendor cannot be approved because its current status is '${vendor.status}'. Only vendors with status 'pending' can be approved or rejected.`);
+    throw new AppError(400, `Vendor cannot be approved because its current status is '${vendor.status}'. Only vendors with status 'Pending' can be approved or rejected.`);
   }
 
   vendor.status = status;
@@ -907,7 +915,8 @@ async getVendorByIdforupdate(id: string): Promise<VendorUpdateFormDto> {
       'vendor',
     );
 
-    const workbook = buildDataWorkbook(VENDOR_SHEET, data as Vendor[]);
+    const lists = this.vendorWorkbookLists(await this.loadVendorLinkIndexes());
+    const workbook = buildDataWorkbook(VENDOR_SHEET, data as Vendor[], lists);
     return uploadWorkbookToSpaces(workbook, 'Vendors', data.length);
   }
 
@@ -916,32 +925,143 @@ async getVendorByIdforupdate(id: string): Promise<VendorUpdateFormDto> {
    * from the same column map as the export.
    */
   async buildExcelTemplate(): Promise<UploadedExport> {
-    const workbook = buildTemplateWorkbook(VENDOR_SHEET);
+    const lists = this.vendorWorkbookLists(await this.loadVendorLinkIndexes());
+    const workbook = buildTemplateWorkbook(VENDOR_SHEET, lists);
     return uploadWorkbookToSpaces(workbook, 'Vendor_Template', 0);
   }
 
   /**
-   * Imports vendors from a spreadsheet uploaded to Spaces.
+   * The masters a vendor links to, each loaded once per file, so a sheet of a
+   * few thousand vendors is matched in memory rather than with queries per row.
+   */
+  private async loadVendorLinkIndexes() {
+    const live = <T extends { isDeleted?: boolean }>(records: T[]) =>
+      records.filter((record) => !record.isDeleted);
+
+    const [categories, subcategories, products, materials] = await Promise.all([
+      this.vendorCategoryRepository.find(),
+      this.vendorSubcategoryRepository.find({ relations: ['category'] }),
+      this.productRepository.find({ select: { id: true, name: true, isDeleted: true } }),
+      this.packingMaterialRepository.find(),
+    ]);
+
+    return {
+      categories: LookupIndex.fromRecords(live(categories), { names: (c) => [c.name] }),
+      subcategories: LookupIndex.fromRecords(live(subcategories), {
+        names: (s) => [s.name],
+        scope: (s) => s.category?.id ?? null,
+      }),
+      products: LookupIndex.fromRecords(live(products), { names: (p) => [p.name] }),
+      // Scoped by Use For: the same name can exist for purchase and for sale.
+      packingMaterials: LookupIndex.fromRecords(live(materials), {
+        names: (m) => [m.packagingMaterialName],
+        scope: (m) => m.useFor ?? null,
+      }),
+    };
+  }
+
+  /** Current master names for the dropdowns in the template and the export. */
+  private vendorWorkbookLists(
+    indexes: Awaited<ReturnType<VendorService['loadVendorLinkIndexes']>>,
+  ): WorkbookLists {
+    return {
+      'vendor-category': indexes.categories.displayNames(),
+      'vendor-subcategory': indexes.subcategories.displayNames(),
+      product: indexes.products.displayNames(),
+      'packaging-material': indexes.packingMaterials.displayNames(),
+    };
+  }
+
+  /**
+   * Matches every linked column of a vendor row, leaving what does not match
+   * empty and noting it in `draft`. Only links the vendor does not have yet are
+   * set, so the same code completes a draft vendor on a re-import.
+   */
+  private applyVendorLinks(
+    vendor: Vendor,
+    row: ExcelRow,
+    text: (row: ExcelRow, header: string) => string | null,
+    indexes: Awaited<ReturnType<VendorService['loadVendorLinkIndexes']>>,
+    draft: DraftLinks,
+    options: { categoryRequired?: boolean } = {},
+  ): void {
+    if (!vendor.category) {
+      vendor.category = draft.one(indexes.categories, 'Vendor Category', text(row, 'Vendor Category'), {
+        required: options.categoryRequired ?? true,
+      }) as VendorCategory;
+    }
+
+    const subcategoryName = text(row, 'Vendor Subcategory');
+    if (!vendor.subcategory && subcategoryName) {
+      if (vendor.category) {
+        vendor.subcategory = draft.one(indexes.subcategories, 'Vendor Subcategory', subcategoryName, {
+          scope: vendor.category.id,
+        }) as VendorSubcategory;
+      } else {
+        draft.note('Vendor Subcategory', subcategoryName, 'its Vendor Category did not match');
+      }
+    }
+
+    if (!vendor.mainProduct) {
+      vendor.mainProduct = draft.one(indexes.products, 'Main Product', text(row, 'Main Product')) as Product;
+    }
+    const productNames = toList(row.raw('List Of All Products'));
+    if (!vendor.listOfAllProducts?.length && productNames.length) {
+      vendor.listOfAllProducts = draft.many(indexes.products, 'List Of All Products', productNames);
+    }
+
+    // Vendors supply what is bought, so where a name exists both for purchase
+    // and for sale the For Purchase one is taken.
+    const packing = (field: string, name: string | null): PackingMaterial | null =>
+      (name && indexes.packingMaterials.match(name, UseFor.PURCHASE)) ||
+      draft.one(indexes.packingMaterials, field, name);
+
+    if (!vendor.mainPackingMaterial) {
+      vendor.mainPackingMaterial = packing('Main Packing Material', text(row, 'Main Packing Material')) as PackingMaterial;
+    }
+    const materialNames = toList(row.raw('List Of Packing Material'));
+    if (!vendor.listOfPackingMaterial?.length && materialNames.length) {
+      const materials: PackingMaterial[] = [];
+      for (const name of materialNames) {
+        const material = packing('List Of Packing Material', name);
+        if (material && !materials.includes(material)) materials.push(material);
+      }
+      vendor.listOfPackingMaterial = materials;
+    }
+  }
+
+  /**
+   * Imports vendors from a spreadsheet uploaded to Spaces
+   * (docs/registration-import-plan.md, decisions agreed 2026-11-04).
    *
-   * A vendor whose company name is already on record is skipped and reported
-   * rather than updated, and the uploaded file is removed from Spaces once
-   * read - success or failure.
+   * Row by row, so one bad row never costs the rest of the file (D1). Every
+   * vendor the import saves is a **draft** (D2): the admin checks it and submits
+   * it from the form. A cell the form would refuse - a bad mobile, GSTIN or
+   * date, or a mobile / email another vendor already has - and a linked name
+   * that does not match are left empty and listed in the report (D4, D5).
    *
-   * Owner and approval status are not read from the sheet: every imported vendor
-   * belongs to `createdById` and starts as pending, exactly as if it had been
-   * entered through the form.
+   * A row with the Vendor Code of a draft vendor updates it: filled cells replace
+   * what is saved, empty cells keep it (D3). Vendors past draft are not changed
+   * by an import (D6). A new row whose company name is already on record is
+   * skipped. `checkOnly` runs every check and saves nothing.
+   *
+   * The uploaded file is removed from Spaces once read, success or failure.
    */
   async createVendorWithExcel(
     fileUrl: string,
     createdById: string,
+    options: { checkOnly?: boolean } = {},
   ): Promise<ImportSummary> {
     if (!fileUrl) {
       throw new AppError(400, 'No file URL provided');
     }
 
+    const checkOnly = !!options.checkOnly;
     const summary = emptySummary();
 
     try {
+      await assertImportPrerequisites('vendor', countMasterRecords);
+
       const sheet = await readUploadedSheet(fileUrl, VENDOR_SHEET);
       summary.unknownColumns = sheet.unknownColumns;
       summary.missingColumns = sheet.missingColumns;
@@ -959,239 +1079,128 @@ async getVendorByIdforupdate(id: string): Promise<VendorUpdateFormDto> {
         throw new AppError(401, 'The logged-in user could not be found');
       }
 
-      const byHeader = new Map(VENDOR_SHEET.columns.map((c) => [c.header, c]));
-      const column = (header: string) => {
-        const found = byHeader.get(header);
-        if (!found) throw new Error(`Unknown vendor column: ${header}`);
-        return found;
-      };
-      const text = (row: ExcelRow, header: string) =>
-        row.cell<string | null>(column(header));
+      const linkIndexes = await this.loadVendorLinkIndexes();
+
+      // Existing vendors by name (case, spacing and punctuation ignored) and by
+      // code, and every mobile / email in use, loaded once; rows of this file
+      // are added as they go.
+      const existingVendors = await this.vendorRepository.find({ relations: ['vendorSaleInfo'] });
+      const byName = new Map<string, string>();
+      const byCode = new Map<string, Vendor>();
+      const contacts = new ContactPool();
+      for (const existing of existingVendors) {
+        const owner = { key: existing.id, label: vendorLabel(existing) };
+        if (existing.companyName) byName.set(normaliseName(existing.companyName), owner.label);
+        if (existing.vendorCode) byCode.set(existing.vendorCode.toUpperCase(), existing);
+        contacts.add('phone', existing.officeContactNo, owner);
+        contacts.add('email', existing.officeEmail, owner);
+        contacts.add('phone', existing.vendorSaleInfo?.directContactNumber, owner);
+        contacts.add('phone', existing.vendorSaleInfo?.mobileNumber, owner);
+        contacts.add('email', existing.vendorSaleInfo?.email, owner);
+      }
+
+      const codeColumn = VENDOR_SHEET.columns.find((c) => c.header === 'Vendor Code')!;
 
       for (const row of sheet.rows) {
         try {
-          const companyName = text(row, 'Company Name');
-          const categoryName = text(row, 'Vendor Category');
+          const draft = new DraftLinks();
+          const vendorCode = row.cell<string | null>(codeColumn);
 
-          if (!companyName || !categoryName) {
-            summary.skipped.push({
-              row: row.rowNumber,
-              reason: 'Company Name and Vendor Category are both required',
+          // ── A draft vendor named by its code: update it ────────────────
+          if (vendorCode) {
+            const known = byCode.get(vendorCode.toUpperCase());
+            if (!known) {
+              summary.skipped.push({
+                row: row.rowNumber,
+                reason: `Vendor Code ${vendorCode} was not found - clear it to add the row as a new vendor`,
+              });
+              continue;
+            }
+            if (known.status !== Status.DRAFT) {
+              summary.skipped.push({
+                row: row.rowNumber,
+                reason: `Vendor ${vendorCode} is ${known.status} - an import only changes draft vendors; edit it in the form`,
+              });
+              continue;
+            }
+
+            const target = await this.vendorRepository.findOne({
+              where: { id: known.id },
+              relations: [
+                'category', 'subcategory', 'mainProduct', 'listOfAllProducts',
+                'mainPackingMaterial', 'listOfPackingMaterial', 'vendorSaleInfo',
+                'vendorBankDetails', 'vendorBankDetails.branchAddress',
+                'officeAddress', 'ref1Address', 'ref2Address',
+              ],
             });
+            if (!target) throw new Error(`Vendor ${vendorCode} could not be loaded`);
+
+            const reader = new RegistrationRowReader(VENDOR_SHEET, row, draft, {
+              contacts,
+              ownerKey: target.id,
+            });
+            const incoming = this.vendorFromRow(reader, linkIndexes, { isNew: false });
+
+            // A new name must not be another vendor's
+            const newName = incoming.companyName;
+            if (newName && normaliseName(newName) !== normaliseName(target.companyName ?? '')) {
+              const holder = byName.get(normaliseName(newName));
+              if (holder) {
+                draft.note('Company Name', newName, `Kept the saved name: already used by ${holder}`);
+                delete (incoming as Partial<Vendor>).companyName;
+              }
+            }
+
+            mergeFilled(target, incoming);
+            target.status = Status.DRAFT;
+            if (!checkOnly) await this.vendorRepository.save(target);
+
+            summary.updated++;
+            if (draft.isDraft) summary.drafted++;
+            summary.draftIssues.push(...draft.toReport(row.rowNumber, target.vendorCode, target.companyName));
+            reader.registerContacts({ key: target.id, label: vendorLabel(target) });
+            if (target.companyName) byName.set(normaliseName(target.companyName), vendorLabel(target));
             continue;
           }
 
-          const existing = await this.vendorRepository
-            .createQueryBuilder('vendor')
-            .where('LOWER(vendor.companyName) = LOWER(:name)', {
-              name: companyName,
-            })
-            .getOne();
-
+          // ── A new vendor ───────────────────────────────────────────────
+          const ownerKey = `row-${row.rowNumber}`;
+          const reader = new RegistrationRowReader(VENDOR_SHEET, row, draft, { contacts, ownerKey });
+          const companyName = reader.text('Company Name');
+          if (!companyName) {
+            summary.skipped.push({ row: row.rowNumber, reason: 'Company Name is empty' });
+            continue;
+          }
+          const existing = byName.get(normaliseName(companyName));
           if (existing) {
             summary.skipped.push({
               row: row.rowNumber,
-              reason: `Vendor "${companyName}" already exists (${existing.vendorCode ?? existing.id})`,
+              reason: `Vendor "${companyName}" already exists (${existing})`,
             });
             continue;
           }
 
-          const vendor = new Vendor();
-          vendor.companyName = companyName;
-          vendor.vendorCode = await this.generateBulkVendorCode();
-
-          // ── Category / subcategory ──────────────────────────────────────
-          // Matched with case, spacing and punctuation ignored, so "Packing
-          // Material" reuses a "packing material" row rather than adding one.
-          const category = await findOrCreateByName(
-            this.vendorCategoryRepository,
-            'name',
-            categoryName,
-          );
-          vendor.category = category;
-
-          const subcategoryName = text(row, 'Vendor Subcategory');
-          if (subcategoryName) {
-            // Scoped to the category: the same subcategory name under a
-            // different category is a different row.
-            vendor.subcategory = await findOrCreateByName(
-              this.vendorSubcategoryRepository,
-              'name',
-              subcategoryName,
-              { category },
-              (queryBuilder) =>
-                queryBuilder
-                  .innerJoin('lookup.category', 'parent')
-                  .andWhere('parent.id = :categoryId', { categoryId: category.id }),
-            );
-          }
-
-          // ── Company details ─────────────────────────────────────────────
-          vendor.classification = row.cell<VendorClassification | null>(
-            column('Classification'),
-          ) as VendorClassification;
-          vendor.vendorGrade = text(row, 'Vendor Grade') as string;
-          vendor.officeContactNo = text(row, 'Office Contact No') as string;
-          vendor.officeEmail = text(row, 'Office Email') as string;
-          vendor.website = text(row, 'Website') as string;
-          vendor.inFandVBusinessSince = text(row, 'In FandV Business Since') as string;
-
-          const incorporation = row.cell<string | null>(
-            column('Date Of Incorporation'),
-          );
-          if (incorporation) vendor.dateOfIncorporation = new Date(incorporation);
-
-          vendor.gstn = text(row, 'GSTN') as string;
-          vendor.panNo = text(row, 'Pan_No') as string;
-          vendor.msmeNo = text(row, 'MSME_No') as string;
-          vendor.tradeLicenseNumber = text(row, 'Trade_License_Number') as string;
-
-          vendor.creditTerms = row.cell<number | null>(column('Credit Terms'));
-          vendor.proposedPaymentTerms = row.cell<number | null>(
-            column('Proposed_Payment_Terms'),
-          );
-          vendor.paymentMode = text(row, 'Payment Mode') as string;
-
-          vendor.dispatchCenter = text(row, 'Dispatch Center') as string;
-          vendor.warehouseLocations = text(row, 'Ware House Locations') as string;
-          vendor.packingCenterLocation = text(row, 'Packing Center Location') as string;
-          vendor.otherProductOrService = text(row, 'Other Product Or Service') as string;
-          vendor.anyDetailsTeamAndInfra = text(
-            row,
-            'Any Other Details Regarding Team And Infrastructure',
-          ) as string;
-          vendor.status = Status.PENDING;
+          const vendor = this.vendorFromRow(reader, linkIndexes, { isNew: true });
+          reader.noteMissingRequired(['Company Name']);
+          vendor.status = Status.DRAFT;
           vendor.createdBy = creator;
 
-          // ── Products and packing materials ──────────────────────────────
-          const mainProductName = text(row, 'Main Product');
-          if (mainProductName) {
-            const mainProduct = await this.productRepository
-              .createQueryBuilder('product')
-              .where('LOWER(product.name) = LOWER(:name)', { name: mainProductName })
-              .getOne();
-
-            if (mainProduct) {
-              vendor.mainProduct = mainProduct;
-            } else {
-              summary.failed.push({
-                row: row.rowNumber,
-                reason: `Main Product "${mainProductName}" did not match any product and was left blank`,
-              });
-            }
+          let saved: Vendor = vendor;
+          if (!checkOnly) {
+            vendor.vendorCode = await this.generateBulkVendorCode();
+            saved = await this.vendorRepository.save(vendor);
           }
 
-          const productNames = toList(row.raw('List Of All Products'));
-          if (productNames.length) {
-            const products: Product[] = [];
-            for (const productName of productNames) {
-              const product = await this.productRepository
-                .createQueryBuilder('product')
-                .where('LOWER(product.name) = LOWER(:name)', { name: productName })
-                .getOne();
-
-              if (product) {
-                products.push(product);
-              } else {
-                summary.failed.push({
-                  row: row.rowNumber,
-                  reason: `Product "${productName}" in List Of All Products did not match any product`,
-                });
-              }
-            }
-            vendor.listOfAllProducts = products;
-          }
-
-          const mainMaterialName = text(row, 'Main Packing Material');
-          if (mainMaterialName) {
-            const material = await this.packingMaterialRepository
-              .createQueryBuilder('material')
-              .where('LOWER(material.packagingMaterialName) = LOWER(:name)', {
-                name: mainMaterialName,
-              })
-              .getOne();
-
-            if (material) {
-              vendor.mainPackingMaterial = material;
-            } else {
-              summary.failed.push({
-                row: row.rowNumber,
-                reason: `Main Packing Material "${mainMaterialName}" did not match any packing material`,
-              });
-            }
-          }
-
-          const materialNames = toList(row.raw('List Of Packing Material'));
-          if (materialNames.length) {
-            const materials: PackingMaterial[] = [];
-            for (const materialName of materialNames) {
-              const material = await this.packingMaterialRepository
-                .createQueryBuilder('material')
-                .where('LOWER(material.packagingMaterialName) = LOWER(:name)', {
-                  name: materialName,
-                })
-                .getOne();
-
-              if (material) {
-                materials.push(material);
-              } else {
-                summary.failed.push({
-                  row: row.rowNumber,
-                  reason: `Packing material "${materialName}" did not match any packing material`,
-                });
-              }
-            }
-            vendor.listOfPackingMaterial = materials;
-          }
-
-          // ── Addresses ───────────────────────────────────────────────────
-          vendor.officeAddress = this.addressFromRow(row, 'Office', text);
-          vendor.ref1Address = this.addressFromRow(row, 'Ref1_', text);
-          vendor.ref2Address = this.addressFromRow(row, 'Ref2_', text);
-
-          // ── Sales contact ───────────────────────────────────────────────
-          const contact = new VendorSaleInfo();
-          contact.contactFName = text(row, 'Contact First Name') as string;
-          contact.contactMName = text(row, 'Contact Middle Name') as string;
-          contact.contactLName = text(row, 'Contact Last Name') as string;
-          contact.directContactNumber = text(row, 'Direct Contact Number') as string;
-          contact.mobileNumber = text(row, 'Mobile Number') as string;
-          contact.email = text(row, 'Email') as string;
-          vendor.vendorSaleInfo = contact;
-
-          // ── Bank details ────────────────────────────────────────────────
-          const bank = new BankDetailsvend();
-          bank.beneficiaryFName = text(row, 'Beneficiary First Name') as string;
-          bank.beneficiaryMName = text(row, 'Beneficiary Middle Name') as string;
-          bank.beneficiaryLName = text(row, 'Beneficiary Last Name') as string;
-          bank.bankCompanyName = text(row, 'Bank Company Name') as string;
-          bank.bankName = text(row, 'Bank Name') as string;
-          bank.typeOfAcc = row.cell<AccountType | null>(
-            column('Type Of Acc'),
-          ) as AccountType;
-          bank.ifscCode = text(row, 'Ifsc Code') as string;
-          bank.swiftNo = text(row, 'Swift No') as string;
-          bank.invoiceCurrency = text(row, 'Invoice Currency') as string;
-          bank.branchAddress = this.addressFromRow(row, 'Branch', text);
-          vendor.vendorBankDetails = bank;
-
-          // ── References ──────────────────────────────────────────────────
-          vendor.ref1FName = text(row, 'Ref1_First_Name') as string;
-          vendor.ref1MName = text(row, 'Ref1_Middle_Name') as string;
-          vendor.ref1LName = text(row, 'Ref1_Last_Name') as string;
-          vendor.ref1PrimaryCNumb = text(row, 'Ref1_Primary_Contact_Number') as string;
-          vendor.ref1AltrCNumb = text(row, 'Ref1_Alternative_Contact_Number') as string;
-          vendor.ref1Email = text(row, 'Ref1_Email') as string;
-
-          vendor.ref2FName = text(row, 'Ref2_First_Name') as string;
-          vendor.ref2MName = text(row, 'Ref2_Middle_Name') as string;
-          vendor.ref2LName = text(row, 'Ref2_Last_Name') as string;
-          vendor.ref2PrimaryCNumb = text(row, 'Ref2_Primary_Contact_Number') as string;
-          vendor.ref2AltrCNumb = text(row, 'Ref2_Alternative_Contact_Number') as string;
-          vendor.ref2Email = text(row, 'Ref2_Email') as string;
-
-          await this.vendorRepository.save(vendor);
           summary.created++;
+          if (draft.isDraft) summary.drafted++;
+          summary.draftIssues.push(...draft.toReport(row.rowNumber, saved.vendorCode ?? null, companyName));
+          const owner = {
+            key: saved.id ?? ownerKey,
+            label: saved.vendorCode ? vendorLabel(saved) : `row ${row.rowNumber}`,
+          };
+          reader.registerContacts(owner);
+          byName.set(normaliseName(companyName), owner.label);
+          if (saved.vendorCode) byCode.set(saved.vendorCode.toUpperCase(), saved);
         } catch (rowError: any) {
           summary.failed.push({
             row: row.rowNumber,
@@ -1200,10 +1209,11 @@ async getVendorByIdforupdate(id: string): Promise<VendorUpdateFormDto> {
         }
       }
 
-      if (summary.created > 0) {
+      if (!checkOnly && (summary.created > 0 || summary.updated > 0)) {
         await this.invalidateVendorCache();
       }
 
+      await attachImportReport(summary, 'Vendor');
       return summary;
     } finally {
       await deleteFromSpaces(fileUrl);
@@ -1211,26 +1221,103 @@ async getVendorByIdforupdate(id: string): Promise<VendorUpdateFormDto> {
   }
 
   /**
-   * Builds one Address from a set of columns sharing a prefix, e.g. `Office` ->
-   * "Office Address1"/"Office City", or `Ref1_` -> "Ref1_Address1"/"Ref1_City".
+   * A Vendor built from one row - every cell through the column rules - with its
+   * links matched. Used as the new vendor, or merged onto a draft (only what is
+   * filled). `isNew`: a blank Vendor Category is then reported as required.
    */
-  private addressFromRow(
-    row: ExcelRow,
-    prefix: string,
-    text: (row: ExcelRow, header: string) => string | null,
-  ): Address {
-    // `Office` columns are space-separated while `Ref1_` columns are
-    // underscore-separated; the prefix carries its own trailing separator.
-    const at = (suffix: string) =>
-      text(row, prefix.endsWith('_') ? `${prefix}${suffix}` : `${prefix} ${suffix}`);
+  private vendorFromRow(
+    reader: RegistrationRowReader,
+    indexes: Awaited<ReturnType<VendorService['loadVendorLinkIndexes']>>,
+    options: { isNew: boolean },
+  ): Vendor {
+    const text = (header: string) => reader.text(header) as string;
+    const vendor = new Vendor();
+    vendor.companyName = text('Company Name');
 
+    this.applyVendorLinks(vendor, reader.row, (_row, header) => reader.text(header), indexes, reader.draft, {
+      categoryRequired: options.isNew,
+    });
+
+    // ── Company details ─────────────────────────────────────────────────
+    vendor.classification = reader.value<VendorClassification>('Classification') as VendorClassification;
+    vendor.vendorGrade = text('Vendor Grade');
+    vendor.officeContactNo = text('Office Contact No');
+    vendor.officeEmail = text('Office Email');
+    vendor.website = text('Website');
+    vendor.inFandVBusinessSince = text('In F&V Business Since');
+    vendor.dateOfIncorporation = reader.date('Date Of Incorporation') as Date;
+
+    vendor.gstn = text('GSTIN');
+    vendor.panNo = text('PAN Number');
+    vendor.msmeNo = text('MSME Number');
+    vendor.tradeLicenseNumber = text('Trade Licence Number');
+
+    vendor.creditTerms = reader.number('Credit Terms') as number;
+    vendor.proposedPaymentTerms = reader.number('Proposed Payment Terms') as number;
+    vendor.paymentMode = text('Payment Mode');
+
+    vendor.dispatchCenter = text('Dispatch Center');
+    vendor.warehouseLocations = text('Warehouse Locations');
+    vendor.packingCenterLocation = text('Packing Center Location');
+    vendor.otherProductOrService = text('Other Product Or Service');
+    vendor.anyDetailsTeamAndInfra = text('Any Other Details Regarding Team And Infrastructure');
+
+    // ── Addresses ───────────────────────────────────────────────────────
+    vendor.officeAddress = this.addressFromRow(reader, (part) => `Office ${part}`);
+    vendor.ref1Address = this.addressFromRow(reader, (part) => `Reference 1 ${part}`);
+    vendor.ref2Address = this.addressFromRow(reader, (part) => `Reference 2 ${part}`);
+
+    // ── Sales contact ───────────────────────────────────────────────────
+    const contact = new VendorSaleInfo();
+    contact.contactFName = text('Contact First Name');
+    contact.contactMName = text('Contact Middle Name');
+    contact.contactLName = text('Contact Last Name');
+    contact.directContactNumber = text('Direct Contact Number');
+    contact.mobileNumber = text('Mobile Number');
+    contact.email = text('Email');
+    vendor.vendorSaleInfo = contact;
+
+    // ── Bank details ────────────────────────────────────────────────────
+    const bank = new BankDetailsvend();
+    bank.beneficiaryFName = text('Beneficiary First Name');
+    bank.beneficiaryMName = text('Beneficiary Middle Name');
+    bank.beneficiaryLName = text('Beneficiary Last Name');
+    bank.bankCompanyName = text('Bank Company Name');
+    bank.bankName = text('Bank Name');
+    bank.typeOfAcc = reader.value<AccountType>('Account Type') as AccountType;
+    bank.ifscCode = text('IFSC Code');
+    bank.swiftNo = text('SWIFT Code');
+    bank.invoiceCurrency = text('Invoice Currency');
+    bank.branchAddress = this.addressFromRow(reader, (part) => `Branch ${part}`);
+    vendor.vendorBankDetails = bank;
+
+    // ── References ──────────────────────────────────────────────────────
+    vendor.ref1FName = text('Reference 1 First Name');
+    vendor.ref1MName = text('Reference 1 Middle Name');
+    vendor.ref1LName = text('Reference 1 Last Name');
+    vendor.ref1PrimaryCNumb = text('Reference 1 Primary Contact No');
+    vendor.ref1AltrCNumb = text('Reference 1 Alternative Contact No');
+    vendor.ref1Email = text('Reference 1 Email');
+
+    vendor.ref2FName = text('Reference 2 First Name');
+    vendor.ref2MName = text('Reference 2 Middle Name');
+    vendor.ref2LName = text('Reference 2 Last Name');
+    vendor.ref2PrimaryCNumb = text('Reference 2 Primary Contact No');
+    vendor.ref2AltrCNumb = text('Reference 2 Alternative Contact No');
+    vendor.ref2Email = text('Reference 2 Email');
+
+    return vendor;
+  }
+
+  /** One Address from the columns `header(part)` names, e.g. "Office City". */
+  private addressFromRow(reader: RegistrationRowReader, header: (part: string) => string): Address {
     const address = new Address();
-    address.address1 = at('Address1') as string;
-    address.address2 = at('Address2') as string;
-    address.location = at('Location') as string;
-    address.city = at('City') as string;
-    address.state = at('State') as string;
-    address.pincode = at('Pincode') as string;
+    address.address1 = reader.text(header('Address1')) as string;
+    address.address2 = reader.text(header('Address2')) as string;
+    address.location = reader.text(header('Location')) as string;
+    address.city = reader.text(header('City')) as string;
+    address.state = reader.text(header('State')) as string;
+    address.pincode = reader.text(header('Pincode')) as string;
     return address;
   }
 
@@ -2231,3 +2318,6 @@ async softDeleteVendors(vendorIds: string[]) {
   //   return vendor;
   // }
 
+/** How the import names a vendor: "VENDOR20260003 Fresh Farms". */
+const vendorLabel = (vendor: Pick<Vendor, 'vendorCode' | 'companyName'>): string =>
+  [vendor.vendorCode, vendor.companyName].filter(Boolean).join(' ');

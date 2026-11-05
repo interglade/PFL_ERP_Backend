@@ -351,8 +351,6 @@ DumpProductRepository:Symbol.for("DumpProductRepository"),
 
 //product varient
 ProductVarientsRepository:Symbol.for("ProductVarientsRepository"),
-ProductVarientService:Symbol.for("ProductVarientService"),
-ProductVarientsController:Symbol.for("ProductVarientsController"),
 //packingMaterial
 PackingMaterialRepository:Symbol.for("PackingMaterialRepository"),
 PackingMaterialService :Symbol.for("PackingMaterialService"),
@@ -390,6 +388,8 @@ ApproverBlockRepository:Symbol.for("ApproverBlockRepository"),
   ProductVarientRepository:Symbol.for("ProductVarientRepository"),
   ProductVarientsService:Symbol.for("ProductVarientsService"),
   VarientsController:Symbol.for("VarientsController"),
+  ProductAttributeService: Symbol.for("ProductAttributeService"),
+  ProductAttributeController: Symbol.for("ProductAttributeController"),
   ExcelController:Symbol.for("ExcelController"),
   ActiveSessionRepository:Symbol.for("ActiveSessionRepository"),
 
@@ -476,6 +476,8 @@ RegistrationReportsController:Symbol.for("RegistrationReportsController"),
     GrnProductHistoryService:Symbol.for("GrnProductHistoryService"),
   GrnPaymentService: Symbol.for("GrnPaymentService"),
   GrnPaymentController: Symbol.for("GrnPaymentController"),
+  InvoicePaymentService: Symbol.for("InvoicePaymentService"),
+  InvoicePaymentController: Symbol.for("InvoicePaymentController"),
 
   // Document Excel exports
   DocumentExportService: Symbol.for("DocumentExportService"),
@@ -489,6 +491,10 @@ RegistrationReportsController:Symbol.for("RegistrationReportsController"),
   StockAdjustmentService: Symbol.for("StockAdjustmentService"),
   DcDeliveryController: Symbol.for("DcDeliveryController"),
 
+  // Report Center (docs/reports-plan.md)
+  ReportCenterController: Symbol.for("ReportCenterController"),
+  ReportCenterService: Symbol.for("ReportCenterService"),
+
   // Admin Control Center dashboard
   AdminControlCenterController: Symbol.for("AdminControlCenterController"),
   AccFiltersService: Symbol.for("AccFiltersService"),
@@ -497,6 +503,22 @@ RegistrationReportsController:Symbol.for("RegistrationReportsController"),
   AccSalesService: Symbol.for("AccSalesService"),
   AccDocumentsService: Symbol.for("AccDocumentsService"),
   AccUsersService: Symbol.for("AccUsersService"),
+
+  // Standard user dashboard (docs/user-dashboard-plan.md)
+  MyDashboardController: Symbol.for("MyDashboardController"),
+  MyWorkService: Symbol.for("MyWorkService"),
+  MyPaymentsService: Symbol.for("MyPaymentsService"),
+  MyDepartmentsService: Symbol.for("MyDepartmentsService"),
+
+  // Master data Excel import / export (docs/master-data-excel-plan.md)
+  MasterDataExcelService: Symbol.for("MasterDataExcelService"),
+  LocationExcelService: Symbol.for("LocationExcelService"),
+  EmployeeExcelService: Symbol.for("EmployeeExcelService"),
+  MasterDataExcelController: Symbol.for("MasterDataExcelController"),
+
+  // Transaction tracking (docs/transaction-tracking-plan.md)
+  TransactionService: Symbol.for("TransactionService"),
+  TransactionController: Symbol.for("TransactionController"),
 };
 
 export { TYPES };

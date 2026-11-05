@@ -1,6 +1,7 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
-export type AdjustmentStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export const ADJUSTMENT_STATUSES = ['Pending', 'Approved', 'Rejected'] as const;
+export type AdjustmentStatus = (typeof ADJUSTMENT_STATUSES)[number];
 export type AdjustmentReason = 'COUNT_DIFFERENCE' | 'DAMAGE_IN_STORAGE' | 'SAMPLE' | 'OPENING' | 'OTHER';
 export const ADJUSTMENT_REASONS: AdjustmentReason[] = ['COUNT_DIFFERENCE', 'DAMAGE_IN_STORAGE', 'SAMPLE', 'OPENING', 'OTHER'];
 
@@ -65,7 +66,7 @@ export class StockAdjustment {
   @Column({ type: 'text', nullable: true })
   remark: string | null;
 
-  @Column({ type: 'varchar', length: 10, default: 'PENDING' })
+  @Column({ type: 'varchar', length: 10, default: 'Pending' })
   status: AdjustmentStatus;
 
   @Column({ name: 'requested_by', type: 'uuid', nullable: true })
@@ -130,7 +131,7 @@ export class StockRepack {
   @Column({ type: 'text', nullable: true })
   remark: string | null;
 
-  @Column({ type: 'varchar', length: 10, default: 'PENDING' })
+  @Column({ type: 'varchar', length: 10, default: 'Pending' })
   status: AdjustmentStatus;
 
   @Column({ name: 'requested_by', type: 'uuid', nullable: true })

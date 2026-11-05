@@ -1,3 +1,7 @@
+import { protectBody } from '../../middleware/protectBody';
+import { checkPermission } from '../../middleware/checkPermission';
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -16,6 +20,7 @@ import { TYPES } from '../../types';
 import AppError from '../../utils/appError';
 import { Status } from '../../utils/status.enum';
 import { ControllerLogger } from '../../utils/controllerLogger';
+import { uploadSingle } from '../../middleware/uploadsingle.middleware';
 import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
 import { readIds, readListOptions } from '../../transport/transport.query';
 import { DriversService } from '../service/driver.service';
@@ -28,7 +33,65 @@ export class DriverController {
     private readonly driversService: DriversService,
   ) {}
 
-  @httpPost('/')
+  // ─── Excel (docs/master-data-excel-plan.md Phase 7) ───────────────────────
+
+  @httpGet('/export/excel', checkPermission('drivers', 'export'))
+  public async exportExcel(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const file = await this.driversService.exportToExcel(res.locals.user.id);
+      ControllerLogger.logList('Driver Excel export', req, res);
+      res.status(200).json({
+        status: 'success',
+        message: `${file.rowCount} driver(s) exported successfully`,
+        data: { downloadUrl: file.downloadUrl, fileName: file.fileName, totalRecords: file.rowCount },
+      });
+    } catch (err) {
+      ControllerLogger.logError('Driver Excel export', err, req, res);
+      next(err);
+    }
+  }
+
+  @httpGet('/download/template', checkPermission('drivers', 'create'))
+  public async downloadExcelTemplate(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const file = await this.driversService.buildExcelTemplate();
+      ControllerLogger.logList('Driver Excel template', req, res);
+      res.status(200).json({
+        status: 'success',
+        message: 'Template ready',
+        data: { downloadUrl: file.downloadUrl, fileName: file.fileName, totalRecords: 0 },
+      });
+    } catch (err) {
+      ControllerLogger.logError('Driver Excel template', err, req, res);
+      next(err);
+    }
+  }
+
+  @httpPost('/upload', checkPermission('drivers', 'create'), uploadSingle.single('file'))
+  public async uploadExcel(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const fileUrl = (req.file as any)?.location as string | undefined;
+      if (!fileUrl) return next(new AppError(400, 'No file uploaded'));
+
+      const summary = await this.driversService.importFromExcel(fileUrl, res.locals.user.id);
+      ControllerLogger.logSuccess('Driver Excel uploaded', 'bulk', req, res);
+      res.status(200).json({
+        status: 'success',
+        message:
+          `${summary.created} driver(s) imported` +
+          (summary.drafted ? `, ${summary.drafted} saved as draft` : '') +
+          (summary.updated ? `, ${summary.updated} draft(s) completed` : '') +
+          (summary.skipped.length ? `, ${summary.skipped.length} skipped` : '') +
+          (summary.failed.length ? `, ${summary.failed.length} failed` : ''),
+        data: summary,
+      });
+    } catch (err) {
+      ControllerLogger.logError('Driver Excel upload', err, req, res);
+      next(err);
+    }
+  }
+
+  @httpPost('/', checkPermission('drivers', 'create'))
   public async createDriver(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const driver = await this.driversService.create(req.body, res.locals.user.id);
@@ -45,7 +108,7 @@ export class DriverController {
     }
   }
 
-  @httpGet('/')
+  @httpGet('/', checkPermission('drivers', 'view'))
   public async getAllDrivers(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const options = readListOptions(req, DRIVER_FILTERS);
@@ -98,7 +161,7 @@ export class DriverController {
     }
   }
 
-  @httpGet('/view/:id')
+  @httpGet('/view/:id', checkPermission('drivers', 'view'))
   public async getDriverForView(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -116,7 +179,7 @@ export class DriverController {
     }
   }
 
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkPermission('drivers', 'edit'))
   public async getDriverForUpdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -135,7 +198,7 @@ export class DriverController {
   }
 
   /** Submits a draft (pending, or approved straight away for an admin / verifier). */
-  @httpPatch('/submit/:id')
+  @httpPatch('/submit/:id', checkPermission('drivers', 'create'))
   public async submitDriver(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -156,7 +219,7 @@ export class DriverController {
     }
   }
 
-  @httpPatch('/approve/:id')
+  @httpPatch('/approve/:id', requireRole(Role.ADMIN, Role.VERIFIER))
   public async approveDriver(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -177,7 +240,7 @@ export class DriverController {
     }
   }
 
-  @httpPut('/:id')
+  @httpPut('/:id', checkPermission('drivers', 'edit'), protectBody)
   public async updateDriver(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -198,7 +261,7 @@ export class DriverController {
     }
   }
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', requireRole(Role.SUPER_ADMIN))
   public async deleteMultipleDrivers(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const ids = readIds(req);
@@ -215,7 +278,7 @@ export class DriverController {
     }
   }
 
-  @httpDelete('/:id')
+  @httpDelete('/:id', requireRole(Role.SUPER_ADMIN))
   public async deleteDriver(
     @requestParam('id') id: string,
     @request() req: Request,

@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from "inversify";
 import { controller, httpGet, httpPatch, httpPost, next, request, requestParam, response } from "inversify-express-utils";
 import { TYPES } from "../../types";
@@ -44,7 +46,7 @@ export class  DocumentDefinitionController {
     
 
 
-      @httpPost('/')
+      @httpPost('/', requireRole(Role.ADMIN))
       public async createDocumentDef(
         @request() req: Request,
         @response() res: Response,

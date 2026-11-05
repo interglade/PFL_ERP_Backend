@@ -1,3 +1,5 @@
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { 
     controller, 
     httpPost, 
@@ -22,7 +24,7 @@ import { PaginationOptions } from "../../utils/pagination";
 import AppError from "../../utils/appError";
  
   
-  @controller("/tempLabour",deserializeUser,requireUser)
+  @controller("/tempLabour",deserializeUser,requireUser, requireRole(Role.ADMIN))
   export class LaborRegisterController {
     constructor(
       @inject(TYPES.LaborRegisterService)

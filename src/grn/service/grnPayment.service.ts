@@ -1,3 +1,5 @@
+import { isPaymentManager } from '../../utils/roles';
+import { refreshTransactionOf } from '../../transactions/transaction.core';
 import { inject, injectable } from 'inversify';
 import { DataSource, EntityManager } from 'typeorm';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -77,14 +79,14 @@ export class GrnPaymentService {
     @inject(TYPES.NotificationService) private readonly notificationService: NotificationService,
   ) {}
 
-  /** C2: only users with the finalizer role record, edit and void payments. */
+  /** Only Payment Managers record, edit and void payments (client decision 2026-10-29; finalizers no longer). */
   static canManage(user: GrnPaymentActor | null | undefined): boolean {
-    return Array.isArray(user?.roles) && user!.roles!.includes(Role.FINALIZER);
+    return isPaymentManager({ roles: user?.roles ?? undefined });
   }
 
   private assertCanManage(user: GrnPaymentActor): void {
     if (!GrnPaymentService.canManage(user)) {
-      throw new AppError(403, 'Only a user with the finalizer role can record, edit or void GRN payments');
+      throw new AppError(403, 'Only a Payment Manager can record, edit or void GRN payments');
     }
   }
 
@@ -266,7 +268,7 @@ export class GrnPaymentService {
       canManage,
       // Why "Record payment" is unavailable, or null.
       recordBlockedReason: !canManage
-        ? 'Only a user with the finalizer role can record payments'
+        ? 'Only a Payment Manager can record payments'
         : blockedReason ?? (summary.balanceAmt <= 0 ? `${this.label(head)} has no balance left to pay` : null),
       // The advance alone covers the total: a finalizer confirms the GRN as paid instead.
       canConfirmPaidByAdvance: canManage && !blockedReason && summary.advanceCoversTotal && summary.status !== GrnPaymentStatus.PAID,
@@ -311,6 +313,8 @@ export class GrnPaymentService {
       await m.update(GrnPayment, { id: row.id }, { paymentType: row.paymentType, balanceAfter: row.balanceAfter });
     }
     await m.query(`UPDATE grns SET paid_amount = $2, "ammountStatus" = $3 WHERE id = $1`, [head.id, summary.paidAmt, summary.status]);
+    // The purchase closes when the GRN is fully paid (docs/transaction-tracking-plan.md §9.3). Never throws.
+    await refreshTransactionOf(m, 'grn', head.id);
     return { before: head.ammountStatus, summary };
   }
 
@@ -454,6 +458,7 @@ export class GrnPaymentService {
         );
       }
       await m.query(`UPDATE grns SET "ammountStatus" = $2 WHERE id = $1`, [grnId, GrnPaymentStatus.PAID]);
+      await refreshTransactionOf(m, 'grn', grnId);
       return { head, before: head.ammountStatus, summary: { ...summary, status: GrnPaymentStatus.PAID } };
     });
     await this.afterChange(result.head, result.before, result.summary);

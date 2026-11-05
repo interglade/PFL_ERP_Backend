@@ -1,3 +1,4 @@
+import { checkAnyPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import { controller, httpGet, next, request, response } from 'inversify-express-utils';
 import { NextFunction, Request, Response } from 'express';
@@ -133,7 +134,7 @@ export class VouchersController {
    * The four voucher lists merged. Query: the common document filters, voucher
    * filters, `voucherType`, `sort`, `page`, `limit`.
    */
-  @httpGet('/')
+  @httpGet('/', checkAnyPermission(['labor-payment-voucher', 'view'], ['multi-cash-voucher', 'view'], ['packaging-material-voucher', 'view'], ['transport-payment-voucher', 'view']))
   public async getAllVouchers(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const userId = res.locals.user?.id;
@@ -177,7 +178,7 @@ export class VouchersController {
    * Filters: startDate/endDate (dateFrom/dateTo), paymentMode, minAmount/maxAmount,
    * voucherType, approvalStatus (or status), locationId/location, companyId/company.
    */
-  @httpGet('/details')
+  @httpGet('/details', checkAnyPermission(['labor-payment-voucher', 'view'], ['multi-cash-voucher', 'view'], ['packaging-material-voucher', 'view'], ['transport-payment-voucher', 'view']))
   public async getVoucherDetails(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const userId = res.locals.user?.id;
@@ -224,7 +225,7 @@ export class VouchersController {
    * Workbook of Summary, Details and Approvals. Same filters and rows as
    * GET /vouchers/details, without pagination.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkAnyPermission(['labor-payment-voucher', 'export'], ['multi-cash-voucher', 'export'], ['packaging-material-voucher', 'export'], ['transport-payment-voucher', 'export']))
   public async exportToExcel(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     const query = this.reportQuery(req.query);
     return this.documentExportService.export(req, res, next, {

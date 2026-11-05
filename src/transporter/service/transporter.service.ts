@@ -10,7 +10,8 @@ import { CacheService } from '../../global/cache.service';
 import { NotificationService } from '../../notification/service/notification.service';
 import { AuditLogService } from '../../employeeActivity/service/auditLog.service';
 import { Address } from '../../address/entity/address.entity';
-import { TransportRegistrationService, CACHE_TTL_DETAIL, CACHE_TTL_LIST } from '../../transport/transportRegistration.service';
+import { TransportRegistrationService, CACHE_TTL_DETAIL, CACHE_TTL_LIST, TransportExcelConfig } from '../../transport/transportRegistration.service';
+import { TRANSPORTER_SHEET, transporterRowBody } from '../../transport/transportExcel';
 import {
   assertMatches,
   blankToNull,
@@ -53,6 +54,13 @@ export class TransporterService extends TransportRegistrationService<Transporter
   protected readonly tableName = 'transporters';
   protected readonly codeColumn = 'transporterCode';
   protected readonly codePrefix = 'TR-';
+  protected readonly excel: TransportExcelConfig = {
+    sheet: TRANSPORTER_SHEET,
+    master: 'transporter',
+    fileStem: 'Transporters',
+    relations: ['address'],
+    toBody: (row) => transporterRowBody(row),
+  };
 
   constructor(
     @inject(TYPES.TransporterRepository) transporterRepository: TransporterRepository,

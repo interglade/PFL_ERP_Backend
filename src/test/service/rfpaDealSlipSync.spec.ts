@@ -152,7 +152,7 @@ describe('deal slip edit rules', () => {
 
   it('ignores read-only meta keys the edit form echoes', () => {
     expect(() =>
-      planDealSlipEdit({ ...submit, id: 'x', dealSlipNo: 'DL1', rfpa: 'R1', overAllStatus: 'draft', documentId: 'd' }, slip()),
+      planDealSlipEdit({ ...submit, id: 'x', dealSlipNo: 'DL1', rfpa: 'R1', overAllStatus: 'Draft', documentId: 'd' }, slip()),
     ).not.toThrow();
   });
 
@@ -285,16 +285,16 @@ describe('deal slip approver (GRN "Requesting person" pre-fill)', () => {
   const doc = (stage: any) => ({ approvalInfo: { firstApproved: stage } });
 
   it('is the user who approved the slip', () => {
-    expect(dealSlipApproverId(doc({ userId: 'u-1', status: 'approved' }))).toBe('u-1');
+    expect(dealSlipApproverId(doc({ userId: 'u-1', status: 'Approved' }))).toBe('u-1');
   });
 
   it('is empty until approved, and for a rejection', () => {
-    expect(dealSlipApproverId(doc({ userId: 'u-1', status: 'hold' }))).toBeNull();
-    expect(dealSlipApproverId(doc({ userId: 'u-1', status: 'reject' }))).toBeNull();
+    expect(dealSlipApproverId(doc({ userId: 'u-1', status: 'Hold' }))).toBeNull();
+    expect(dealSlipApproverId(doc({ userId: 'u-1', status: 'Rejected' }))).toBeNull();
     expect(dealSlipApproverId(doc(null))).toBeNull();
     expect(dealSlipApproverId({ approvalInfo: null })).toBeNull();
     expect(dealSlipApproverId(null)).toBeNull();
-    expect(dealSlipApproverId(doc({ userId: null, status: 'approved' }))).toBeNull();
+    expect(dealSlipApproverId(doc({ userId: null, status: 'Approved' }))).toBeNull();
   });
 });
 

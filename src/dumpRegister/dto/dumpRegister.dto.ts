@@ -124,6 +124,8 @@ export interface DumpRegisterForUpdateDto {
   createdDate: string | null;
   createdTime: string | null;
   dumpType: DumpType | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   location: string | null;
   date: Date | null;
@@ -208,6 +210,8 @@ export interface DumpRegisterViewDto {
     secondFinalized?: { userId: string; name: string; status: string; reason: string | null } | null;
   } | null;
   dumpNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   grn: string | null;
   deliveryChallanNo: string | null;
   rbcNo: string | null;
@@ -236,6 +240,8 @@ export interface DumpRegisterListItemDto {
   createdTime: string | null;
   id: string;
   dumpNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   location: string | null;
   grn: string | null;
@@ -269,6 +275,8 @@ export interface DumpRegisterRecycleItemDto {
   createdTime: string | null;
   id: string;
   dumpNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   location: string | null;
   grn: string | null;

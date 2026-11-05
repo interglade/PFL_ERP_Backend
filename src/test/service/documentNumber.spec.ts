@@ -5,7 +5,7 @@
 
 import 'reflect-metadata';
 import { EntityManager } from 'typeorm';
-import { compactDate, escapeRegex, nextDocumentNumber, nextSerial, SERIES } from '../../global/numbering/documentNumber';
+import { compactDate, escapeRegex, nextDeliveryChallanNo, nextDocumentNumber, nextSerial, SERIES } from '../../global/numbering/documentNumber';
 
 type Call = { sql: string; params: unknown[] };
 
@@ -52,6 +52,21 @@ describe('document numbering', () => {
 
   it('escapes regex characters of a prefix (invoice prefixes contain dots / dashes / brackets)', () => {
     expect(escapeRegex('PF-2026-Vashi (APMC).-')).toBe('PF-2026-Vashi \\(APMC\\)\\.-');
+  });
+
+  it('numbers delivery challans DC-<year>-<type><serial>, one series per type and year', async () => {
+    const { manager, calls } = fakeManager({ update: [], max: null });
+    await expect(nextDeliveryChallanNo(manager, 'O', new Date(2026, 11, 31))).resolves.toBe('DC-2026-O00001');
+    expect(calls[0].params).toEqual(['delivery_challan_purchase:DC-2026-O']);
+    expect(calls[1].params).toEqual(['^DC-2026-O([0-9]+)$']);
+
+    const next = fakeManager({ update: [{ last_serial: '12' }] });
+    await expect(nextDeliveryChallanNo(next.manager, 'C', new Date(2026, 5, 1))).resolves.toBe('DC-2026-C00012');
+
+    // 1 January: a new scope, so the serial starts again at 1.
+    const newYear = fakeManager({ update: [], max: null });
+    await expect(nextDeliveryChallanNo(newYear.manager, 'S', new Date(2027, 0, 1))).resolves.toBe('DC-2027-S00001');
+    expect(newYear.calls[0].params).toEqual(['delivery_challan_purchase:DC-2027-S']);
   });
 
   it('formats today as yyyyMMdd', () => {

@@ -60,7 +60,7 @@ describe('go-live', () => {
 
 describe('dispatchGate', () => {
   it('lists every reason: source not approved and dispatch missing', async () => {
-    sourceDocument.mockResolvedValue({ status: 'hold' });
+    sourceDocument.mockResolvedValue({ status: 'Hold' });
     liveDispatch.mockResolvedValue(null);
     const gate = await dispatchGate(manager(source()), DispatchType.PURCHASE, 'g1');
     expect(gate).toMatchObject({ required: true, sourceComplete: false, ready: false });
@@ -68,18 +68,18 @@ describe('dispatchGate', () => {
   });
 
   it('waits for the dispatch approval, then is ready', async () => {
-    sourceDocument.mockResolvedValue({ status: 'COMPLETE' });
-    liveDispatch.mockResolvedValue(dispatch('hold'));
+    sourceDocument.mockResolvedValue({ status: 'Complete' });
+    liveDispatch.mockResolvedValue(dispatch('Hold'));
     const pending = await dispatchGate(manager(source()), DispatchType.PURCHASE, 'g1');
     expect(pending.reasons).toEqual(['Purchase dispatch VDP2610200001 is not approved yet']);
 
-    liveDispatch.mockResolvedValue(dispatch('COMPLETE'));
+    liveDispatch.mockResolvedValue(dispatch('Complete'));
     const ready = await dispatchGate(manager(source()), DispatchType.PURCHASE, 'g1');
     expect(ready).toMatchObject({ ready: true, reasons: [] });
   });
 
   it('does not require a dispatch before go-live or for a direct-sale customer DC', async () => {
-    sourceDocument.mockResolvedValue({ status: 'COMPLETE' });
+    sourceDocument.mockResolvedValue({ status: 'Complete' });
     liveDispatch.mockResolvedValue(null);
     const old = await dispatchGate(manager(source({ created_at: new Date('2026-09-01T10:00:00') })), DispatchType.PURCHASE, 'g1');
     expect(old).toMatchObject({ required: false, ready: true });
@@ -92,7 +92,7 @@ describe('dispatchGate', () => {
     await expect(dispatchGate(manager(null), DispatchType.STOCK_TRANSFER, 'x')).rejects.toMatchObject({ statusCode: 404 });
     await expect(dispatchGate(manager(source({ deleted: true })), DispatchType.PURCHASE, 'x')).rejects.toMatchObject({ statusCode: 404 });
 
-    sourceDocument.mockResolvedValue({ status: 'COMPLETE' });
+    sourceDocument.mockResolvedValue({ status: 'Complete' });
     liveDispatch.mockResolvedValue(null);
     await expect(assertDispatchGate(manager(source()), DispatchType.PURCHASE, 'g1')).rejects.toMatchObject({
       statusCode: 400,

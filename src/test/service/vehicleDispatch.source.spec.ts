@@ -122,7 +122,7 @@ describe('liveDispatchExistsSql', () => {
     expect(sql).toContain('ld."grn_id" = g.id');
     expect(sql).toContain(`ld."dispatchType"::text = 'purchase'`);
     expect(sql).toContain('ld."deletedAt" IS NULL');
-    expect(sql).toContain(`ldd.status::text = 'REJECT'`);
+    expect(sql).toContain(`ldd.status::text = 'Rejected'`);
     expect(sql.startsWith('EXISTS (')).toBe(true);
   });
 

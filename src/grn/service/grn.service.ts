@@ -11,7 +11,7 @@ import { TYPES } from '../../types';
 import { ILike, In, LessThan, MoreThanOrEqual, DataSource, EntityManager } from 'typeorm';
 
 import AppError from '../../utils/appError';
-import { GrnPaymentStatus } from '../../utils/status.enum';
+import { GrnPaymentStatus, requireStatus } from '../../utils/status.enum';
 import { grnHasLivePayments } from './grnPayment.service';
 import { grnPaidAndBalance } from '../grnPayment';
 import { buildQueryFromArray, PaginationOptions } from '../../utils/pagination';
@@ -40,6 +40,8 @@ import { CreateGrnDto, GrnDetailDto, GrnListItemDto, UpdateGrnDto } from '../dto
 import { CENTRE_DELIVERY_MODES, GRN, GrnDeliveryMode } from '../entity/grn.entity';
 import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
 import { completeDocumentExistsSql, countingDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../receiving/receiving.sql';
+import { refreshTransactionOf } from '../../transactions/transaction.core';
+import { stampGrnTransaction } from '../grnTransaction';
 import { assertDealSlipUsableForGrn, syncDealSlipGrnFlags, syncDealSlipGrnFlagsForGrns } from '../../dealSlip/dealSlipGrnLink';
 import { isVoucherKind, liveVoucherForGrnExistsSql, VoucherKind, voucherKindFromLegacyFlags } from '../../vouchers/voucherGrnLink';
 import { isUuid, latestDocumentStatusSql, liveRowSql, relationIdOf } from '../grnLinks.sql';
@@ -371,6 +373,9 @@ public async getAllRecycleBinGrns(queryOptions: PaginationOptions, userId: strin
       const grn = queryRunner.manager.create(this.grnRepository.target, createPayload as any);
       const savedGrn = await queryRunner.manager.save(grn) as GRN | GRN[];
       await syncDealSlipGrnFlags(queryRunner.manager, [dealSlipId]);
+      // Transaction (§9.4): joins its deal slip's purchase, or opens a G purchase without one.
+      const savedGrnRow = (Array.isArray(savedGrn) ? savedGrn[0] : savedGrn) as GRN;
+      savedGrnRow.txnNo = await stampGrnTransaction(queryRunner.manager, savedGrnRow.id, { creating: true });
         console.log('totalAmt ', grnData.requestedBy);
 
         const document = await this.documentbService.createDocument({
@@ -398,11 +403,12 @@ public async getAllRecycleBinGrns(queryOptions: PaginationOptions, userId: strin
       }
     }
 
-public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false): Promise<{
+public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin: boolean = false, paymentManager: boolean = false): Promise<{
     data: GrnListItemDto[];
     meta: { total: number; page: number; pages: number };
   }> {
-    const hash = createHash('md5').update(`${userId}:${isAdmin ? 'admin' : 'user'}:${JSON.stringify(queryOptions)}`).digest('hex');
+    const scope = isAdmin ? 'admin' : paymentManager ? 'payment' : 'user';
+    const hash = createHash('md5').update(`${userId}:${scope}:${JSON.stringify(queryOptions)}`).digest('hex');
     const cacheKey = `${this.CACHE_PREFIX}:all:${hash}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
@@ -415,6 +421,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
       true,
       false,
       isAdmin,
+      paymentManager,
     );
 
     const typedDocuments = allDocuments as DocumentWithRelatedData[];
@@ -476,6 +483,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
           purchaseLocation: related.purchaseLocation?.name || null,
           purchaseForSalesLocation: related.purchaseForSalesLocation?.name || null,
           grnNo: related.grnNo || null,
+          txnNo: related.txnNo ?? null,
           batchNo: related.batchNo || null,
           totalGrossWeight: related.totalGrossWeight ?? null,
           totalNetWeight: related.totalNetWeight ?? null,
@@ -608,6 +616,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
         otherPurchaseForSalesLoc: grn.otherPurchaseForSalesLoc || null,
         otherPurchaseLoc: grn.otherPurchaseLoc || null,
         grnNo: grn.grnNo,
+        txnNo: grn.txnNo ?? null,
         batchNo: grn.batchNo ?? null,
         totalGrossWeight: grn.totalGrossWeight ?? null,
         totalNetWeight: grn.totalNetWeight ?? null,
@@ -622,6 +631,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
         purchaseLocation: grn.purchaseLocation?.name ?? null,
         purchaseForSalesLocation: grn.purchaseForSalesLocation?.name ?? null,
         selectedParty: selectedPartyId,
+        selectedPartyId: (grn.source === 'farmer' ? grn.selectedFarmer?.id : grn.selectedVendor?.id) ?? null,
         source: grn.source,
         billNo: grn.billNo,
         billImage: grn.billImage,
@@ -744,6 +754,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
       otherPurchaseForSalesLoc: grn.otherPurchaseForSalesLoc || null,
       otherPurchaseLoc: grn.otherPurchaseLoc || null,
       grnNo: grn.grnNo,
+      txnNo: grn.txnNo ?? null,
       batchNo: grn.batchNo ?? null,
       totalGrossWeight: grn.totalGrossWeight ?? null,
       totalNetWeight: grn.totalNetWeight ?? null,
@@ -1053,6 +1064,8 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     await queryRunner.manager.save(this.grnRepository.target, grn);
     if (nextDealSlipId && nextDealSlipId !== previousDealSlipId) {
       await syncDealSlipGrnFlags(queryRunner.manager, [previousDealSlipId, nextDealSlipId]);
+      // Transaction (§9.4): the GRN moves to the new deal slip's purchase.
+      await stampGrnTransaction(queryRunner.manager, id, { creating: false });
     }
 
     const updatedGrn = await queryRunner.manager.findOneOrFail(this.grnRepository.target, {
@@ -1077,6 +1090,8 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
       });
       if (!document) throw new AppError(404, 'Document not found');
       await this.resetApproval(queryRunner.manager, document.id, 'GRN edited: approval restarted');
+      // The approval bands route by the document's amount, so it follows the edited GRN total.
+      await queryRunner.manager.update(this.documentbRepository.target, { id: document.id }, { totalAmt: Number(updatedGrn.totalAmt) || 0 });
       restartGrnDocumentId = document.id;
 
       // D1-D3: the pending purchase dispatch follows the GRN; its approval restarts if its copy changed.
@@ -1203,7 +1218,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
   /** D-5: a GRN whose purchase dispatch is approved cannot be edited or deleted (the goods have left). */
   private async assertNoApprovedDispatch(manager: EntityManager, grnId: string, action: 'edited' | 'deleted'): Promise<void> {
     const status = (await sourceDispatchStatuses(manager, DispatchType.PURCHASE, [grnId]))[grnId];
-    if (status?.status === 'approved') {
+    if (status?.status === 'Approved') {
       const no = await manager.query(`SELECT "grnNo" AS no FROM grns WHERE id = $1`, [grnId]);
       throw new AppError(
         409,
@@ -1232,6 +1247,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     await this.grnRepository.update({ id }, { deletionScheduledAt: sixMonthsFromNow } as any);
     // D-5: its pending purchase dispatch is rejected, as on the bulk delete.
     await this.documentbService.rejectDispatchesForSource(DocumentTypeEnum.GRN, [id], 'deleted', `GRN ${grn.grnNo ?? ''}`.trim());
+    await refreshTransactionOf(this.dataSource.manager, 'grn', id);
     await this.invalidateCache(id);
     return {No:grn.grnNo};
   }
@@ -1604,7 +1620,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     const params: Record<string, unknown> = {};
     if (filter.overAllStatus) {
       conditions.push(`${latestDocumentStatusSql('grn.id', DocumentTypeEnum.GRN, 'grn_d')} = :overAllStatus`);
-      params.overAllStatus = String(filter.overAllStatus);
+      params.overAllStatus = requireStatus(DocumentStatus, filter.overAllStatus, 'overAllStatus');
     }
     const eligible = conditions.join(' AND ');
     const includeId = relationIdOf(filter.includeId);
@@ -1702,6 +1718,7 @@ public async getAllGrns(queryOptions: PaginationOptions, userId: string, isAdmin
     // Their pending purchase dispatches are rejected automatically.
     for (const grn of grns) {
       await this.documentbService.rejectDispatchesForSource(DocumentTypeEnum.GRN, [grn.id], 'deleted', `GRN ${grn.grnNo ?? ''}`.trim());
+      await refreshTransactionOf(this.dataSource.manager, 'grn', grn.id);
     }
     grns.map((v)=>{
       success.push({ id:v.id, No: v.grnNo });

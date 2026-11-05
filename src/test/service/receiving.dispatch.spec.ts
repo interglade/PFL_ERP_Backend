@@ -10,7 +10,7 @@ import { attachDispatch, dispatchArrivedSql, dispatchReadySql, dispatchStateOf, 
 import { DispatchSummary, ReceivingSourceStatus } from '../../receiving/receiving.types';
 
 const summary = (arrivedAt: string | null = null): DispatchSummary => ({
-  id: 'd1', dispatchNo: 'VDP2610130001', documentId: 'doc1', status: 'hold',
+  id: 'd1', dispatchNo: 'VDP2610130001', documentId: 'doc1', status: 'Hold',
   vehicleNo: 'MH12AB1234', vehicleType: 'Pickup', driverName: 'Raju', driverMobNo: '9800000000',
   transporterName: null, outTime: '09:30:00', expectedReachingDate: null, reachingTime: null, arrivedAt, netWeightKg: 1500,
 });
@@ -23,14 +23,14 @@ const status = (source: Partial<ReceivingSourceStatus['source']> = {}): Receivin
       { key: 'p2:v1:u-kg', productId: 'p2', variantId: 'v1', receivedKg: 500 },
     ],
     dispatch: null,
-    dispatchState: 'none',
+    dispatchState: 'None',
   }) as unknown as ReceivingSourceStatus;
 
 describe('dispatchStateOf', () => {
   it('none without a dispatch, in-transit until marked arrived, then arrived', () => {
-    expect(dispatchStateOf(null)).toBe('none');
-    expect(dispatchStateOf(summary())).toBe('in-transit');
-    expect(dispatchStateOf(summary('2026-10-13T09:00:00Z'))).toBe('arrived');
+    expect(dispatchStateOf(null)).toBe('None');
+    expect(dispatchStateOf(summary())).toBe('In Transit');
+    expect(dispatchStateOf(summary('2026-10-13T09:00:00Z'))).toBe('Arrived');
   });
 });
 
@@ -38,7 +38,7 @@ describe('attachDispatch', () => {
   it('sets the summary, the state and each product dispatched kg', () => {
     const result = attachDispatch(status(), { summary: summary(), kgByKey: new Map([['p1:null:u-kg', 980]]) });
     expect(result.dispatch?.dispatchNo).toBe('VDP2610130001');
-    expect(result.dispatchState).toBe('in-transit');
+    expect(result.dispatchState).toBe('In Transit');
     expect(result.products[0].dispatchedKg).toBe(980);
     // A product the dispatch did not carry has no dispatched kg.
     expect(result.products[1].dispatchedKg).toBeNull();
@@ -47,13 +47,13 @@ describe('attachDispatch', () => {
   it('clears everything when the source has no live dispatch', () => {
     const result = attachDispatch(status(), undefined);
     expect(result.dispatch).toBeNull();
-    expect(result.dispatchState).toBe('none');
+    expect(result.dispatchState).toBe('None');
     expect(result.products.every((p) => p.dispatchedKg === null)).toBe(true);
   });
 });
 
 describe('attachDispatch readiness (dispatch-enforcement D3)', () => {
-  const approved = (): DispatchSummary => ({ ...summary(), status: 'COMPLETE' });
+  const approved = (): DispatchSummary => ({ ...summary(), status: 'Complete' });
 
   it('blocks a GRN created since go-live until its purchase dispatch exists and is approved', () => {
     expect(attachDispatch(status(), undefined)).toMatchObject({
@@ -82,7 +82,7 @@ describe('attachDispatch readiness (dispatch-enforcement D3)', () => {
   });
 
   it('counts as arrived once the dispatch has arrivedAt, or when no dispatch is needed (D3)', () => {
-    const approved = (arrivedAt: string | null): DispatchSummary => ({ ...summary(arrivedAt), status: 'COMPLETE' });
+    const approved = (arrivedAt: string | null): DispatchSummary => ({ ...summary(arrivedAt), status: 'Complete' });
     expect(attachDispatch(status(), { summary: approved(null), kgByKey: new Map() }).arrived).toBe(false);
     expect(attachDispatch(status(), { summary: approved('2026-10-26T09:00:00Z'), kgByKey: new Map() }).arrived).toBe(true);
     expect(attachDispatch(status({ type: 'rbc' }), undefined).arrived).toBe(true);
@@ -94,7 +94,7 @@ describe('dispatchReadySql', () => {
   it('needs a live dispatch with a COMPLETE approval, only for sources created since go-live', () => {
     const sql = dispatchReadySql('g.id', 'g."createdAt"', 'grn');
     expect(sql).toContain('rl_rd."grn_id" = g.id');
-    expect(sql).toContain(`= 'COMPLETE'`);
+    expect(sql).toContain(`= 'Complete'`);
     expect(sql).toMatch(/CASE WHEN \(g\."createdAt"\) >= TIMESTAMP '2026-10-1[34] \d{2}:\d{2}:\d{2}' THEN/);
     expect(dispatchReadySql('r.id', 'r."createdAt"', 'rbc')).toBe('TRUE');
   });
@@ -106,8 +106,8 @@ describe('dispatchStateSql', () => {
     expect(sql).toContain('rl_vd."grn_id" = g.id');
     expect(sql).toContain(`rl_vd."dispatchType"::text = 'purchase'`);
     expect(sql).toContain('rl_vd."deletedAt" IS NULL');
-    expect(sql).toContain(`status::text = 'REJECT'`);
-    expect(sql).toContain(`'arrived' ELSE 'in-transit'`);
+    expect(sql).toContain(`status::text = 'Rejected'`);
+    expect(sql).toContain(`'Arrived' ELSE 'In Transit'`);
   });
 
   it('uses the stock transfer dispatch for a transfer DC', () => {

@@ -2,7 +2,7 @@ import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/
 import { inject, injectable } from 'inversify';
 import { TYPES } from '../../types';
 
-import { DeepPartial, In, SelectQueryBuilder, DataSource } from 'typeorm';
+import { DeepPartial, In, SelectQueryBuilder, DataSource, EntityManager } from 'typeorm';
 import { UOMRepository } from '../../uom/repository/uom.repository';
 import { ProductRepository } from '../../product/createproduct/repository/product.repository';
 import { VendorService } from '../../vendor/createVendor/service/vendor.service';
@@ -46,6 +46,7 @@ import { ProductVarient } from '../../product/productVarient/entity/productVarie
 import { UOM } from '../../uom/entity/uom.entity';
 import { formatUserNames } from '../../utils/userNames';
 import { assertDocumentEditable } from '../../approvalFlow/documentEditLock';
+import { openTransaction, refreshTransactionOf } from '../../transactions/transaction.core';
 import { formatProcurementHeader, formatProcurementLine, PROCUREMENT_HEADER_RELATIONS, procurementLineRelations } from '../../procurement/procurementDetail';
 
 export interface RFPAWithRelatedData extends RFPA {
@@ -58,6 +59,17 @@ function normalizeDateFormat(date: string | null | undefined): string | null | u
   const match = date.match(ddmmyyyy);
   if (match) return `${match[3]}-${match[2]}-${match[1]}`;
   return date;
+}
+
+/** Same line rule as the Deal Slip (dealSlipEdit.ts): the purchase date must be after the expected harvest date. */
+function assertHarvestBeforePurchase(products: any[] | undefined): void {
+  (products ?? []).forEach((line: any, index: number) => {
+    const harvest = normalizeDateFormat(line?.expectedHarvestDate ? String(line.expectedHarvestDate).slice(0, 10) : null);
+    const purchase = normalizeDateFormat(line?.purchaseDate ? String(line.purchaseDate).slice(0, 10) : null);
+    if (harvest && purchase && purchase <= harvest) {
+      throw new AppError(400, `Product line ${index + 1}: purchase date must be after the expected harvest date`);
+    }
+  });
 }
 
 @injectable()
@@ -137,6 +149,7 @@ export class RfpaService {
       throw new AppError(400, 'createdBy field is required for approval flow validation');
     }
     await this.checkApprovalFlowExists(rfpaData.createdBy, DocDefEnum.PROCUREMENT);
+    assertHarvestBeforePurchase(rfpaData.rfpaProducts);
     
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -217,6 +230,15 @@ export class RfpaService {
         document_type_id: savedRfpa.id,
       });
 
+      // The RFPA starts a purchase (R…), stamped before commit (docs/transaction-tracking-plan.md §9.4).
+      savedRfpa.txnNo = await openTransaction(queryRunner.manager, {
+        type: 'purchase',
+        origin: { docType: 'rfpa', docId: savedRfpa.id, docNo: savedRfpa.rfpaId ?? null },
+        companyId: extractId(rfpaData.companyName),
+        locationId: extractId(rfpaData.purchaseLocation),
+        ...(await this.partyOf(queryRunner.manager, selectedVendorId, selectedFarmerId)),
+      });
+
       await queryRunner.commitTransaction();
 
       const assignment = await this.documentbService.startApprovalFlow(document.id);
@@ -239,6 +261,24 @@ export class RfpaService {
 
 
   /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
+  /** Party of a purchase transaction: the vendor or the farmer of the RFPA. */
+  private async partyOf(
+    manager: EntityManager,
+    vendorId: string | null,
+    farmerId: string | null,
+  ): Promise<{ partyType: 'vendor' | 'farmer' | null; partyId: string | null; partyName: string | null }> {
+    if (vendorId) {
+      const vendor = await manager.findOne(Vendor, { where: { id: vendorId } });
+      return { partyType: 'vendor', partyId: vendorId, partyName: vendor?.companyName ?? null };
+    }
+    if (farmerId) {
+      const farmer = await manager.findOne(Farmer, { where: { id: farmerId } });
+      const name = farmer ? [farmer.farmerfName, farmer.farmerlName].filter(Boolean).join(' ') : '';
+      return { partyType: 'farmer', partyId: farmerId, partyName: name || null };
+    }
+    return { partyType: null, partyId: null, partyName: null };
+  }
+
   async generateRFPAId(): Promise<string> {
     return nextDocumentNumber(this.rfpaRepository.manager, SERIES.rfpa, `RFPA${compactDate()}`, 5);
   }
@@ -255,6 +295,7 @@ export class RfpaService {
 
 
   async updateRfpa(id: string, rfpaData: UpdateRfpaDto & Record<string, any>, updatedBy: string): Promise<RFPA | null> {
+    assertHarvestBeforePurchase(rfpaData.rfpaProducts);
     return await this.dataSource.transaction(async (manager) => {
       const existingRfpa = await manager.findOne(RFPA, {
         where: { id },
@@ -515,6 +556,7 @@ export class RfpaService {
           createdDate,
           createdTime,
           rfpaId: rd.rfpaId || null,
+          txnNo: rd.txnNo ?? null,
           remark: rd.remark || null,
           source: rd.source || null,
           specialRequest: rd.specialRequest || null,
@@ -757,6 +799,7 @@ export class RfpaService {
     sixMonthsFromNow.setHours(0, 0, 0, 0);
 
     await this.rfpaRepository.update({ id }, { deletionScheduledAt: sixMonthsFromNow } as any);
+    await refreshTransactionOf(this.dataSource.manager, 'rfpa', id);
     await this.invalidateCache(id);
     return {No:rfpa.rfpaId};
   }
@@ -823,6 +866,7 @@ export class RfpaService {
           createdDate: formatDateTime(doc.createdAt).createdDate,
           createdTime: formatDateTime(doc.createdAt).createdTime,
           rfpaId: rd.rfpaId || null,
+          txnNo: rd.txnNo ?? null,
           remark: rd.remark || null,
           source: rd.source || null,
           deliveryReceivingPerson: rd.deliveryReceivingPerson,
@@ -928,6 +972,7 @@ export class RfpaService {
       approvalSummary: document.approvalSummary ?? null,
 
       rfpaId: rfpaEntity.rfpaId || null,
+      txnNo: rfpaEntity.txnNo ?? null,
       remark: rfpaEntity.remark || null,
       specialReq: rfpaEntity.specialReq || null,
       ...(header as any),
@@ -987,6 +1032,8 @@ export class RfpaService {
       .whereInIds(ids)
       .execute();
 
+    for (const id of ids) await refreshTransactionOf(this.dataSource.manager, 'rfpa', id);
+
     await Promise.all([
       ...ids.flatMap(id => [
         this.cacheService.del(`${this.CACHE_PREFIX}:id:${id}`),
@@ -1021,6 +1068,7 @@ export class RfpaService {
 
     result = {
       rfpaId: rfpa.rfpaId,
+      txnNo: rfpa.txnNo ?? null,
       createdDate,
       createdTime,
       remark: rfpa.remark,

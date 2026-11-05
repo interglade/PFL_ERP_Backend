@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { checkPermission, checkAnyPermission } from '../../middleware/checkPermission';
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { id, inject } from "inversify";
 import { controller, httpGet, request, response, next, requestParam, httpPost, requestBody, httpPatch, httpDelete } from "inversify-express-utils";
 import { TYPES } from "../../types";
@@ -35,7 +41,7 @@ export class DealSlipController {
     private readonly documentExportService: DocumentExportService,
   ) {}
 
-  @httpGet('/recyclebin')
+  @httpGet('/recyclebin', requireRole(Role.SUPER_ADMIN))
   public async getRecycleBinDealSlips(
     @request() req: Request,
     @response() res: Response,
@@ -98,7 +104,7 @@ export class DealSlipController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('deal-slip', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -114,7 +120,7 @@ export class DealSlipController {
     });
   }
 
-  @httpGet('/')
+  @httpGet('/', checkPermission('deal-slip', 'view'))
   public async getAllDealSlips(
     @request() req: Request,
     @response() res: Response,
@@ -189,7 +195,7 @@ export class DealSlipController {
 
 
 
-  @httpGet("/:id/update")
+  @httpGet("/:id/update", checkAnyPermission(['deal-slip', 'edit'], ['deal-slip', 'view'], ['grn', 'create'], ['grn', 'edit']))
   public async findDealSlipByIdforUpdate(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -215,7 +221,7 @@ export class DealSlipController {
     }
   }
 
-  @httpPatch("/:id",captureUser)
+  @httpPatch("/:id", checkPermission('deal-slip', 'edit'), guardDocumentEdit(ApprovalDocType.DEAL_SLIP, 'Deal Slip'),captureUser, protectBody)
   public async updateDealSlip(
     @requestParam("id") dealSlipId: string,
     @requestBody() dealSlipData: UpdateDealSlipDto & Record<string, any>,
@@ -319,7 +325,7 @@ export class DealSlipController {
     }
   }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", checkPermission('deal-slip', 'delete'), guardDocumentDelete(ApprovalDocType.DEAL_SLIP, 'Deal Slip'))
   public async deleteDealSlip(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -362,7 +368,7 @@ export class DealSlipController {
     }
   }
 
-  @httpGet('/view/:docid')
+  @httpGet('/view/:docid', checkPermission('deal-slip', 'view'), guardDocumentView(ApprovalDocType.DEAL_SLIP, 'Deal Slip'))
   public async getDealSlipByIdForView(
     @requestParam('docid') docid: string,
     @request() req: Request,
@@ -394,7 +400,7 @@ export class DealSlipController {
 
 
 
-  @httpDelete("/delete/multiple")
+  @httpDelete("/delete/multiple", checkPermission('deal-slip', 'delete'), guardDocumentDelete(ApprovalDocType.DEAL_SLIP, 'Deal Slip'))
   public async deleteMultipleDealSlips(
     @requestBody() body: BulkDeleteDealSlipDto,
     @request() req: Request,

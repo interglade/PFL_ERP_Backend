@@ -10,6 +10,36 @@ import { AuditLogService } from '../employeeActivity/service/auditLog.service';
 import { formatDateTime } from '../utils/dateUtils';
 import { RegistrationModel } from './registration.entity';
 import { isUniqueViolation, uniqueViolationText } from './transport.utils';
+import {
+  attachImportReport,
+  buildDataWorkbook,
+  buildTemplateWorkbook,
+  deleteFromSpaces,
+  UploadedExport,
+  uploadWorkbookToSpaces,
+} from '../excel/excelFile.service';
+import { emptySummary, ExcelRow, ImportSummary, readUploadedSheet } from '../excel/excelImport.service';
+import { ExcelSheetDefinition, WorkbookLists } from '../excel/excelColumn';
+import { DraftLinks, EMPTY_LINK } from '../excel/draftLinks';
+import { assertImportPrerequisites, ImportMaster } from '../excel/importPrerequisites';
+import { countMasterRecords } from '../excel/importPrerequisiteCounts';
+import { Transporter } from '../transporter/entity/transporter.entity';
+import {
+  TransporterRef,
+  transporterIndexes,
+  TransportRowBody,
+  TransportRowContext,
+} from './transportExcel';
+
+export interface TransportExcelConfig {
+  sheet: ExcelSheetDefinition<any>;
+  master: ImportMaster;
+  /** Stem of the downloaded file names. */
+  fileStem: string;
+  /** Relations the export reads (the address, the transporter). */
+  relations: string[];
+  toBody: (row: ExcelRow, context: TransportRowContext) => TransportRowBody;
+}
 
 export const CACHE_TTL_LIST = 180;
 export const CACHE_TTL_DETAIL = 300;
@@ -63,6 +93,8 @@ export abstract class TransportRegistrationService<E extends RegistrationModel> 
   protected abstract readonly tableName: string;
   protected abstract readonly codeColumn: string;
   protected abstract readonly codePrefix: string;
+  /** The module's Excel sheet and how a row becomes a form body. */
+  protected abstract readonly excel: TransportExcelConfig;
 
   constructor(
     protected readonly repo: Repository<E>,
@@ -133,8 +165,11 @@ export abstract class TransportRegistrationService<E extends RegistrationModel> 
     qb.where(`${alias}.status IN (:...pickStatuses)`, { pickStatuses: [Status.APPROVED, Status.PENDING] });
   }
 
+  /** Admins and verifiers always; the creator only until the record is approved. */
   protected canModify(requester: Requester, entity: E): boolean {
-    return requester.isPrivileged || (entity.createdBy as User | undefined)?.id === requester.id;
+    if (requester.isPrivileged) return true;
+    const isCreator = (entity.createdBy as User | undefined)?.id === requester.id;
+    return isCreator && entity.status !== Status.APPROVED;
   }
 
   /** Whether the requester may edit the row (list rows carry `createdBy.id`). */
@@ -144,7 +179,7 @@ export abstract class TransportRegistrationService<E extends RegistrationModel> 
 
   protected assertCanModify(requester: Requester, entity: E): void {
     if (!this.canModify(requester, entity)) {
-      throw new AppError(403, `You can only edit or delete ${this.label.toLowerCase()} records you created`);
+      throw new AppError(403, `You can only edit ${this.label.toLowerCase()} records you created that are not yet approved`);
     }
   }
 
@@ -314,7 +349,7 @@ export abstract class TransportRegistrationService<E extends RegistrationModel> 
 
   async approve(id: string, approverId: string, status: Status): Promise<E> {
     if (status !== Status.APPROVED && status !== Status.REJECTED) {
-      throw new AppError(400, `Invalid status '${status}'. Only 'approved' or 'notapproved' are allowed.`);
+      throw new AppError(400, `Invalid status '${status}'. Only 'Approved' or 'Rejected' are allowed.`);
     }
     const approver = await this.getRequester(approverId);
     if (!approver.isPrivileged) {
@@ -326,7 +361,7 @@ export abstract class TransportRegistrationService<E extends RegistrationModel> 
     if (entity.status !== Status.PENDING) {
       throw new AppError(
         400,
-        `${this.label} cannot be approved because its current status is '${entity.status}'. Only records with status 'pending' can be approved or rejected.`,
+        `${this.label} cannot be approved because its current status is '${entity.status}'. Only records with status 'Pending' can be approved or rejected.`,
       );
     }
 
@@ -348,7 +383,7 @@ export abstract class TransportRegistrationService<E extends RegistrationModel> 
     if (!requester.isPrivileged) {
       const foreign = entities.find((e) => (e.createdBy as User | undefined)?.id !== requester.id);
       if (foreign) {
-        throw new AppError(403, `You can only edit or delete ${this.label.toLowerCase()} records you created`);
+        throw new AppError(403, `You can only edit ${this.label.toLowerCase()} records you created that are not yet approved`);
       }
     }
     await this.assertDeletable(entities);
@@ -357,6 +392,178 @@ export abstract class TransportRegistrationService<E extends RegistrationModel> 
     await this.invalidate();
     for (const entity of entities) await this.invalidate(entity.id);
     return { affected: result.affected ?? entities.length };
+  }
+
+  // ─── Excel template / export / import (docs/master-data-excel-plan.md Phase 7) ──
+
+  async buildExcelTemplate(): Promise<UploadedExport> {
+    const workbook = buildTemplateWorkbook(this.excel.sheet, await this.excelLists());
+    return uploadWorkbookToSpaces(workbook, `${this.excel.fileStem}_Template`, 0);
+  }
+
+  /** Every record the requester can see on the list page, newest first. */
+  async exportToExcel(userId: string): Promise<UploadedExport> {
+    const requester = await this.getRequester(userId);
+    const alias = 'record';
+    const qb = this.repo
+      .createQueryBuilder(alias)
+      .leftJoinAndSelect(`${alias}.createdBy`, 'createdBy')
+      .orderBy(`${alias}.createdAt`, 'DESC');
+    for (const relation of this.excel.relations) {
+      qb.leftJoinAndSelect(`${alias}.${relation}`, relation);
+    }
+    this.applyVisibility(qb, alias, requester);
+
+    const records = await qb.getMany();
+    const workbook = buildDataWorkbook(this.excel.sheet, records, await this.excelLists());
+    return uploadWorkbookToSpaces(workbook, this.excel.fileStem, records.length);
+  }
+
+  /**
+   * Imports a sheet through the same `applyBody` / `assertComplete` /
+   * `assertUnique` the form uses.
+   *
+   * - A transporter name that does not match, or a required cell left empty,
+   *   saves the record as draft and lists it in the import report.
+   * - A cell the form rejects (bad phone, GSTIN, vehicle number) fails the row.
+   * - A duplicate of a registered record skips the row.
+   * - A row carrying the code of a draft fills in its filled cells, and sends it
+   *   for approval once nothing is missing; any other existing code is skipped.
+   *
+   * Imported records start `pending` (or `draft`), like the other registration
+   * imports, and are owned by the importing user.
+   */
+  async importFromExcel(fileUrl: string, userId: string): Promise<ImportSummary> {
+    if (!fileUrl) throw new AppError(400, 'No file URL provided');
+    const summary = emptySummary();
+
+    try {
+      await assertImportPrerequisites(this.excel.master, countMasterRecords);
+
+      const sheet = await readUploadedSheet(fileUrl, this.excel.sheet);
+      summary.unknownColumns = sheet.unknownColumns;
+      summary.missingColumns = sheet.missingColumns;
+      summary.totalRows = sheet.rows.length;
+      if (sheet.missingColumns.length) {
+        throw new AppError(
+          400,
+          `The uploaded file is missing required column(s): ${sheet.missingColumns.join(', ')}`,
+        );
+      }
+
+      const requester = await this.getRequester(userId);
+      const transporters = await this.transporterIndexes();
+      const codeHeader = this.excel.sheet.columns.find((column) => column.key)!.header;
+
+      const known = await this.repo.find({
+        select: { id: true, [this.codeColumn]: true, status: true } as any,
+      });
+      const byCode = new Map<string, E>();
+      for (const record of known) {
+        const code = (record as any)[this.codeColumn] as string | null;
+        if (code) byCode.set(code.toUpperCase(), record);
+      }
+
+      for (const row of sheet.rows) {
+        const draft = new DraftLinks();
+        const { body, name } = this.excel.toBody(row, { ...transporters, draft });
+
+        try {
+          const code = row.text(codeHeader);
+          let entity: E;
+
+          if (code) {
+            const existing = byCode.get(code.toUpperCase());
+            if (!existing) {
+              summary.skipped.push({
+                row: row.rowNumber,
+                reason: `${codeHeader} ${code} was not found - clear it to add the row as a new ${this.label.toLowerCase()}`,
+              });
+              continue;
+            }
+            if (existing.status !== Status.DRAFT) {
+              summary.skipped.push({
+                row: row.rowNumber,
+                reason: `${this.label} ${code} is already registered (${existing.status}) - an import only completes drafts`,
+              });
+              continue;
+            }
+
+            const loaded = await this.loadForWrite(existing.id);
+            if (!loaded) throw new AppError(404, `${this.label} ${code} not found`);
+            this.assertCanModify(requester, loaded);
+            entity = loaded;
+            await this.applyBody(entity, body);
+            this.settleImportStatus(entity, draft);
+            await this.assertUnique(entity, entity.id);
+            await this.saveExisting(entity);
+            existing.status = entity.status;
+            summary.updated++;
+          } else {
+            entity = this.newEntity();
+            await this.applyBody(entity, body);
+            this.settleImportStatus(entity, draft);
+            await this.assertUnique(entity);
+            entity.createdBy = { id: userId } as User;
+            entity = await this.saveNew(entity);
+            const newCode = (entity as any)[this.codeColumn] as string | null;
+            if (newCode) byCode.set(newCode.toUpperCase(), entity);
+            summary.created++;
+          }
+
+          if (draft.isDraft) {
+            summary.drafted++;
+            summary.draftIssues.push(
+              ...draft.toReport(row.rowNumber, (entity as any)[this.codeColumn] ?? null, name ?? this.displayName(entity)),
+            );
+          }
+        } catch (error: any) {
+          const reason = error?.message ?? 'Could not save this row';
+          // A duplicate is skipped like on the other imports; anything the form
+          // rejects fails the row so it can be corrected.
+          if (error instanceof AppError && error.statusCode === 409) {
+            summary.skipped.push({ row: row.rowNumber, reason });
+          } else {
+            summary.failed.push({ row: row.rowNumber, reason });
+          }
+        }
+      }
+
+      if (summary.created > 0 || summary.updated > 0) await this.invalidate();
+      await attachImportReport(summary, this.excel.fileStem);
+      return summary;
+    } finally {
+      await deleteFromSpaces(fileUrl);
+    }
+  }
+
+  /**
+   * Draft when a link did not match or a required cell is empty (the form's
+   * own required-field rule), otherwise pending.
+   */
+  private settleImportStatus(entity: E, draft: DraftLinks): void {
+    try {
+      this.assertComplete(entity);
+    } catch (error: any) {
+      if (!(error instanceof AppError)) throw error;
+      draft.note('Required', EMPTY_LINK, error.message);
+    }
+    entity.status = draft.isDraft ? Status.DRAFT : Status.PENDING;
+  }
+
+  /** Transporters a row may name, loaded once per file. */
+  private async transporterIndexes() {
+    const transporters = await this.repo.manager.getRepository(Transporter).find({
+      select: { id: true, name: true, transporterCode: true, status: true },
+    });
+    return transporterIndexes(transporters as TransporterRef[]);
+  }
+
+  /** Dropdown of transporter names for sheets that name one. */
+  private async excelLists(): Promise<WorkbookLists> {
+    const usesTransporter = this.excel.sheet.columns.some((column) => column.listFrom === 'transporter');
+    if (!usesTransporter) return {};
+    return { transporter: (await this.transporterIndexes()).pickable.displayNames() };
   }
 
   // ─── Notifications (never block the request) ──────────────────────────────

@@ -1,3 +1,6 @@
+import { assertEngineAccepts, assertNotActedBefore, assertNotClosed, assertNotCreator } from '../approvalGuards';
+import { PAYMENT_DOCUMENT_TYPES } from '../documentAccess';
+import { Role } from '../../employee/entity/user.entity';
 import { inject, injectable } from 'inversify';
 import { TYPES } from '../../types';
 
@@ -13,6 +16,7 @@ import { DocumentApprovalFlowRepository } from '../repository/DocumentApprovalFl
 
 import { DealSlipRepository } from '../../dealSlip/repository/dealSlip.repository';
 import { log } from 'node:console';
+import AppError from '../../utils/appError';
 import { UserRepository } from '../../employee/repository/user.repository';
 
 import { SecondSaleRepository } from '../../secondSale/repository/secondSale.repository';
@@ -43,6 +47,7 @@ import { PostReturnByCustomerRepository } from '../../returnByCustomer/repositor
 import { ApproverBlock } from '../entity/approvalBlock.entity';
 import { User } from '../../employee/entity/user.entity';
 import { notifyAutoRejected, rejectDispatchesOfSources } from '../../vehicleDispatch/service/dispatchRules';
+import { refreshTransactionOf } from '../../transactions/transaction.core';
 
 export interface DocumentWithRelatedData extends Documentb {
   relatedData?: any;
@@ -373,28 +378,33 @@ export class DocumentbService {
       return { role: 'verifier', users: approvalFlow.verifiers };
     }
 
+    // One- and two-level documents go to their approver levels whatever their
+    // amount: the amount bands belong to the GRN / voucher rule only. A document
+    // without an amount (e.g. a vehicle dispatch) under a Procurement flow whose
+    // level-1 band starts above zero must still reach approver 1.
+    if (this.isSingleApprovalBasedDocument(type)) {
+      const FirstLevelApprovers = approvalFlow.approvers?.firstApprover?.users ?? [];
+      if (!FirstLevelApprovers.length) throw new Error('No level-1 approver is configured in the approval flow.');
+      await this.assignToUsers(documentId, FirstLevelApprovers, 'approver');
+      return { role: 'approver', users: FirstLevelApprovers };
+    }
+    if (this.isDoubleApprovalBasedDocument(type)) {
+      const firstLevelApprovers = approvalFlow.approvers?.firstApprover?.users ?? [];
+      const secondLevelApprovers = approvalFlow.approvers?.secondApprover?.users ?? [];
+      if (!firstLevelApprovers.length) throw new Error('No level-1 approver is configured in the approval flow.');
+
+      await this.assignToUsers(documentId, firstLevelApprovers, 'approver');
+      await this.assignToUsers(documentId, secondLevelApprovers, 'approver');
+      // Both levels are assigned, but the document is reported as sent to the first level.
+      return { role: 'approver', users: firstLevelApprovers };
+    }
+
     const approvers = this.getMatchingApproverBlock(
       totalAmt,
       approvalFlow.approvers,
     );
     if (!approvers) {
       throw new Error('No approver found for this document amount.');
-    } else if (this.isSingleApprovalBasedDocument(type) /*&& approvers*/) {
-      const FirstLevelApprovers =
-        document.approvalFlow.approvers.firstApprover.users;
-      //console.log('FirstLevelApprovers', FirstLevelApprovers);
-      await this.assignToUsers(documentId, FirstLevelApprovers, 'approver');
-      return { role: 'approver', users: FirstLevelApprovers };
-    } else if (this.isDoubleApprovalBasedDocument(type) /*&& approvers*/) {
-      const firstLevelApprovers =
-        document.approvalFlow.approvers.firstApprover.users;
-      const secondLevelApprovers =
-        document.approvalFlow.approvers.secondApprover.users;
-
-      await this.assignToUsers(documentId, firstLevelApprovers, 'approver');
-      await this.assignToUsers(documentId, secondLevelApprovers, 'approver');
-      // Both levels are assigned, but the document is reported as sent to the first level.
-      return { role: 'approver', users: firstLevelApprovers ?? [] };
     }
     await this.assignToUsers(documentId, approvers, 'approver');
     return { role: 'approver', users: approvers };
@@ -458,6 +468,14 @@ export class DocumentbService {
     if (document.status === DocumentStatus.DRAFT) {
       throw new Error('This document is still a draft and has not been sent for approval');
     }
+
+    assertEngineAccepts('multi', document.type);
+    // A rejected or completed document cannot be pushed further by later stages
+    assertNotClosed(document);
+    assertNotCreator(document, userId);
+    assertNotActedBefore(document.approvalInfo, userId, [
+      'verified', 'firstApproved', 'secondApproved', 'thirdApproved', 'firstFinalized', 'secondFinalized',
+    ]);
 
     const now = new Date();
     const userName = await this.getCachedUser(userId);
@@ -629,7 +647,7 @@ export class DocumentbService {
           await this.assignToUsers(documentId, flow.approvers.thirdApprover.users, 'approver');
           return;
         } else {
-          throw new Error('Only verifiers can act at this stage');
+          throw new AppError(409, 'Only verifiers can act at this stage');
         }
       }
 
@@ -709,7 +727,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
           return;
 
         } else {
-          throw new Error('First approver has already acted on this document');
+          throw new AppError(409, 'First approver has already acted on this document');
         }
 
       }
@@ -774,9 +792,11 @@ function isWithinRange(min: number | string | null, max: number | string | null,
 
           }
           else {
-            throw new Error('First approver has already acted on this document');
+            throw new AppError(409, 'First approver has already acted on this document');
           }
         } else if (secondBlock.users.some(u => u.id === userId)) {
+          // Approvers act in order (L1 → L2 → L3), the same for every document type
+          if (info.firstApproved?.status !== ApproverStatus.APPROVED) throw new AppError(409, 'Approver Level 1 must approve before Approver Level 2 can act');
           if (!info.secondApproved) {
             const stage = await this.approvalStageInfoRepository.save({
               userId,
@@ -829,10 +849,10 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             return;
 
           } else {
-            throw new Error('Second approver has already acted on this document');
+            throw new AppError(409, 'Second approver has already acted on this document');
           }
         } else {
-          throw new Error('User is not authorized to act on this document at this stage');
+          throw new AppError(403, 'User is not authorized to act on this document at this stage');
         }
       }
 
@@ -894,9 +914,11 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             }
             return;
           } else {
-            throw new Error('First approver has already acted on this document');
+            throw new AppError(409, 'First approver has already acted on this document');
           }
         } else if (secondBlock.users.some(u => u.id === userId)) {
+          // Approvers act in order (L1 → L2 → L3), the same for every document type
+          if (info.firstApproved?.status !== ApproverStatus.APPROVED) throw new AppError(409, 'Approver Level 1 must approve before Approver Level 2 can act');
           if (!info.secondApproved) {
             const stage = await this.approvalStageInfoRepository.save({
               userId,
@@ -950,9 +972,11 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             }
             return;
           } else {
-            throw new Error('Second approver has already acted on this document');
+            throw new AppError(409, 'Second approver has already acted on this document');
           }
         } else if (thirdBlock.users.some(u => u.id === userId)) {
+          // Approvers act in order (L1 → L2 → L3), the same for every document type
+          if (info.firstApproved?.status !== ApproverStatus.APPROVED || info.secondApproved?.status !== ApproverStatus.APPROVED) throw new AppError(409, 'Approver Levels 1 and 2 must approve before Approver Level 3 can act');
           if (!info.thirdApproved) {
             const stage = await this.approvalStageInfoRepository.save({
               userId,
@@ -1000,10 +1024,10 @@ function isWithinRange(min: number | string | null, max: number | string | null,
             await this.notifyStageParticipants(thirdBlock.users, userId, `${docLabel} has already been approved at Approver Level 3 by ${userName}. No action needed from you`);
             return;
           } else {
-            throw new Error('Third approver has already acted on this document');
+            throw new AppError(409, 'Third approver has already acted on this document');
           }
         } else {
-          throw new Error('User is not authorized to act on this document at this stage');
+          throw new AppError(403, 'User is not authorized to act on this document at this stage');
         }
 
       }
@@ -1022,7 +1046,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
           //console.log('status: ', document.status);
 
           if (document.status !== DocumentStatus.APPROVED || !requiredApprovalsPassed) {
-            throw new Error('Required approver levels have not approved yet for Finalizer 1 to act.');
+            throw new AppError(409, 'Required approver levels have not approved yet for Finalizer 1 to act.');
           }
           //console.log("REqui: ", requiredApprovalsPassed);
 
@@ -1062,7 +1086,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
         const isFinalizer2 = flow.finalizers.secondFinalizers.some(u => u.id === userId);
         if (isFinalizer2) {
           if (!info.firstFinalized || info.firstFinalized.status !== ApproverStatus.APPROVED) {
-            throw new Error('Finalizer 1 must approve before Finalizer 2 can act');
+            throw new AppError(409, 'Finalizer 1 must approve before Finalizer 2 can act');
           }
 
           const stage = await this.approvalStageInfoRepository.save({
@@ -1119,6 +1143,13 @@ function isWithinRange(min: number | string | null, max: number | string | null,
                 backwardChainUserIds
               );
             }
+            // 🔔 Payment Managers — a completed GRN is theirs to pay, in its flow or not
+            if (PAYMENT_DOCUMENT_TYPES.includes(document.type)) {
+              await this.notificationService.createNotiForRole(
+                `${docLabel} is fully approved and ready for payment`,
+                Role.PAYMENT_MANAGER,
+              );
+            }
             return;
           }
 
@@ -1129,9 +1160,13 @@ function isWithinRange(min: number | string | null, max: number | string | null,
 
     }
 
-    throw new Error('User is not authorized to act on this document at this stage');
+    throw new AppError(403, 'User is not authorized to act on this document at this stage');
     } finally {
       await bustDocCache();
+      // Transaction step / status once the document is closed (approved or rejected). Never throws.
+      if (document.status === DocumentStatus.COMPLETE || document.status === DocumentStatus.REJECT) {
+        await refreshTransactionOf(this.documentbRepository.manager, document.type, document.document_type_id);
+      }
     }
   }
 
@@ -1328,7 +1363,7 @@ function isWithinRange(min: number | string | null, max: number | string | null,
 
 
 
-  public async getAllDocumentByUserId(userId: string, documentType: string, queryOptions: PaginationOptions, skipPagination: boolean = false, includeDeleted: boolean = false, isAdmin: boolean = false): Promise<any> {
+  public async getAllDocumentByUserId(userId: string, documentType: string, queryOptions: PaginationOptions, skipPagination: boolean = false, includeDeleted: boolean = false, isAdmin: boolean = false, paymentManager: boolean = false): Promise<any> {
 
     if (!Object.values(DocumentTypeEnum).includes(documentType as DocumentTypeEnum)) {
       throw new Error(`Invalid document type: ${documentType}`);
@@ -1458,6 +1493,11 @@ function isWithinRange(min: number | string | null, max: number | string | null,
                 );
             }),
           );
+
+          // Payment Managers — every completed GRN / Final Invoice, in the flow or not
+          if (paymentManager && PAYMENT_DOCUMENT_TYPES.includes(documentType)) {
+            qb.orWhere('document.status = :paymentCompleteStatus', { paymentCompleteStatus: DocumentStatus.COMPLETE });
+          }
         }),
       );
     }

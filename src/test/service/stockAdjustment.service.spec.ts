@@ -43,7 +43,7 @@ describe('approval outcome', () => {
     const calls: Array<{ sql: string; params: unknown[] }> = [];
     const manager = { query: jest.fn(async (sql: string, params: unknown[] = []) => { calls.push({ sql, params }); return []; }) } as unknown as EntityManager;
     await applyRejectedAdjustmentOrRepack(manager, DocumentTypeEnum.STOCK_ADJUSTMENT, 'adj1', 'a2', 'Count was right');
-    expect(calls.some((c) => c.sql.includes("SET status = 'RELEASED'") && c.params[0] === DocumentTypeEnum.STOCK_ADJUSTMENT)).toBe(true);
+    expect(calls.some((c) => c.sql.includes("SET status = 'Released'") && c.params[0] === DocumentTypeEnum.STOCK_ADJUSTMENT)).toBe(true);
     const update = calls.find((c) => c.sql.startsWith('UPDATE stock_adjustment'))!;
     expect(update.params).toEqual(['adj1', 'a2', 'Count was right']);
   });

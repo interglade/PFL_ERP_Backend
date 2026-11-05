@@ -40,7 +40,7 @@ export class DeliveryChallanController {
         ? isReturnByCustomerCreatedRaw === 'true'
         : undefined;
 
-      // overAllStatus filter — document status e.g. 'complete', 'reject', 'pending'
+      // overAllStatus filter — a document status, e.g. 'Complete', 'Rejected'
       const overAllStatus = req.query.overAllStatus as string | undefined;
 
       // Receiving picker params (stock-transfer only): receivable=true, missing=aqr|inward|dump, toLocationId

@@ -99,6 +99,8 @@ export interface STChallanProductUpdateDto {
 export interface STDeliveryChallanUpdateFormDto {
   id: string;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   stockTransferType: StockTransferType | null;
   companyName: string | null;
   office: string | null;
@@ -149,6 +151,8 @@ export interface STDeliveryChallanViewDto {
   id: string;
   documentId: string | null;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   stockTransferType: StockTransferType | null;
   /** Company name string */
   companyName: string | null;
@@ -197,6 +201,8 @@ export interface STDeliveryChallanListItemDto {
   createdDate: string | null;
   createdTime: string | null;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   transitInsuranceNo: string | null;
   totalProductAmount: number | null;
   netProductWeight: number | null;

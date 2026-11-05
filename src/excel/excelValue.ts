@@ -9,8 +9,26 @@
 
 import { ExcelCellType, ExcelColumn } from './excelColumn';
 
+/**
+ * The plain value behind an ExcelJS cell object. Excel turns a typed email or web
+ * address into a hyperlink ({ text, hyperlink }), and formatted text is rich text
+ * ({ richText: [{ text }] }); both are read as the text the user sees. Formulas
+ * give their result. Dates and plain values are returned as they are.
+ */
+export function plainCellValue(value: unknown): unknown {
+  if (value === null || value === undefined || typeof value !== 'object' || value instanceof Date) {
+    return value;
+  }
+  const cell = value as { richText?: { text?: unknown }[]; text?: unknown; result?: unknown };
+  if (Array.isArray(cell.richText)) return cell.richText.map((part) => String(part?.text ?? '')).join('');
+  if ('text' in cell) return plainCellValue(cell.text);
+  if ('result' in cell) return plainCellValue(cell.result);
+  return value;
+}
+
 /** Trimmed string, or null for blank / whitespace-only / Excel's "-" filler. */
 export function toText(value: unknown): string | null {
+  value = plainCellValue(value);
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
   if (text === '' || text === '-') return null;

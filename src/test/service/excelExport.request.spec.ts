@@ -22,7 +22,7 @@ describe('buildExportListOptions', () => {
     const query = {
       startDate: '2026-09-01',
       endDate: '2026-09-15',
-      status: 'COMPLETE',
+      status: 'Complete',
       vendorId: '0b7f7a2e-4f8c-4b8a-9d3a-0c1f2e3d4a5b',
       search: 'GRN-001',
       sort: 'grnNo:DESC',

@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { requireStatus } from '../../utils/status.enum';
 import { DataSource, EntityManager } from 'typeorm';
 import { TYPES } from '../../types';
 import AppError from '../../utils/appError';
@@ -10,7 +11,7 @@ import { ApprovalFlowService } from '../../approvalFlow/service/approvalFlow.ser
 import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 import { reserveLines } from '../batch/stockBatch.core';
 import { StockType } from '../batch/stockBatch.entity';
-import { ADJUSTMENT_REASONS, AdjustmentReason, StockAdjustment, StockRepack } from './stockAdjustment.entity';
+import { ADJUSTMENT_REASONS, ADJUSTMENT_STATUSES, AdjustmentReason, StockAdjustment, StockRepack } from './stockAdjustment.entity';
 import { ADJUSTMENT_DOC, BatchRow, loadBatch, REPACK_DOC } from './stockAdjustment.apply';
 
 export { ADJUSTMENT_DOC, REPACK_DOC } from './stockAdjustment.apply';
@@ -121,7 +122,7 @@ export class StockAdjustmentService {
         uomId: key.uom_id, batchNo: key.batch_no, stockType: key.stock_type,
         qtyDelta: String(qtyDelta), kgDelta: String(kgDelta),
         unitCost: input.unitCost === null || input.unitCost === undefined ? null : String(num(input.unitCost)),
-        reason: input.reason, remark: input.remark ?? null, status: 'PENDING', requestedBy: userId,
+        reason: input.reason, remark: input.remark ?? null, status: 'Pending', requestedBy: userId,
       }));
 
       // A reduction holds its quantity while pending, so no DC can take it meanwhile.
@@ -161,7 +162,7 @@ export class StockAdjustmentService {
         repackNo: await nextDocumentNumber(manager, SERIES.stockRepack, `RPK${compactDate()}`, 4),
         stockBatchId: batch.id, fromQty: String(fromQty), fromKg: String(fromKg), toUomId: input.toUomId,
         toQty: String(toQty), toKg: String(toKg), lossKg: String(round3(fromKg - toKg)),
-        remark: input.remark ?? null, status: 'PENDING', requestedBy: userId,
+        remark: input.remark ?? null, status: 'Pending', requestedBy: userId,
       }));
       // The from-quantity is held while the repack is pending.
       await reserveLines(manager, {
@@ -179,19 +180,37 @@ export class StockAdjustmentService {
 
   // ─── Lists ───────────────────────────────────────────────────────────────
 
-  async list(kind: 'adjustment' | 'repack', f: { status?: string | null; locationId?: string | null; page?: number; limit?: number }) {
+  /**
+   * `viewer`: non-admins see only what they raised or what their approval flow routes to them
+   * (same rule as the other document lists).
+   */
+  async list(
+    kind: 'adjustment' | 'repack',
+    f: { status?: string | null; locationId?: string | null; page?: number; limit?: number },
+    viewer?: { userId: string; isAdmin: boolean },
+  ) {
     const page = Math.max(1, Math.floor(Number(f.page) || 1));
     const limit = Math.min(200, Math.max(1, Math.floor(Number(f.limit) || 25)));
     const params: unknown[] = [kind === 'adjustment' ? DocumentTypeEnum.STOCK_ADJUSTMENT : DocumentTypeEnum.STOCK_REPACK];
     const where: string[] = [];
-    if (f.status) { params.push(f.status); where.push(`t.status = $${params.length}`); }
+    if (f.status) { params.push(requireStatus(ADJUSTMENT_STATUSES, f.status, 'status')); where.push(`t.status = $${params.length}`); }
     if (f.locationId) { params.push(f.locationId); where.push(`${kind === 'adjustment' ? 't.location_id' : 'b.location_id'} = $${params.length}`); }
+    if (viewer && !viewer.isAdmin) {
+      params.push(viewer.userId);
+      const u = `$${params.length}`;
+      where.push(`(t.requested_by::text = ${u} OR doc.creator = ${u} OR EXISTS (
+          SELECT 1 FROM approval_flows af
+            JOIN approval_levels al ON al.id = af.approval_level_id
+            JOIN approver_block_users bu ON bu.block_id IN (al.first_approver_block_id, al.second_approver_block_id)
+           WHERE af.id = doc.flow AND bu.user_id::text = ${u}))`);
+    }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    // The approval document (for the approve / reject actions and the approval status).
-    const approval = `LEFT JOIN LATERAL (SELECT d.id::text AS id, d.status::text AS status FROM documents d
+    // The approval document (for the approve / reject actions, the approval status and who may see it).
+    const approval = `LEFT JOIN LATERAL (SELECT d.id::text AS id, d.status::text AS status, d.last_action_by::text AS creator,
+                        d.approval_flow_id AS flow FROM documents d
                         WHERE d.document_type_id = t.id::text AND d.type::text = $1 ORDER BY d."createdAt" DESC LIMIT 1) doc ON true`;
     if (kind === 'adjustment') {
-      const total: Array<{ n: string }> = await this.dataSource.query(`SELECT COUNT(*) AS n FROM stock_adjustment t ${clause.replace(/\$(\d+)/g, (_, n) => `$${Number(n) - 1}`)}`, params.slice(1));
+      const total: Array<{ n: string }> = await this.dataSource.query(`SELECT COUNT(*) AS n FROM stock_adjustment t ${approval} ${clause}`, params);
       const data = await this.dataSource.query(
         `SELECT t.id::text AS id, t.adjustment_no AS "adjustmentNo", t.batch_no AS "batchNo", t.stock_type AS "stockType",
                 t.stock_batch_id::text AS "stockBatchId", br.name AS "locationName", p.product_name AS "productName",
@@ -212,8 +231,8 @@ export class StockAdjustmentService {
       return { data, total: Number(total[0]?.n ?? 0), page, limit };
     }
     const total: Array<{ n: string }> = await this.dataSource.query(
-      `SELECT COUNT(*) AS n FROM stock_repack t JOIN stock_batch b ON b.id = t.stock_batch_id ${clause.replace(/\$(\d+)/g, (_, n) => `$${Number(n) - 1}`)}`,
-      params.slice(1),
+      `SELECT COUNT(*) AS n FROM stock_repack t JOIN stock_batch b ON b.id = t.stock_batch_id ${approval} ${clause}`,
+      params,
     );
     const data = await this.dataSource.query(
       `SELECT t.id::text AS id, t.repack_no AS "repackNo", b.batch_no AS "batchNo", b.stock_type AS "stockType",

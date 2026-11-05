@@ -1,3 +1,5 @@
+import { Role } from '../../../employee/entity/user.entity';
+import { requireRole } from '../../../middleware/requireRole';
 import { Request, Response, NextFunction } from "express";
 import {
   controller,
@@ -33,7 +35,7 @@ export class VendorSubcategoryController {
     private notificationService: NotificationService
   ) {}
 
-  @httpPost("/")
+  @httpPost("/", requireRole(Role.ADMIN))
   public async createSubcategory(
     @request() req: Request<{}, {}, CreateVendorSubcategoryDto>,
     @response() res: Response,
@@ -176,7 +178,7 @@ public async getAllSubcategories1(
     }
   }
 
-  @httpPatch("/:id")
+  @httpPatch("/:id", requireRole(Role.ADMIN))
   public async updateSubcategory(
     @requestParam("id") id: string,
     @requestBody() body: UpdateVendorSubcategoryDto,
@@ -213,7 +215,7 @@ public async getAllSubcategories1(
     }
   }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", requireRole(Role.SUPER_ADMIN))
   public async deleteSubcategory(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -248,7 +250,7 @@ public async getAllSubcategories1(
       next(err);
     }
   }
-  @httpDelete("/delete/multiple")
+  @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
   public async softDeleteMultipleVendorSubcategory(
     @request() req: Request<{}, {}, BulkDeleteVendorSubcategoryDto>,
     @response() res: Response,

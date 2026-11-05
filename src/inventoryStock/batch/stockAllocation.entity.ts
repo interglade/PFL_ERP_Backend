@@ -1,11 +1,11 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
-export type AllocationStatus = 'RESERVED' | 'CONSUMED' | 'RELEASED';
+export type AllocationStatus = 'Reserved' | 'Consumed' | 'Released';
 
 /**
  * Which batch a stock-out document line takes, and how much (Phase C3/C4).
- * RESERVED while the document is pending (counted in `stock_batch.reserved_qty`),
- * CONSUMED when it is approved (stock taken out), RELEASED when it is
+ * Reserved while the document is pending (counted in `stock_batch.reserved_qty`),
+ * Consumed when it is approved (stock taken out), Released when it is
  * rejected, deleted or its lines are replaced.
  */
 @Entity('stock_allocation')
@@ -46,7 +46,7 @@ export class StockAllocation {
   @Column({ name: 'unit_cost', type: 'decimal', precision: 16, scale: 4, nullable: true })
   unitCost: string | null;
 
-  @Column({ type: 'varchar', length: 10, default: 'RESERVED' })
+  @Column({ type: 'varchar', length: 10, default: 'Reserved' })
   status: AllocationStatus;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

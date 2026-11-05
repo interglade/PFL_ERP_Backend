@@ -33,7 +33,7 @@ const fakeManager = (world: World) => {
   const manager = {
     query: jest.fn(async (sql: string) => {
       if (sql.includes('FROM delivery_challan_purchase dc WHERE dc.id')) {
-        return [{ id: 'dc1', no: 'CN20261015C00001', type: 'customer', deleted: false, status: 'COMPLETE' }];
+        return [{ id: 'dc1', no: 'CN20261015C00001', type: 'customer', deleted: false, status: 'Complete' }];
       }
       if (sql.includes('FROM return_by_customer rec')) return world.rbc ? [world.rbc] : [];
       if (sql.includes('FROM invoices rec')) return world.invoice ? [world.invoice] : [];
@@ -70,17 +70,17 @@ describe('delivery confirmation', () => {
   it('records "Delivered – no return" when the DC has no RBC', async () => {
     const { manager, saved } = fakeManager({});
     await confirmDelivery(manager, 'dc1', 'u1', { receiverName: ' Ramesh ' });
-    expect(saved[0]).toMatchObject({ dcId: 'dc1', outcome: 'DELIVERED_NO_RETURN', rbcId: null, receiverName: 'Ramesh', confirmedBy: 'u1' });
+    expect(saved[0]).toMatchObject({ dcId: 'dc1', outcome: 'Delivered No Return', rbcId: null, receiverName: 'Ramesh', confirmedBy: 'u1' });
   });
 
   it('records "Delivered – with return" and links the approved RBC', async () => {
-    const { manager, saved } = fakeManager({ rbc: { id: 'r1', no: 'RBC2026101500003', status: 'COMPLETE' } });
+    const { manager, saved } = fakeManager({ rbc: { id: 'r1', no: 'RBC2026101500003', status: 'Complete' } });
     await confirmDelivery(manager, 'dc1', 'u1', {});
-    expect(saved[0]).toMatchObject({ outcome: 'DELIVERED_WITH_RETURN', rbcId: 'r1', rbcNo: 'RBC2026101500003' });
+    expect(saved[0]).toMatchObject({ outcome: 'Delivered With Return', rbcId: 'r1', rbcNo: 'RBC2026101500003' });
   });
 
   it('refuses while the RBC is still awaiting approval', async () => {
-    const { manager } = fakeManager({ rbc: { id: 'r1', no: 'RBC3', status: 'hold' } });
+    const { manager } = fakeManager({ rbc: { id: 'r1', no: 'RBC3', status: 'Hold' } });
     await expect(confirmDelivery(manager, 'dc1', 'u1', {})).rejects.toThrow('Return By Customer RBC3 is awaiting approval');
   });
 
@@ -92,13 +92,13 @@ describe('delivery confirmation', () => {
 
   it('gates the invoice on the confirmation and the RBC on its absence', async () => {
     await expect(assertDeliveryConfirmed(fakeManager({}).manager, 'dc1')).rejects.toThrow('Confirm the delivery of DC CN20261015C00001 before creating the Final Invoice');
-    const confirmed = fakeManager({ confirmation: { dcId: 'dc1', outcome: 'DELIVERED_NO_RETURN', confirmedBy: 'u1' } }).manager;
+    const confirmed = fakeManager({ confirmation: { dcId: 'dc1', outcome: 'Delivered No Return', confirmedBy: 'u1' } }).manager;
     await expect(assertDeliveryConfirmed(confirmed, 'dc1')).resolves.toBeUndefined();
     await expect(assertDeliveryNotConfirmed(confirmed, 'dc1', 'raised')).rejects.toThrow('is already confirmed, so a Return By Customer cannot be raised');
   });
 
   it('lets only an approver of the DC undo, never the confirming user, and never once a live invoice exists', async () => {
-    const confirmation = { id: 'c1', dcId: 'dc1', outcome: 'DELIVERED_NO_RETURN' as const, confirmedBy: 'u1', undoneAt: null };
+    const confirmation = { id: 'c1', dcId: 'dc1', outcome: 'Delivered No Return' as const, confirmedBy: 'u1', undoneAt: null };
 
     const byConfirmer = await deliveryStatus(fakeManager({ confirmation, dcApprovers: ['u1'] }).manager, 'dc1', 'u1');
     expect(byConfirmer.undoBlockedReason).toBe('The user who confirmed the delivery cannot undo it');
@@ -112,7 +112,7 @@ describe('delivery confirmation', () => {
     expect(byApprover.saved[0]).toMatchObject({ undoneBy: 'a1', undoReason: 'Wrong DC confirmed' });
 
     const invoiced = await deliveryStatus(
-      fakeManager({ confirmation, dcApprovers: ['a1'], invoice: { id: 'i1', no: 'PF-2026-VSH-00001', status: 'hold' } }).manager,
+      fakeManager({ confirmation, dcApprovers: ['a1'], invoice: { id: 'i1', no: 'PF-2026-VSH-00001', status: 'Hold' } }).manager,
       'dc1',
       'a1',
     );

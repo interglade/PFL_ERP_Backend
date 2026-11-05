@@ -52,8 +52,19 @@ export interface CreateODCDto {
   customer?: string | null;
   customerContactNo?: string | null;
   customerEmail?: string | null;
-  /** Address object (creates new) or Address entity ID */
-  customerAddress?: ODCAddressDto | string | null;
+  /** 'individual' (default) or 'business' */
+  customerType?: string | null;
+  customerAltContactNo?: string | null;
+  /** Optional; 10-character PAN (ABCDE1234F) */
+  customerPanNo?: string | null;
+  /** Address object (stored in its six columns) or Address entity ID */
+  billingAddress?: ODCAddressDto | string | null;
+  /** Default true: the goods go to the billing address and shippingAddress is ignored */
+  shipToSameAsBilling?: boolean | string | null;
+  /** Required when shipToSameAsBilling is false */
+  shippingAddress?: ODCAddressDto | string | null;
+  /** State supplied to; defaults to the shipping (or billing) address state */
+  placeOfSupply?: string | null;
 
   transitInsuranceNo?: string | null;
   receiverName?: string | null;
@@ -119,6 +130,8 @@ export interface ODCViewDto {
   id: string;
   documentId: string | null;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   companyName: string | null;
   office: string | null;
   grnNo: string | null;
@@ -139,8 +152,15 @@ export interface ODCViewDto {
   customer: string | null;
   customerContactNo: string | null;
   customerEmail: string | null;
-  /** Formatted customer address string for display */
-  customerAddress: string | null;
+  customerType: string | null;
+  customerAltContactNo: string | null;
+  customerPanNo: string | null;
+  /** Formatted billing address for display */
+  billingAddress: string | null;
+  shipToSameAsBilling: boolean;
+  /** Formatted address the goods go to (the billing address when shipToSameAsBilling) */
+  shippingAddress: string | null;
+  placeOfSupply: string | null;
   overAllStatus: string | null;
   createdBy: any | null;
   approvalSummary?: {
@@ -182,6 +202,8 @@ export interface ODCProductUpdateDto {
 export interface ODCUpdateFormDto {
   id: string;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   companyName: string | null;
   office: string | null;
   grnNo: string | null;
@@ -202,7 +224,14 @@ export interface ODCUpdateFormDto {
   customer: string | null;
   customerContactNo: string | null;
   customerEmail: string | null;
-  customerAddress: ODCAddressDto | null;
+  customerType: string;
+  customerAltContactNo: string | null;
+  customerPanNo: string | null;
+  billingAddress: ODCAddressDto | null;
+  shipToSameAsBilling: boolean;
+  /** Null when shipToSameAsBilling */
+  shippingAddress: ODCAddressDto | null;
+  placeOfSupply: string | null;
   deliveryChallanProducts: ODCProductUpdateDto[];
 }
 
@@ -218,6 +247,8 @@ export interface ODCListItemDto {
   createdDate: string | null;
   createdTime: string | null;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   companyName: string | null;
   office: string | null;
   grnNo: string | null;
@@ -225,9 +256,16 @@ export interface ODCListItemDto {
   customer: string | null;
   customerContactNo: string | null;
   customerEmail: string | null;
+  customerType: string | null;
+  customerAltContactNo: string | null;
+  customerPanNo: string | null;
   rmn: string | null;
-  /** Formatted address string */
-  customerAddress: string | null;
+  /** Formatted billing address */
+  billingAddress: string | null;
+  shipToSameAsBilling: boolean;
+  /** Formatted address the goods go to (the billing address when shipToSameAsBilling) */
+  shippingAddress: string | null;
+  placeOfSupply: string | null;
   receiverName: string | null;
   transitInsuranceNo: string | null;
   totalProductAmount: number | null;

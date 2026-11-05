@@ -218,18 +218,18 @@ export function completeDoc(alias: string, docType: string): string {
   return `EXISTS (SELECT 1 FROM documents cd
                    WHERE cd.document_type_id = ${alias}.id::text
                      AND cd.type = '${docType}'
-                     AND cd.status = 'COMPLETE'
+                     AND cd.status = 'Complete'
                      AND cd."isDeleted" = false)`;
 }
 
 /** Unpaid, treating a missing payment status as unpaid (the column default). */
 export function unpaid(alias: string): string {
-  return `COALESCE(${alias}."ammountStatus"::text, 'unpaid') = 'unpaid'`;
+  return `COALESCE(${alias}."ammountStatus"::text, 'Unpaid') = 'Unpaid'`;
 }
 
 /** A GRN still owed money: unpaid or partially paid (docs/grn-payment-history-plan.md). */
 export function grnNotFullyPaid(alias: string): string {
-  return `COALESCE(${alias}."ammountStatus"::text, 'unpaid') <> 'paid'`;
+  return `COALESCE(${alias}."ammountStatus"::text, 'Unpaid') <> 'Paid'`;
 }
 
 /** What a GRN still owes: total − advance − recorded payments, never below 0. */

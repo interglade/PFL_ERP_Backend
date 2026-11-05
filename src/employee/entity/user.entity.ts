@@ -28,11 +28,23 @@ import { Transfer } from './transfer.entity';
 
 
 export enum Role {
+  // Super Admin always also holds ADMIN (see normalizeRoles), so every admin check applies to them.
+  SUPER_ADMIN = 'super_admin',
   ADMIN = 'admin',
   EMPLOYEE = 'employee',
   VERIFIER = 'verifier',
   APPROVER = 'approver',
   FINALIZER = 'finalizer',
+  // Records payments on GRNs and Final Invoices (client decision 2026-10-29); never an admin
+  PAYMENT_MANAGER = 'payment_manager',
+}
+
+/** Only Active employees can log in. Draft = created from the form and never activated. */
+export enum EmployeeStatus {
+  ACTIVE = 'Active',
+  INACTIVE = 'Inactive',
+  SUSPENDED = 'Suspended',
+  DRAFT = 'Draft',
 }
 @Entity('employees')
 export class User extends Model {
@@ -198,10 +210,10 @@ export class User extends Model {
 
   @Column({
     type: 'enum',
-    enum: ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'DRAFT'],
-    default: 'INACTIVE',
+    enum: EmployeeStatus,
+    default: EmployeeStatus.INACTIVE,
   })
-  status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'DRAFT';
+  status: EmployeeStatus;
 
   @BeforeInsert()
   async hashPassword() {

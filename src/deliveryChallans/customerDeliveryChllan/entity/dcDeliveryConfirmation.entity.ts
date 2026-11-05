@@ -1,6 +1,6 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 
-export type DeliveryOutcome = 'DELIVERED_NO_RETURN' | 'DELIVERED_WITH_RETURN';
+export type DeliveryOutcome = 'Delivered No Return' | 'Delivered With Return';
 
 /**
  * Delivery confirmation of a Customer DC (Phase D-1 / D-3, client decision

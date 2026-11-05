@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import { controller, httpGet, httpPost, httpPut, next, request, requestParam, response } from 'inversify-express-utils';
 import { NextFunction, Request, Response } from 'express';
@@ -11,7 +12,7 @@ import { GrnPaymentService } from '../service/grnPayment.service';
 
 /**
  * GRN payment history (docs/grn-payment-history-plan.md §3.2). Anyone who can open the GRN can
- * read its payments; only users with the finalizer role record, edit or void them.
+ * read its payments; only Payment Managers record, edit or void them.
  */
 @controller('/grns', deserializeUser, requireUser)
 export class GrnPaymentController {
@@ -44,7 +45,7 @@ export class GrnPaymentController {
     }
   }
 
-  @httpGet('/:id/payments')
+  @httpGet('/:id/payments', checkPermission('grn', 'view'))
   public async getPayments(@requestParam('id') id: string, @request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       const data = await this.grnPaymentService.getPayments(id, res.locals.user);

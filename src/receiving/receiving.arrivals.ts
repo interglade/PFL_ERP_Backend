@@ -15,14 +15,14 @@
 import { ReceivingState, SkipFlags, SlotState } from './receiving.types';
 
 /** States that only the status service can tell apart once every step is approved. */
-const UNRESOLVED_STATES: ReceivingState[] = ['in-progress', 'done'];
+const UNRESOLVED_STATES: ReceivingState[] = ['In Progress', 'Done'];
 
 export interface StateFilterPlan {
   /** No filter on state. */
   any: boolean;
-  /** The filter can never match (only `not-received`, which the list never holds). */
+  /** The filter can never match (only `Not Received`, which the list never holds). */
   none: boolean;
-  /** States requested, `not-received` removed. */
+  /** States requested, `Not Received` removed. */
   states: ReceivingState[];
   /** Rows with `sql_state IS NULL` may match and must be kept by SQL. */
   includeUnresolved: boolean;
@@ -38,8 +38,8 @@ export function normaliseStates(value: ReceivingState | ReceivingState[] | null 
 export function planStateFilter(value: ReceivingState | ReceivingState[] | null | undefined): StateFilterPlan {
   const requested = normaliseStates(value);
   if (!requested.length) return { any: true, none: false, states: [], includeUnresolved: true, needsCompute: false };
-  // The list only contains COMPLETE sources, so `not-received` never matches.
-  const states = requested.filter((s) => s !== 'not-received');
+  // The list only contains Complete sources, so `Not Received` never matches.
+  const states = requested.filter((s) => s !== 'Not Received');
   if (!states.length) return { any: false, none: true, states, includeUnresolved: false, needsCompute: false };
   const unresolvedStates = states.filter((s) => UNRESOLVED_STATES.includes(s));
   const includeUnresolved = unresolvedStates.length > 0;
@@ -56,9 +56,9 @@ export function stateConditionSql(plan: StateFilterPlan, stateParam: string): st
   return plan.includeUnresolved ? `(sql_state IS NULL OR ${known})` : known;
 }
 
-/** Slot chip with the "not needed" mark: a missing (or rejected) Dump / RTV that was skipped shows `skipped`. */
+/** Slot chip with the "not needed" mark: a missing (or rejected) Dump / RTV that was skipped shows `Skipped`. */
 export function slotWithSkip(state: SlotState, skipped: boolean): SlotState {
-  if (skipped && (state === 'missing' || state === 'rejected')) return 'skipped';
+  if (skipped && (state === 'Missing' || state === 'Rejected')) return 'Skipped';
   return state;
 }
 

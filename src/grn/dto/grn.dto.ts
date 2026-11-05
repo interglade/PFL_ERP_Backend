@@ -121,6 +121,8 @@ export interface GrnListItemDto {
   purchaseLocation: string | null;
   purchaseForSalesLocation: string | null;
   grnNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   batchNo: string | null;
   totalGrossWeight: number | null;
   totalNetWeight: number | null;
@@ -159,6 +161,8 @@ export interface GrnDetailDto {
   otherPurchaseForSalesLoc?: string | null;
   otherPurchaseLoc?: string | null;
   grnNo?: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo?: string | null;
   batchNo?: string | null;
   totalGrossWeight?: number | null;
   totalNetWeight?: number | null;
@@ -172,6 +176,8 @@ export interface GrnDetailDto {
   purchaseLocation?: string | null;
   purchaseForSalesLocation?: string | null;
   selectedParty?: string | null;
+  /** Vendor / farmer id behind `selectedParty` (which holds the display name in the view). */
+  selectedPartyId?: string | null;
   source?: Source | null;
   billNo?: string | null;
   billImage?: string | null;

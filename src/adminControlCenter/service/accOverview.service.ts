@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { GrnPaymentStatus } from '../../utils/status.enum';
 import { DataSource } from 'typeorm';
 import { CacheService } from '../../global/cache.service';
 import { TYPES } from '../../types';
@@ -320,7 +321,7 @@ export class AccOverviewService {
       const label = r.module === 'OTHER' ? 'Farmer Registration' : LOG_MODULE_LABELS[r.module];
       const action =
         r.action === 'UPDATE'
-          ? `marked ${label} as ${r.payStatus === 'paid' ? 'Paid' : 'Unpaid'}`
+          ? `marked ${label} as ${r.payStatus === GrnPaymentStatus.PAID ? 'Paid' : 'Unpaid'}`
           : `created ${label}`;
       return {
         id: `log:${r.id}`,
@@ -337,7 +338,7 @@ export class AccOverviewService {
       `WITH recent AS (
          SELECT s.id, s."userName", s.status::text AS status, s."statusChangedAt"
            FROM approval_stage_info s
-          WHERE s."statusChangedAt" IS NOT NULL AND s.status::text NOT IN ('hold', 'unverified')
+          WHERE s."statusChangedAt" IS NOT NULL AND s.status::text <> 'Hold'
           ORDER BY s."statusChangedAt" DESC
           LIMIT ${ACTIVITY_LIMIT * 3}
        )
@@ -363,7 +364,7 @@ export class AccOverviewService {
       id: `stage:${r.id}`,
       ts: r.ts,
       user: r.userName || '',
-      action: `${r.status === 'reject' ? 'rejected' : r.verb} ${docLabel(r.type)}`,
+      action: `${r.status === 'Rejected' ? 'rejected' : r.verb} ${docLabel(r.type)}`,
       reference: refs.get(refKey(r.type, r.moduleId))?.docNo || '',
     }));
   }
@@ -378,15 +379,15 @@ export class AccOverviewService {
          SELECT 'Farmer Registration' AS label, id::text AS id, ${tsText('"updatedAt"')} AS ts,
                 status::text AS status, approved_by::text AS "userId",
                 COALESCE(NULLIF("farmerCode", ''), concat_ws(' ', "farmerfName", "farmerlName")) AS reference
-           FROM farmer WHERE "isDeleted" = false AND approved_by IS NOT NULL AND status::text IN ('approved', 'notapproved')
+           FROM farmer WHERE "isDeleted" = false AND approved_by IS NOT NULL AND status::text IN ('Approved', 'Rejected')
          UNION ALL
          SELECT 'Vendor Registration', id::text, ${tsText('"updatedAt"')}, status::text, approved_by::text,
                 COALESCE(NULLIF(vendor_code, ''), company_name)
-           FROM vendor WHERE "isDeleted" = false AND approved_by IS NOT NULL AND status::text IN ('approved', 'notapproved')
+           FROM vendor WHERE "isDeleted" = false AND approved_by IS NOT NULL AND status::text IN ('Approved', 'Rejected')
          UNION ALL
          SELECT 'Customer Registration', id::text, ${tsText('"updatedAt"')}, status::text, approved_by::text,
                 COALESCE(NULLIF(customercode, ''), organisation_name)
-           FROM customers WHERE "isDeleted" = false AND approved_by IS NOT NULL AND status::text IN ('approved', 'notapproved')
+           FROM customers WHERE "isDeleted" = false AND approved_by IS NOT NULL AND status::text IN ('Approved', 'Rejected')
        ) x
        ORDER BY ts DESC
        LIMIT ${ACTIVITY_LIMIT}`,
@@ -397,7 +398,7 @@ export class AccOverviewService {
       id: `reg:${r.id}`,
       ts: r.ts,
       user: people.get(r.userId)?.name || '',
-      action: `${r.status === 'approved' ? 'approved' : 'rejected'} ${r.label}`,
+      action: `${r.status === 'Approved' ? 'approved' : 'rejected'} ${r.label}`,
       reference: r.reference || '',
     }));
   }

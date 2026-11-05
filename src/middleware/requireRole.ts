@@ -13,7 +13,7 @@ export const requireRole = (...allowed: Role[]) => {
 
     const roles: Role[] = Array.isArray(user.roles) ? user.roles : [];
     if (!allowed.some((role) => roles.includes(role))) {
-      return next(new AppError(403, 'Access denied. Admin only.'));
+      return next(new AppError(403, 'You do not have access to this action.'));
     }
 
     next();

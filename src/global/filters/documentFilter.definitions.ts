@@ -11,7 +11,7 @@
  */
 
 import { DocumentTypeEnum } from '../../approvalFlow/entity/docuemnt.entity';
-import { Department, Source, Status, ammountStatus, GrnPaymentStatus } from '../../utils/status.enum';
+import { Department, Source, Status, GrnPaymentStatus } from '../../utils/status.enum';
 import { RFPA } from '../../rfpa/entity/rfpa.entity';
 import { RFPAProduct } from '../../rfpa/entity/rfpaProduct.entity';
 import { DealSlipProduct } from '../../dealSlip/entity/dealSlipProduct.entity';
@@ -56,6 +56,11 @@ const enumOf = (param: string, expr: string, values: object, description: string
   exprs: [expr],
   values: Object.values(values) as string[],
   description,
+});
+/** A status filter: Title Case values, matched exactly. */
+const statusOf = (param: string, expr: string, values: object, description: string): FieldFilter => ({
+  ...enumOf(param, expr, values, description),
+  exact: true,
 });
 const flag = (param: string, expr: string, description: string): FieldFilter => ({ param, kind: 'boolean', exprs: [expr], description });
 const amountRange = (expr: string, what: string): FieldFilter[] => [
@@ -109,7 +114,7 @@ const challanBase = (): { joins: Record<string, string>; fields: FieldFilter[]; 
   joins: { company: 'rec.companyName', grn: 'rec.grnNo' },
   fields: [
     ...companyFields(),
-    enumOf('approvalStatus', 'rec.approvalStatus', Status, 'Challan approval status'),
+    statusOf('approvalStatus', 'rec.approvalStatus', Status, 'Challan approval status'),
     text('grnNo', ['grn.grnNo'], 'Linked GRN number (partial)'),
     flag('isReturned', 'rec.isReturned', 'Challan has been returned'),
     ...amountRange('rec.totalProductAmount', 'Total product amount'),
@@ -126,7 +131,7 @@ const voucherBase = (amountExpr: string): { joins: Record<string, string>; field
   fields: [
     ...companyFields(),
     ...locationFields(['location']),
-    enumOf('approvalStatus', 'rec.approvalStatus', Status, 'Voucher approval status'),
+    statusOf('approvalStatus', 'rec.approvalStatus', Status, 'Voucher approval status'),
     departmentField(),
     { param: 'paymentMode', kind: 'iexact', exprs: ['rec.paymentMode'], description: 'Payment mode (exact, case-insensitive)' },
     text('grnNo', ['grn.grnNo'], 'Linked GRN number (partial)'),
@@ -183,7 +188,7 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       purchaseForSalesLocation: 'rec.purchaseForSalesLocation',
     },
     fields: [
-      enumOf('approvalStatus', 'rec.approvalStatus', Status, 'Deal slip approval status'),
+      statusOf('approvalStatus', 'rec.approvalStatus', Status, 'Deal slip approval status'),
       text('dealSlipNo', ['rec.dealSlipNo'], 'Deal slip number (partial)'),
       text('lotNo', ['rec.lotNo'], 'Lot number (partial)'),
       text('loadingLocation', ['rec.loadingLocation'], 'Loading location (partial)'),
@@ -221,7 +226,7 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
       enumOf('purchaseType', 'rec.purchaseType', PurchaseType, 'Purchase type'),
       enumOf('locationType', 'rec.locationType', LocationType, 'Location type'),
       enumOf('source', 'rec.source', Source, 'Source: vendor or farmer'),
-      enumOf('paymentStatus', 'rec.ammountStatus', GrnPaymentStatus, 'Payment status: unpaid, partial (partially paid) or paid'),
+      statusOf('paymentStatus', 'rec.ammountStatus', GrnPaymentStatus, 'Payment status: Unpaid, Partial (partially paid) or Paid'),
       ...companyFields(),
       // Historic GRN list parameter: accepts a company id or a (partial) company name.
       { param: 'companyName', kind: 'id', exprs: ['company.id'], nameExprs: ['company.name'], description: 'Company id or name' },
@@ -417,7 +422,7 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
     businessDate: { expr: 'rec.invoiceDate', kind: 'date', source: 'invoices.invoiceDate' },
     joins: { company: 'rec.companyName', challan: 'rec.deliveryChallan', customer: 'rec.customerName', fromLocation: 'rec.fromLocation' },
     fields: [
-      enumOf('paymentStatus', 'rec.ammountStatus', ammountStatus, 'Payment status'),
+      statusOf('paymentStatus', 'rec.ammountStatus', GrnPaymentStatus, 'Payment status: Unpaid, Partial (partially paid) or Paid'),
       ...companyFields(),
       ...customerFields(),
       ...locationFields(['fromLocation']),
@@ -479,19 +484,18 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
     entity: SecondSale,
     numberColumn: 'secondSaleNo',
     businessDate: { expr: 'rec.saleDate', kind: 'date', source: 'second_sale_document.saleDate' },
-    joins: { company: 'rec.companyName', location: 'rec.location', challan: 'rec.deliveryChallanNo' },
+    joins: { company: 'rec.companyName', location: 'rec.location' },
     fields: [
       ...companyFields(),
       ...locationFields(['location']),
       // The buyer on a second sale is free text, not a customer record.
       text('customerName', ['rec.customerName'], 'Customer name (partial)'),
       text('customerContactNo', ['rec.customerContactNo'], 'Customer contact number (partial)'),
-      text('deliveryChallanNo', ['challan.challanNo'], 'Source delivery challan number (partial)'),
       { param: 'paymentMode', kind: 'iexact', exprs: ['rec.paymentMode'], description: 'Payment mode (exact, case-insensitive)' },
       text('reasonForSale', ['rec.reasonForSale'], 'Reason for sale (partial)'),
       ...amountRange('rec.totalAmt', 'Second sale total amount'),
     ],
-    search: ['rec.customerName', 'rec.customerContactNo', 'challan.challanNo', 'company.name', 'location.name', 'rec.reasonForSale'],
+    search: ['rec.customerName', 'rec.customerContactNo', 'company.name', 'location.name', 'rec.reasonForSale'],
     lineItems: { entity: SecondSaleProduct, parentRelation: 'secondSaleRegister', product: 'productName', variant: 'variant' },
     sortable: standardSort('secondSaleNo', 'rec.secondSaleNo', { saleDate: 'rec.saleDate', totalAmt: 'rec.totalAmt' }),
   },
@@ -582,14 +586,45 @@ const DEFINITIONS: ModuleFilterDefinition[] = [
   })(),
 ];
 
-const BY_TYPE = new Map(DEFINITIONS.map((d) => [d.documentType, d]));
+// ─── Transaction number (docs/transaction-tracking-plan.md §9.5) ────────────
+
+/** Modules whose header row carries `txn_no`: each gets a `txnNo` filter and searches it. */
+const TXN_DOCUMENT_TYPES = new Set<string>([
+  DocumentTypeEnum.RFPA,
+  DocumentTypeEnum.DEAL_SLIP,
+  DocumentTypeEnum.GRN,
+  DocumentTypeEnum.VEHICLE_DISPATCH_REGISTER,
+  DocumentTypeEnum.AQR,
+  DocumentTypeEnum.INWARD_REGISTER,
+  DocumentTypeEnum.DUMP_REGISTER,
+  DocumentTypeEnum.RETURN_TO_VENDOR,
+  DocumentTypeEnum.DC_TYPE_CUSTOMER,
+  DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER,
+  DocumentTypeEnum.DC_TYPE_OTHER,
+  DocumentTypeEnum.RETURN_BY_CUSTOMER,
+  DocumentTypeEnum.FINAL_INVOICE,
+  DocumentTypeEnum.SECOND_SALE,
+]);
+
+const withTxnNo = (definition: ModuleFilterDefinition): ModuleFilterDefinition =>
+  TXN_DOCUMENT_TYPES.has(definition.documentType)
+    ? {
+        ...definition,
+        fields: [...definition.fields, text('txnNo', ['rec.txnNo'], 'Transaction number (partial)')],
+        search: [...definition.search, 'rec.txnNo'],
+      }
+    : definition;
+
+const TXN_DEFINITIONS: ModuleFilterDefinition[] = DEFINITIONS.map(withTxnNo);
+
+const BY_TYPE = new Map(TXN_DEFINITIONS.map((d) => [d.documentType, d]));
 
 export function getModuleFilterDefinition(documentType: string): ModuleFilterDefinition | undefined {
   return BY_TYPE.get(documentType);
 }
 
 export function allModuleFilterDefinitions(): readonly ModuleFilterDefinition[] {
-  return DEFINITIONS;
+  return TXN_DEFINITIONS;
 }
 
 /** Shared helper for other query code that renders a user's full name. */

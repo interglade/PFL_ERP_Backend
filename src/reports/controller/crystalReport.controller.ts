@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import {
   controller,
@@ -29,7 +30,7 @@ export class CrystalReportController {
   /**
    * Generate detailed procurement report
    */
-  @httpPost('/procurement/detailed')
+  @httpPost('/procurement/detailed', checkPermission('purchase-report', 'view'))
   public async generateDetailedProcurementReport(
     @request() req: Request,
     @response() res: Response,
@@ -68,7 +69,7 @@ export class CrystalReportController {
   /**
    * Generate procurement summary report
    */
-  @httpPost('/procurement/summary')
+  @httpPost('/procurement/summary', checkPermission('purchase-report', 'view'))
   public async generateProcurementSummary(
     @request() req: Request,
     @response() res: Response,
@@ -105,7 +106,7 @@ export class CrystalReportController {
   /**
    * Generate vendor-wise procurement report
    */
-  @httpPost('/procurement/vendor-wise')
+  @httpPost('/procurement/vendor-wise', checkPermission('purchase-report', 'view'))
   public async generateVendorWiseProcurementReport(
     @request() req: Request,
     @response() res: Response,
@@ -143,7 +144,7 @@ export class CrystalReportController {
   /**
    * Generate product-wise procurement report
    */
-  @httpPost('/procurement/product-wise')
+  @httpPost('/procurement/product-wise', checkPermission('purchase-report', 'view'))
   public async generateProductWiseProcurementReport(
     @request() req: Request,
     @response() res: Response,
@@ -181,7 +182,7 @@ export class CrystalReportController {
   /**
    * Export detailed procurement report to Excel
    */
-  @httpPost('/procurement/export/excel')
+  @httpPost('/procurement/export/excel', checkPermission('purchase-report', 'export'))
   public async exportProcurementReportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -277,7 +278,7 @@ export class CrystalReportController {
   /**
    * Get procurement report filters/options
    */
-  @httpGet('/procurement/filters')
+  @httpGet('/procurement/filters', checkPermission('purchase-report', 'view'))
   public async getProcurementReportFilters(
     @request() req: Request,
     @response() res: Response,

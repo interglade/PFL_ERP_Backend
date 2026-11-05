@@ -1,3 +1,5 @@
+import { Role } from '../../../employee/entity/user.entity';
+import { requireRole } from '../../../middleware/requireRole';
 import { Request, Response, NextFunction } from "express";
 import {
   controller,
@@ -125,7 +127,7 @@ export class CustomerTypeController {
     }
   }
 
-  @httpPost("/")
+  @httpPost("/", requireRole(Role.ADMIN))
   public async createCustomerType(
     @request() req: Request,
     @response() res: Response,
@@ -187,7 +189,7 @@ export class CustomerTypeController {
     }
   }
 
-  @httpPatch("/:id",captureUser)
+  @httpPatch("/:id", requireRole(Role.ADMIN),captureUser)
   public async updateCustomerType(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -253,7 +255,7 @@ export class CustomerTypeController {
     }
   }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", requireRole(Role.SUPER_ADMIN))
   public async deleteCustomerType(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -301,7 +303,7 @@ export class CustomerTypeController {
       next(err);
     }
   }
-   @httpDelete("/delete/multiple")
+   @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
 public async softDeleteMultipleCustomerType(
   @request() req: Request,
   @response() res: Response,

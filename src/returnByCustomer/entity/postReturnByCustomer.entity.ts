@@ -1,4 +1,4 @@
-import { Entity, Column, OneToMany, JoinColumn, ManyToOne } from "typeorm";
+import { Entity, Column, OneToMany, JoinColumn, ManyToOne, Index } from "typeorm";
 import { ReturnedProducts } from "./returnProduct.entity";
 import { format, toZonedTime } from "date-fns-tz";
 import Model from "../../global/model.entity";
@@ -10,6 +10,12 @@ import { User } from "../../employee/entity/user.entity";
 
 @Entity("return_by_customer")
 export class PostReturnByCustomer extends Model {
+  /** Transaction number of the deal this document belongs to (docs/transaction-tracking-plan.md §9). */
+  @Index('IDX_return_by_customer_txn_no')
+  // Written only by src/transactions (raw SQL); never from a request body through an entity save.
+  @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true, insert: false, update: false })
+  txnNo: string | null;
+
   // @Column({ length: 50 })
   // proformaInvNo: string;
   // @ManyToOne(() => Invoice, {

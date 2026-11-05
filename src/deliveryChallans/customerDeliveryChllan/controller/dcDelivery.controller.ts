@@ -1,3 +1,4 @@
+import { checkPermission } from '../../../middleware/checkPermission';
 import { inject } from 'inversify';
 import { controller, httpGet, httpPost, next, request, requestParam, response } from 'inversify-express-utils';
 import { NextFunction, Request, Response } from 'express';
@@ -8,6 +9,7 @@ import { DocumentTypeEnum } from '../../../approvalFlow/entity/docuemnt.entity';
 import { TYPES } from '../../../types';
 import { deserializeUser, requireUser } from '../../../middleware/deserializeUser';
 import { confirmDelivery, deliveryStates, deliveryStatus, undoDeliveryConfirmation } from '../service/dcDelivery';
+import { refreshTransactionOf } from '../../../transactions/transaction.core';
 
 /** Delivery confirmation of Customer DCs (Phase D-1 / D-3). */
 @controller('/delivery-confirmation', deserializeUser, requireUser)
@@ -49,18 +51,21 @@ export class DcDeliveryController {
   }
 
   /** Confirm the delivery: `{ receiverName?, remark?, proofUrl? }`; the outcome is set by the server. */
-  @httpPost('/:dcId/confirm')
+  @httpPost('/:dcId/confirm', checkPermission('deliveryChallan-Customer', 'create'))
   public async confirm(@requestParam('dcId') dcId: string, @request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
-      const data = await this.dataSource.transaction((manager) =>
-        confirmDelivery(manager, dcId, res.locals.user.id, {
+      const data = await this.dataSource.transaction(async (manager) => {
+        const confirmation = await confirmDelivery(manager, dcId, res.locals.user.id, {
           receiverName: req.body?.receiverName ?? null,
           remark: req.body?.remark ?? null,
           proofUrl: req.body?.proofUrl ?? null,
-        }),
-      );
+        });
+        // The sale (and a direct-sale purchase) moves on to the invoice step.
+        await refreshTransactionOf(manager, 'dc-customer', dcId);
+        return confirmation;
+      });
       res.status(201).json({ status: 'success', data });
-      const outcome = data.outcome === 'DELIVERED_WITH_RETURN' ? `delivered with return (${data.rbcNo ?? 'RBC'})` : 'delivered with no return';
+      const outcome = data.outcome === 'Delivered With Return' ? `delivered with return (${data.rbcNo ?? 'RBC'})` : 'delivered with no return';
       await this.notifyDc(dcId, (no) => `DC ${no} was ${outcome}: the Final Invoice can now be created`, res.locals.user.id);
     } catch (error) {
       nextFn(error);
@@ -71,7 +76,11 @@ export class DcDeliveryController {
   @httpPost('/:dcId/undo')
   public async undo(@requestParam('dcId') dcId: string, @request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
-      const data = await this.dataSource.transaction((manager) => undoDeliveryConfirmation(manager, dcId, res.locals.user.id, req.body?.reason ?? null));
+      const data = await this.dataSource.transaction(async (manager) => {
+        const undone = await undoDeliveryConfirmation(manager, dcId, res.locals.user.id, req.body?.reason ?? null);
+        await refreshTransactionOf(manager, 'dc-customer', dcId);
+        return undone;
+      });
       res.status(200).json({ status: 'success', data });
       await this.notifyDc(dcId, (no) => `The delivery confirmation of DC ${no} was undone (${data.undoReason ?? ''}): no invoice until it is confirmed again`, res.locals.user.id);
     } catch (error) {

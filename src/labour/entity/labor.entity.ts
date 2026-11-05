@@ -9,6 +9,11 @@ import { Company } from "../../company/entity/company.entity";
 import { Branches } from "../../branch/entity/branches.entity";
 import { Address } from "../../address/entity/address.entity";
 
+export enum MaritalStatus {
+  MARRIED = 'Married',
+  UNMARRIED = 'Unmarried',
+}
+
 @Entity("permenat_labor")
 export class Labor extends Model {
 
@@ -86,8 +91,8 @@ export class Labor extends Model {
   @Column({ nullable: true })
   pfUanNo: string;
 
-  @Column()
-  maritalStatus: "Married" | "Unmarried";
+  @Column({ type: 'enum', enum: MaritalStatus })
+  maritalStatus: MaritalStatus;
 
   @Column({ nullable: true })
   email: string;

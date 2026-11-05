@@ -1,3 +1,5 @@
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from "inversify";
 import {
   controller,
@@ -22,7 +24,7 @@ import AppError from "../../utils/appError";
 import logger from "../../utils/logger";
 
 
-@controller("/laborAttendances" ,deserializeUser,requireUser)
+@controller("/laborAttendances" ,deserializeUser,requireUser, requireRole(Role.ADMIN))
 export class LaborAttendancesController {
   constructor(
     @inject(TYPES.LaborAttendancesService)

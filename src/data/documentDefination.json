@@ -1,106 +1,474 @@
 [
-    {
-      "uniqueKey": "rfpa",
-      "documentType": "Procurement",
-      "name": "Request For Purchase Approval"
-    },
-    {
-      "uniqueKey": "deal-slip",
-      "documentType": "Procurement",
-      "name": "Deal Slip"
-    },
-    {
-      "uniqueKey": "grn",
-      "documentType": "Procurement",
-      "name": "Good Received Note"
-    },
-    {
-      "uniqueKey": "deliveryChallan-Customer",
-      "documentType": "DC_TYPE_CUSTOMER",
-      "name": "Customer Delivery Challan"
-    },
-     {
-      "uniqueKey": "deliveryChallan-Stock-Transfer",
-      "documentType": "DC_TYPE_STOCK_TRANSFER",
-      "name": "Stock Transfer Delivery Challan"
-    },
-     {
-      "uniqueKey": "deliveryChallan-Other",
-      "documentType": "Sale",
-      "name": "Other Delivery Challan"
-    },
-
-    {
-      "uniqueKey": "inward-register",
-      "documentType": "Operation",
-      "name": "Inward Register"
-    },
-    {
-      "uniqueKey": "aqr",
-      "documentType": "Operation",
-      "name": "Arrival Quality Report"
-    },
-    {
-      "uniqueKey": "dump-register",
-      "documentType": "Operation",
-      "name": "Dump Register"
-    },
-    {
-      "uniqueKey": "vehicle-dispatch-register",
-      "documentType": "Operation",
-      "name": "Vehicle Dispatch Register"
-    },
-    {
-      "uniqueKey": "return-by-customer",
-      "documentType": "Operation",
-      "name": "Return By Customer"
-    },
-
-    {
-      "uniqueKey": "return-to-vendor",
-      "documentType": "Operation",
-      "name": "Return To Vendor"
-    },
-    {
-      "uniqueKey": "second-sale",
-      "documentType": "Sale",
-      "name": "Second Sale"
-    },
-    {
-      "uniqueKey": "eod-report",
-      "documentType": "Operation",
-      "name": "End Of The Day Report"
-    },
-    {
-      "uniqueKey": "Inventory",
-      "documentType": "Operation",
-      "name": "Inventory"
-    },
-    {
-      "uniqueKey": "final-invoice",
-      "documentType": "Sale",
-      "name": "Final Invoice"
-    },
-  
-    {
-      "uniqueKey": "multi-cash-voucher",
-      "documentType": "Procurement",
-      "name": "Multi Cash Voucher"
-    },
-    {
-      "uniqueKey": "labor-payment-voucher",
-      "documentType": "Procurement",
-      "name": "Labor Payment Voucher"
-    },
-    {
-      "uniqueKey": "transport-payment-voucher",
-      "documentType": "Procurement",
-      "name": "Transport Payment Voucher"
-    },
-    {
-      "uniqueKey": "packaging-material-voucher",
-      "documentType": "Procurement",
-      "name": "Packaging Material Voucher"
-    }
-  ]
-  
+  {
+    "uniqueKey": "rfpa",
+    "documentType": "Procurement",
+    "name": "Request For Purchase Approval",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "deal-slip",
+    "documentType": "Procurement",
+    "name": "Deal Slip",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "grn",
+    "documentType": "Procurement",
+    "name": "Goods Received Note",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "multi-cash-voucher",
+    "documentType": "Procurement",
+    "name": "Multi Cash Voucher",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "labor-payment-voucher",
+    "documentType": "Procurement",
+    "name": "Labour Payment Voucher",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "transport-payment-voucher",
+    "documentType": "Procurement",
+    "name": "Transport Payment Voucher",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "packaging-material-voucher",
+    "documentType": "Procurement",
+    "name": "Packaging Material Voucher",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "aqr",
+    "documentType": "Operation",
+    "name": "Arrival Quality Report",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "inward-register",
+    "documentType": "Operation",
+    "name": "Inward Register",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "dump-register",
+    "documentType": "Operation",
+    "name": "Dump Register",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "return-to-vendor",
+    "documentType": "Operation",
+    "name": "Return To Vendor",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "return-by-customer",
+    "documentType": "Operation",
+    "name": "Return By Customer",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "deliveryChallan-Stock-Transfer",
+    "documentType": "Operation",
+    "name": "Stock Transfer Delivery Challan",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "deliveryChallan-Customer",
+    "documentType": "Sale",
+    "name": "Customer Delivery Challan",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "deliveryChallan-Other",
+    "documentType": "Sale",
+    "name": "Other Delivery Challan",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "second-sale",
+    "documentType": "Sale",
+    "name": "Second Sale",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "final-invoice",
+    "documentType": "Sale",
+    "name": "Final Invoice",
+    "allowedActions": [
+      "create",
+      "view",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "product-stock",
+    "documentType": "Operation",
+    "name": "Product Stock",
+    "allowedActions": [
+      "view",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "stock-in-transit",
+    "documentType": "Operation",
+    "name": "Stock In Transit",
+    "allowedActions": [
+      "view",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "arrivals",
+    "documentType": "Operation",
+    "name": "Arrivals",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "stock-adjustment",
+    "documentType": "Operation",
+    "name": "Stock Adjustment",
+    "allowedActions": [
+      "create",
+      "view",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "repack",
+    "documentType": "Operation",
+    "name": "Repack",
+    "allowedActions": [
+      "create",
+      "view",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "vehicle-dispatch-transfer",
+    "documentType": "Operation",
+    "name": "Stock Transfer Vehicle Dispatch",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "vehicle-dispatch-purchase",
+    "documentType": "Procurement",
+    "name": "Purchase Vehicle Dispatch",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "vehicle-dispatch-sales",
+    "documentType": "Sale",
+    "name": "Sales Vehicle Dispatch",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "vendors",
+    "documentType": "Registration",
+    "name": "Vendor Registration",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "farmers",
+    "documentType": "Registration",
+    "name": "Farmer Registration",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "customers",
+    "documentType": "Registration",
+    "name": "Customer Registration",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "transporters",
+    "documentType": "Registration",
+    "name": "Transporter Registration",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "drivers",
+    "documentType": "Registration",
+    "name": "Driver Registration",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "vehicles",
+    "documentType": "Registration",
+    "name": "Vehicle Registration",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "procurement-business-plan",
+    "documentType": "Plan",
+    "name": "Procurement Business Plan",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "sales-business-plan",
+    "documentType": "Plan",
+    "name": "Sales Business Plan",
+    "allowedActions": [
+      "create",
+      "view",
+      "edit",
+      "delete",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "transactions",
+    "documentType": "Operation",
+    "name": "Transactions",
+    "allowedActions": [
+      "view",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "purchase-report",
+    "documentType": "Report",
+    "name": "Purchase Reports",
+    "allowedActions": [
+      "view",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "sales-report",
+    "documentType": "Report",
+    "name": "Sales Reports",
+    "allowedActions": [
+      "view",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "operation-report",
+    "documentType": "Report",
+    "name": "Operation Reports",
+    "allowedActions": [
+      "view",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "user-performance-report",
+    "documentType": "Report",
+    "name": "User Performance Report",
+    "allowedActions": [
+      "view",
+      "download",
+      "export"
+    ]
+  },
+  {
+    "uniqueKey": "business-report",
+    "documentType": "Report",
+    "name": "Business Reports",
+    "allowedActions": [
+      "view",
+      "download",
+      "export"
+    ]
+  }
+]

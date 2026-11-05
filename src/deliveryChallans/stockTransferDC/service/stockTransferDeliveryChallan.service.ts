@@ -31,12 +31,12 @@ import { DocumentbService, DocumentWithRelatedData } from '../../../approvalFlow
 import { DocDoubleApproverService } from '../../../approvalFlow/service/docDoubleApprover.service';
 import { DeliveryChallanService } from '../../deliverychllan/service/deliveryChallan.service';
 import { ApprovalFlowService } from '../../../approvalFlow/service/approvalFlow.service';
-import { ProductVarientService } from '../../../product/productVarient/service/productVarient.service';
 import { DocumentbRepository } from '../../../approvalFlow/repository/documentb.repository';
 import { CreateSTDeliveryChallanDto, STDeliveryChallanListResponseDto, STDeliveryChallanUpdateFormDto, STDeliveryChallanViewDto, UpdateSTDeliveryChallanDto } from '../dto/stockTransferDeliveryChallan.dto';
 import { StockTransferDeliveryChallan } from '../entity/stockTransferdeliveryChallan.entity';
 import { ReceivingGuardService } from '../../../receiving/service/receivingGuard.service';
 import { refId } from '../../../receiving/receiving.helpers';
+import { openTransaction, refreshTransactionOf } from '../../../transactions/transaction.core';
 
 
 @injectable()
@@ -54,8 +54,6 @@ export class StockTransferDeliveryChallanService {
     private approvalFlowService: ApprovalFlowService,
     @inject(TYPES.ProductVarientsRepository)
         private readonly variantRepository: ProductVarientsRepository,
-        @inject(TYPES.ProductVarientService)
-        private readonly productVarientService: ProductVarientService,
           @inject(TYPES.InventoryStockRepository)
             private readonly inventoryStockRepository: InventoryStockRepository,
             @inject(TYPES.DitemRepository)
@@ -146,7 +144,8 @@ export class StockTransferDeliveryChallanService {
     this.assertDifferentLocations(refIdOf(data.fromLocation), refIdOf(data.toLocation));
     await resolveDcLines(queryRunner.manager, data.deliveryChallanProducts);
 
-    data.challanNo = await this.customerDeliveryChallanService.generateVoucherNo(data.type || 'S');
+    delete data.txnNo; // server-owned, issued below
+    data.challanNo = await this.customerDeliveryChallanService.generateVoucherNo('S', queryRunner.manager);
     data.totalProductAmount = priceDcLines(data.deliveryChallanProducts);
 
     // 3. Save challan
@@ -163,6 +162,23 @@ export class StockTransferDeliveryChallanService {
       savedChallan.id,
       allocationRequestsByLine(savedChallan.deliveryChallanProducts, data.deliveryChallanProducts),
     );
+
+    // Transaction number (docs/transaction-tracking-plan.md §9.4): a Transfer DC starts a Stock Transfer (T);
+    // the party is the receiving (to) location.
+    const toLocationId = refIdOf(data.toLocation);
+    const toBranch: Array<{ name: string | null }> = toLocationId
+      ? await queryRunner.manager.query(`SELECT name FROM branches WHERE id = $1`, [toLocationId])
+      : [];
+    savedChallan.txnNo = await openTransaction(queryRunner.manager, {
+      type: 'transfer',
+      origin: { docType: 'dc-transfer', docId: savedChallan.id, docNo: savedChallan.challanNo ?? null },
+      companyId: refIdOf(data.companyName),
+      locationId: refIdOf(data.fromLocation),
+      toLocationId,
+      partyType: 'branch',
+      partyId: toLocationId,
+      partyName: toBranch[0]?.name ?? null,
+    });
 
     // 4. Create document
     const document = await this.documentbService.createDocument({
@@ -227,7 +243,7 @@ export class StockTransferDeliveryChallanService {
         .leftJoin('challan.fromLocation', 'fromLocation')
         .leftJoin('challan.toLocation', 'toLocation')
         .select([
-          'challan.id', 'challan.challanNo', 'challan.stockTransferType', 'challan.transitInsuranceNo',
+          'challan.id', 'challan.challanNo', 'challan.txnNo', 'challan.stockTransferType', 'challan.transitInsuranceNo',
           'challan.receiverName', 'challan.rmn',
           'challan.totalProductAmount', 'challan.netProductWeight',
           'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
@@ -254,6 +270,7 @@ export class StockTransferDeliveryChallanService {
       const formattedChallan = {
         id: challan.id,
         challanNo: challan.challanNo,
+        txnNo: challan.txnNo ?? null,
         stockTransferType: challan.stockTransferType ?? null,
         companyName: challan.companyName?.id ?? null,
         office: challan.offices?.id ?? null,
@@ -334,6 +351,8 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
       await this.documentbService.rejectDispatchesForSource(
         DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER, [id], 'deleted', `Stock transfer DC ${dcForStockTransfer.challanNo ?? ''}`.trim(),
       );
+      // The transfer is cancelled (its origin is gone).
+      await refreshTransactionOf(this.dataSource.manager, 'dc-transfer', id);
       await this.invalidateCache(id);
       success.push({id,No:dcForStockTransfer.challanNo});
     } catch (error: any) {
@@ -370,7 +389,7 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
         .leftJoin('challan.fromLocation', 'fromLocation')
         .leftJoin('challan.toLocation', 'toLocation')
         .select([
-          'challan.id', 'challan.challanNo', 'challan.stockTransferType', 'challan.transitInsuranceNo',
+          'challan.id', 'challan.challanNo', 'challan.txnNo', 'challan.stockTransferType', 'challan.transitInsuranceNo',
           'challan.receiverName',
           'challan.totalProductAmount', 'challan.netProductWeight',
           'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
@@ -399,6 +418,7 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
         id: challan.id,
         documentId: document.id,
         challanNo: challan.challanNo,
+        txnNo: challan.txnNo ?? null,
         stockTransferType: challan.stockTransferType ?? null,
         companyName: challan.companyName?.name ?? null,
         transitInsuranceNo: challan.transitInsuranceNo ?? null,
@@ -476,7 +496,7 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
           .leftJoin('challan.fromLocation', 'fromLocation')
           .leftJoin('challan.toLocation', 'toLocation')
           .select([
-            'challan.id', 'challan.challanNo', 'challan.transitInsuranceNo',
+            'challan.id', 'challan.challanNo', 'challan.txnNo', 'challan.transitInsuranceNo',
             'challan.totalProductAmount', 'challan.netProductWeight',
             'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
             'challan.totalAmtInWords', 
@@ -505,6 +525,7 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
           createdTime: formatDateTime(doc.createdAt).createdTime,
           id: rd.id,
           challanNo: rd.challanNo,
+          txnNo: rd.txnNo ?? null,
           transitInsuranceNo: rd.transitInsuranceNo ?? null,
           totalProductAmount: rd.totalProductAmount,
           netProductWeight: rd.netProductWeight,
@@ -571,6 +592,7 @@ public async deleteMultipleDCForStockTransfer(ids: string[]): Promise<BulkDelete
       const challan = await this.challanRepository.findOne({ where: { id } });
       if (!challan) return null;
 
+      delete (data as Record<string, any>).txnNo; // the transaction number is server-owned
       Object.assign(challan, data);
       // Lines / from-location and the batch hold change together.
       const saved = await this.dataSource.transaction(async (manager) => {

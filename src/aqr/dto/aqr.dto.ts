@@ -300,6 +300,8 @@ export class GetAqrByIdForViewResponseDto {
   // AQR fields
   id: string;
   aqrNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   aqrFor: AqrFor | null;
   companyName: string | null;     // company id
   location: string | null;        // branch name
@@ -355,6 +357,8 @@ export class AqrListItemDto {
   id: string;
   aqrFor: AqrFor | null;
   aqrNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   location: string | null;
   source: Source | null;
@@ -394,6 +398,8 @@ export class GetAllAqrsResponseDto {
 export class GetAqrForUpdateResponseDto {
   id: string;
   aqrNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   aqrFor: AqrFor | null;
 
   // All relations returned as plain IDs for edit form dropdowns

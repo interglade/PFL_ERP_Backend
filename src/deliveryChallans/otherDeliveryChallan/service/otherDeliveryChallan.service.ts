@@ -4,6 +4,7 @@ import { resolveDcLines } from '../../deliverychllan/service/dcStock';
 import { refId as refIdOf } from '../../../receiving/receiving.helpers';
 import { DocumentTypeEnum as ApprovalDocType } from '../../../approvalFlow/entity/docuemnt.entity';
 import { assertDcChangeable } from '../../deliverychllan/service/dcChangeGuard';
+import { openTransaction, refreshTransactionOf } from '../../../transactions/transaction.core';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
 import { TYPES } from '../../../types';
@@ -31,6 +32,15 @@ import { DeliveryChallanService } from '../../deliverychllan/service/deliveryCha
 import { DocumentbRepository } from '../../../approvalFlow/repository/documentb.repository';
 import { CreateODCDto, ODCListResponseDto, ODCUpdateFormDto, ODCViewDto, UpdateODCDto } from '../dto/otherDeliveryChallan.dto';
 import { OtherDeliveryChallan } from '../entity/otherDeliveryChallan.entity';
+import { addressForForm, formatWalkInAddress, resolveWalkInCustomer, splitWalkInCustomer } from '../../../global/walkInCustomer/walkInCustomer';
+
+/** Customer columns read by the view, edit-form and list queries. */
+const CUSTOMER_COLUMNS = [
+  'challan.customer', 'challan.customerContactNo', 'challan.customerEmail', 'challan.customerAltContactNo',
+  'challan.customerType', 'challan.customerPanNo', 'challan.shipToSameAsBilling', 'challan.placeOfSupply',
+];
+const addressColumns = (alias: string) =>
+  ['id', 'address1', 'address2', 'location', 'city', 'state', 'pincode'].map((field) => `${alias}.${field}`);
 
 
 @injectable()
@@ -89,7 +99,8 @@ export class OtherDeliveryChallanService {
 
   async create(data: CreateODCDto & Record<string, any>): Promise<CreatedWithApproval<any>> {
     // Check if approval flow exists for the user
-    await this.checkApprovalFlowExists(data.createdBy, DocDefEnum.OPERATION);
+    // Other DC is a sales document: the creator's Sale flow, two levels (client decision 2026-10-30).
+    await this.checkApprovalFlowExists(data.createdBy, DocDefEnum.SALE);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -104,7 +115,7 @@ export class OtherDeliveryChallanService {
       // Every line needs a quantity and a net weight (dcStock.ts); batch stock is reserved after the save.
       await resolveDcLines(queryRunner.manager, data.deliveryChallanProducts);
 
-      data.challanNo = await this.customerDeliveryChallanService.generateVoucherNo(data.type || 'O');
+      data.challanNo = await this.customerDeliveryChallanService.generateVoucherNo('O', queryRunner.manager);
       data.totalProductAmount = priceDcLines(data.deliveryChallanProducts);
 
       const challanData: any = {
@@ -130,23 +141,9 @@ export class OtherDeliveryChallanService {
         customerContactNo: data.customerContactNo || null,
         customerEmail: data.customerEmail || null,
         deliveryChallanProducts: data.deliveryChallanProducts,
+        // Customer type, alt contact, PAN, billing / shipping address (six columns each), place of supply
+        ...(await resolveWalkInCustomer(queryRunner.manager, data)),
       };
-
-      // Handle customerAddress — create new if object, link if UUID string
-      if (data.customerAddress && typeof data.customerAddress === 'object') {
-        const newAddress = queryRunner.manager.create('Address', {
-          address1: data.customerAddress.address1,
-          address2: data.customerAddress.address2,
-          location: data.customerAddress.location,
-          city: data.customerAddress.city,
-          state: data.customerAddress.state,
-          pincode: data.customerAddress.pincode,
-        });
-        const savedAddress = await queryRunner.manager.save(newAddress) as any;
-        challanData.customerAddress = { id: savedAddress.id };
-      } else if (data.customerAddress && typeof data.customerAddress === 'string') {
-        challanData.customerAddress = { id: data.customerAddress };
-      }
 
       const challan = queryRunner.manager.create(this.challanRepository.target, challanData);
       const savedChallanArr = await queryRunner.manager.save(challan);
@@ -160,9 +157,20 @@ export class OtherDeliveryChallanService {
         allocationRequestsByLine(savedChallan.deliveryChallanProducts, data.deliveryChallanProducts),
       );
 
+      // Transaction number (docs/transaction-tracking-plan.md §9.4): an Other DC starts an Other Sale (SO);
+      // the party is the walk-in customer named on the DC.
+      savedChallan.txnNo = await openTransaction(queryRunner.manager, {
+        type: 'other-sale',
+        origin: { docType: 'dc-other', docId: savedChallan.id, docNo: savedChallan.challanNo ?? null },
+        companyId: refIdOf(data.companyName),
+        locationId: refIdOf(data.fromLocation),
+        partyType: 'walk-in',
+        partyName: challanData.customer,
+      });
+
       const document = await this.documentbService.createDocument({
         type: DocumentTypeEnum.DC_TYPE_OTHER,
-        docDef: DocDefEnum.OPERATION,
+        docDef: DocDefEnum.SALE,
         status: DocumentStatus.HOLD,
         remarks: 'Document auto-created with Other Delivery Challan',
         lastActionBy: { id: data.createdBy },
@@ -213,20 +221,20 @@ export class OtherDeliveryChallanService {
       .leftJoin('products.packagingMaterialUoM', 'packagingMaterialUoM')
       .leftJoin('products.saleUoM', 'saleUoM')
       .leftJoin('challan.companyName', 'company')
-      .leftJoin('challan.customerAddress', 'customerAddress')
+      .leftJoin('challan.billingAddress', 'billingAddress')
+      .leftJoin('challan.shippingAddress', 'shippingAddress')
       .leftJoin('challan.offices', 'office')
       .leftJoin('challan.grnNo', 'grn')
       .leftJoin('challan.fromLocation', 'fromLocation')
       .select([
-        'challan.id', 'challan.challanNo', 'challan.transitInsuranceNo', 'challan.rmn',
+        'challan.id', 'challan.challanNo', 'challan.txnNo', 'challan.transitInsuranceNo', 'challan.rmn',
         'challan.receiverName',
         'challan.totalProductAmount', 'challan.netProductWeight',
         'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
         'challan.totalAmtInWords', 'challan.remark', 'challan.anyAttachment', 'challan.createdAt',
-        'challan.customer', 'challan.customerContactNo', 'challan.customerEmail',
+        ...CUSTOMER_COLUMNS,
         'company.name', 'office.name', 'grn.grnNo', 'fromLocation.name',
-        'customerAddress.address1', 'customerAddress.address2', 'customerAddress.location',
-        'customerAddress.city', 'customerAddress.state', 'customerAddress.pincode',
+        ...addressColumns('billingAddress'), ...addressColumns('shippingAddress'),
         'products.id', 'products.quantity', 'products.unitPrice', 'products.amount',
         'products.netWeight', 'products.grossWeight', 'products.packingMaterialWeight',
         'products.packagingMaterialAmount', 'products.packagingMaterialUnitPrice',
@@ -240,12 +248,13 @@ export class OtherDeliveryChallanService {
     if (!challan) return null;
 
     const { createdDate, createdTime } = formatDateTime(challan.createdAt);
-    const addr = (challan as any).customerAddress;
+    const billingAddress = formatWalkInAddress(challan.billingAddress);
 
     const formattedChallan = {
       id: challan.id,
       documentId: document.documentId,
       challanNo: challan.challanNo,
+      txnNo: challan.txnNo ?? null,
       companyName: challan.companyName?.name ?? null,
       office: challan.offices?.name ?? null,
       grnNo: challan.grnNo?.grnNo ?? null,
@@ -262,13 +271,17 @@ export class OtherDeliveryChallanService {
       anyAttachment: challan.anyAttachment ?? null,
       createdDate,
       createdTime,
-      customer: (challan as any).customer ?? null,
-      customerContactNo: (challan as any).customerContactNo ?? null,
-      customerEmail: (challan as any).customerEmail ?? null,
-      customerAddress: addr
-        ? [addr.address1, addr.address2, addr.location, addr.city, addr.state, addr.pincode]
-            .filter(Boolean).join(' ')
-        : null,
+      customer: challan.customer ?? null,
+      customerType: challan.customerType ?? null,
+      customerContactNo: challan.customerContactNo ?? null,
+      customerAltContactNo: challan.customerAltContactNo ?? null,
+      customerEmail: challan.customerEmail ?? null,
+      customerPanNo: challan.customerPanNo ?? null,
+      billingAddress,
+      shipToSameAsBilling: challan.shipToSameAsBilling ?? true,
+      // The address the goods go to: the billing address when "same as billing".
+      shippingAddress: challan.shipToSameAsBilling === false ? formatWalkInAddress(challan.shippingAddress) : billingAddress,
+      placeOfSupply: challan.placeOfSupply ?? null,
       overAllStatus: document.overAllStatus,
       createdBy: document.createdBy,
       approvalSummary: document.approvalSummary ?? null,
@@ -312,21 +325,21 @@ export class OtherDeliveryChallanService {
       .leftJoin('products.packagingMaterialUoM', 'packagingMaterialUoM')
       .leftJoin('products.saleUoM', 'saleUoM')
       .leftJoin('challan.companyName', 'company')
-      .leftJoin('challan.customerAddress', 'customerAddress')
+      .leftJoin('challan.billingAddress', 'billingAddress')
+      .leftJoin('challan.shippingAddress', 'shippingAddress')
       .leftJoin('challan.offices', 'office')
       .leftJoin('challan.grnNo', 'grn')
       .leftJoin('challan.fromLocation', 'fromLocation')
       .select([
-        'challan.id', 'challan.challanNo', 'challan.transitInsuranceNo', 'challan.rmn',
+        'challan.id', 'challan.challanNo', 'challan.txnNo', 'challan.transitInsuranceNo', 'challan.rmn',
         'challan.receiverName',
         'challan.totalProductAmount', 'challan.netProductWeight',
         'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
         'challan.totalAmtInWords', 'challan.approvalStatus',
         'challan.remark', 'challan.anyAttachment', 'challan.createdAt',
-        'challan.customer', 'challan.customerContactNo', 'challan.customerEmail',
+        ...CUSTOMER_COLUMNS,
         'company.id', 'office.id', 'grn.id', 'fromLocation.id',
-        'customerAddress.id', 'customerAddress.address1', 'customerAddress.address2',
-        'customerAddress.location', 'customerAddress.city', 'customerAddress.state', 'customerAddress.pincode',
+        ...addressColumns('billingAddress'), ...addressColumns('shippingAddress'),
         'products.id', 'products.quantity', 'products.unitPrice', 'products.amount',
         'products.netWeight', 'products.grossWeight', 'products.packingMaterialWeight',
         'products.packagingMaterialAmount', 'products.packagingMaterialUnitPrice',
@@ -340,11 +353,11 @@ export class OtherDeliveryChallanService {
     if (!challan) return null;
 
     const { createdDate, createdTime } = formatDateTime(challan.createdAt);
-    const addr = (challan as any).customerAddress;
 
     const formattedChallan = {
       id: challan.id,
       challanNo: challan.challanNo,
+      txnNo: challan.txnNo ?? null,
       companyName: challan.companyName?.id ?? null,
       office: challan.offices?.id ?? null,
       grnNo: challan.grnNo?.id ?? null,
@@ -362,13 +375,16 @@ export class OtherDeliveryChallanService {
       anyAttachment: challan.anyAttachment ?? null,
       createdDate,
       createdTime,
-      customer: (challan as any).customer ?? null,
-      customerContactNo: (challan as any).customerContactNo ?? null,
-      customerEmail: (challan as any).customerEmail ?? null,
-      customerAddress: addr ? {
-        id: addr.id, address1: addr.address1, address2: addr.address2,
-        location: addr.location, city: addr.city, state: addr.state, pincode: addr.pincode,
-      } : null,
+      customer: challan.customer ?? null,
+      customerType: challan.customerType ?? 'individual',
+      customerContactNo: challan.customerContactNo ?? null,
+      customerAltContactNo: challan.customerAltContactNo ?? null,
+      customerEmail: challan.customerEmail ?? null,
+      customerPanNo: challan.customerPanNo ?? null,
+      billingAddress: addressForForm(challan.billingAddress),
+      shipToSameAsBilling: challan.shipToSameAsBilling ?? true,
+      shippingAddress: challan.shipToSameAsBilling === false ? addressForForm(challan.shippingAddress) : null,
+      placeOfSupply: challan.placeOfSupply ?? null,
       deliveryChallanProducts: (challan.deliveryChallanProducts ?? []).map((p) => ({
         id: p.id,
         productName: p.productName?.id ?? null,
@@ -423,18 +439,18 @@ export class OtherDeliveryChallanService {
         .leftJoin('challan.offices', 'office')
         .leftJoin('challan.grnNo', 'grn')
         .leftJoin('challan.fromLocation', 'fromLocation')
-        .leftJoin('challan.customerAddress', 'customerAddress')
+        .leftJoin('challan.billingAddress', 'billingAddress')
+        .leftJoin('challan.shippingAddress', 'shippingAddress')
         .select([
-          'challan.id', 'challan.challanNo', 'challan.transitInsuranceNo', 'challan.rmn',
+          'challan.id', 'challan.challanNo', 'challan.txnNo', 'challan.transitInsuranceNo', 'challan.rmn',
           'challan.receiverName',
           'challan.totalProductAmount', 'challan.netProductWeight',
           'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
           'challan.totalAmtInWords', 'challan.approvalStatus',
           'challan.remark', 'challan.anyAttachment',
-          'challan.customer', 'challan.customerContactNo', 'challan.customerEmail',
+          ...CUSTOMER_COLUMNS,
           'company.name', 'office.name', 'grn.grnNo', 'fromLocation.name',
-          'customerAddress.address1', 'customerAddress.address2', 'customerAddress.location',
-          'customerAddress.city', 'customerAddress.state', 'customerAddress.pincode',
+          ...addressColumns('billingAddress'), ...addressColumns('shippingAddress'),
         ])
         .where('challan.id IN (:...ids)', { ids: challanIds })
         .andWhere('challan.isDeleted = false')
@@ -451,7 +467,7 @@ export class OtherDeliveryChallanService {
         const rd = challanMap.get(doc.document_type_id!);
         if (!rd) return null;
         const { createdDate, createdTime } = formatDateTime(doc.createdAt);
-        const addr = (rd as any).customerAddress;
+        const billingAddress = formatWalkInAddress(rd.billingAddress);
         return {
           documentId: doc.id,
           overAllStatus: doc.status,
@@ -460,18 +476,22 @@ export class OtherDeliveryChallanService {
           createdTime,
           id: rd.id,
           challanNo: rd.challanNo,
+          txnNo: rd.txnNo ?? null,
           companyName: rd.companyName?.name ?? null,
           office: rd.offices?.name ?? null,
           grnNo: rd.grnNo?.grnNo ?? null,
           fromLocation: rd.fromLocation?.name ?? null,
-          customer: (rd as any).customer ?? null,
-          customerContactNo: (rd as any).customerContactNo ?? null,
-          customerEmail: (rd as any).customerEmail ?? null,
+          customer: rd.customer ?? null,
+          customerType: rd.customerType ?? null,
+          customerContactNo: rd.customerContactNo ?? null,
+          customerAltContactNo: rd.customerAltContactNo ?? null,
+          customerEmail: rd.customerEmail ?? null,
+          customerPanNo: rd.customerPanNo ?? null,
           rmn: rd.rmn ?? null,
-          customerAddress: addr
-            ? [addr.address1, addr.address2, addr.location, addr.city, addr.state, addr.pincode]
-                .filter(Boolean).join(' ')
-            : null,
+          billingAddress,
+          shipToSameAsBilling: rd.shipToSameAsBilling ?? true,
+          shippingAddress: rd.shipToSameAsBilling === false ? formatWalkInAddress(rd.shippingAddress) : billingAddress,
+          placeOfSupply: rd.placeOfSupply ?? null,
           receiverName: rd.receiverName ?? null,
           transitInsuranceNo: rd.transitInsuranceNo ?? null,
           totalProductAmount: rd.totalProductAmount ?? null,
@@ -502,11 +522,18 @@ export class OtherDeliveryChallanService {
       data.totalProductAmount = priceDcLines(data.deliveryChallanProducts);
     }
     try {
-      const challan = await this.challanRepository.findOne({ where: { id } });
+      const challan = await this.challanRepository.findOne({
+        where: { id },
+        relations: ['billingAddress', 'shippingAddress'],
+      });
       if (!challan) return null;
 
-      Object.assign(challan, data);
+      delete (data as Record<string, any>).txnNo; // the transaction number is server-owned
+      // Customer details are saved through resolveWalkInCustomer (addresses in their own rows).
+      const { customer, rest } = splitWalkInCustomer(data as Record<string, any>);
+      Object.assign(challan, rest);
       const saved = await this.dataSource.transaction(async (manager) => {
+        Object.assign(challan, await resolveWalkInCustomer(manager, customer, challan));
         const result = await manager.save(challan);
         if (Array.isArray(data.deliveryChallanProducts) || data.fromLocation) {
           await reserveDcStock(
@@ -564,6 +591,8 @@ export class OtherDeliveryChallanService {
         await this.challanRepository.softDelete(challan.id);
         await this.challanRepository.update(challan.id, { isDeleted: true } as any);
         await releaseDcStock(this.dataSource.manager, ApprovalDocType.DC_TYPE_OTHER, challan.id);
+        // The other sale is cancelled (its origin is gone).
+        await refreshTransactionOf(this.dataSource.manager, 'dc-other', challan.id);
 
         await this.invalidateCache(id);
         success.push({id,No:challan.challanNo});

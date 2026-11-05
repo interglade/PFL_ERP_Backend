@@ -241,55 +241,55 @@ describe('deriveState', () => {
   const finished: Partial<DeriveStateInput> = { aqr: approved, inward: approved, dump: approved, rtv: approved };
 
   it('is not-received until the source is approved, whatever documents exist', () => {
-    expect(deriveState({ ...base, ...finished, isComplete: false })).toBe('not-received');
+    expect(deriveState({ ...base, ...finished, isComplete: false })).toBe('Not Received');
   });
 
   it('is not-received while the required dispatch is missing / not approved (no documents yet)', () => {
-    expect(deriveState({ ...base, canReceive: false, arrived: false })).toBe('not-received');
+    expect(deriveState({ ...base, canReceive: false, arrived: false })).toBe('Not Received');
   });
 
   it('is in-transit until the vehicle is received, then received', () => {
-    expect(deriveState({ ...base, arrived: false })).toBe('in-transit');
-    expect(deriveState(base)).toBe('received');
+    expect(deriveState({ ...base, arrived: false })).toBe('In Transit');
+    expect(deriveState(base)).toBe('Received');
   });
 
   it('is in-progress from the first counting document, even without a recorded arrival', () => {
-    expect(deriveState({ ...base, aqr: pending })).toBe('in-progress');
-    expect(deriveState({ ...base, arrived: false, aqr: approved })).toBe('in-progress');
+    expect(deriveState({ ...base, aqr: pending })).toBe('In Progress');
+    expect(deriveState({ ...base, arrived: false, aqr: approved })).toBe('In Progress');
   });
 
   it('is done with AQR, Inward, Dump and RTV approved and every difference 0', () => {
-    expect(deriveState({ ...base, ...finished })).toBe('done');
-    expect(deriveState({ ...base, ...finished, products: short })).toBe('in-progress');
+    expect(deriveState({ ...base, ...finished })).toBe('Done');
+    expect(deriveState({ ...base, ...finished, products: short })).toBe('In Progress');
   });
 
   it('needs every step approved, not just created (D2)', () => {
-    expect(deriveState({ ...base, ...finished, aqr: pending })).toBe('in-progress');
-    expect(deriveState({ ...base, ...finished, inward: pending })).toBe('in-progress');
-    expect(deriveState({ ...base, ...finished, dump: pending })).toBe('in-progress');
+    expect(deriveState({ ...base, ...finished, aqr: pending })).toBe('In Progress');
+    expect(deriveState({ ...base, ...finished, inward: pending })).toBe('In Progress');
+    expect(deriveState({ ...base, ...finished, dump: pending })).toBe('In Progress');
   });
 
   it('AQR and Inward are compulsory', () => {
-    expect(deriveState({ ...base, ...finished, aqr: none })).toBe('in-progress');
-    expect(deriveState({ ...base, ...finished, inward: none })).toBe('in-progress');
+    expect(deriveState({ ...base, ...finished, aqr: none })).toBe('In Progress');
+    expect(deriveState({ ...base, ...finished, inward: none })).toBe('In Progress');
   });
 
   it('a skipped Dump / RTV finishes the step', () => {
-    expect(deriveState({ ...base, ...finished, dump: none, rtv: none })).toBe('in-progress');
-    expect(deriveState({ ...base, ...finished, dump: none, rtv: none, skipped: { dump: true, rtv: true } })).toBe('done');
-    expect(deriveState({ ...base, ...finished, dump: none, skipped: { dump: true, rtv: false } })).toBe('done');
+    expect(deriveState({ ...base, ...finished, dump: none, rtv: none })).toBe('In Progress');
+    expect(deriveState({ ...base, ...finished, dump: none, rtv: none, skipped: { dump: true, rtv: true } })).toBe('Done');
+    expect(deriveState({ ...base, ...finished, dump: none, skipped: { dump: true, rtv: false } })).toBe('Done');
   });
 
   it('ignores RTV where it does not apply', () => {
-    expect(deriveState({ ...base, ...finished, rtv: none, rtvApplicable: false })).toBe('done');
+    expect(deriveState({ ...base, ...finished, rtv: none, rtvApplicable: false })).toBe('Done');
   });
 });
 
 describe('stepDocuments', () => {
   it('approved only when there is a document and every one is COMPLETE', () => {
     expect(stepDocuments([])).toEqual({ counting: 0, approved: false });
-    expect(stepDocuments([{ id: 'a', status: 'COMPLETE' }])).toEqual({ counting: 1, approved: true });
-    expect(stepDocuments([{ id: 'a', status: 'COMPLETE' }, { id: 'b', status: 'hold' }])).toEqual({ counting: 2, approved: false });
+    expect(stepDocuments([{ id: 'a', status: 'Complete' }])).toEqual({ counting: 1, approved: true });
+    expect(stepDocuments([{ id: 'a', status: 'Complete' }, { id: 'b', status: 'Hold' }])).toEqual({ counting: 2, approved: false });
     expect(stepDocuments([{ id: 'a', status: null }])).toEqual({ counting: 1, approved: false });
   });
 });
@@ -305,20 +305,20 @@ describe('isCountingDocument / pickSlotAndLegacy / slotState', () => {
   });
 
   it('counts a document unless it is rejected or deleted; a scheduled deletion is ignored', () => {
-    expect(isCountingDocument(doc('a', 'hold', '2026-10-01'))).toBe(true);
+    expect(isCountingDocument(doc('a', 'Hold', '2026-10-01'))).toBe(true);
     expect(isCountingDocument(doc('a', null, '2026-10-01'))).toBe(true);
-    expect(isCountingDocument(doc('a', 'COMPLETE', '2026-10-01'))).toBe(true);
-    expect(isCountingDocument(doc('a', 'REJECT', '2026-10-01'))).toBe(false);
-    expect(isCountingDocument(doc('a', 'hold', '2026-10-01', { isDeleted: true }))).toBe(false);
-    expect(isCountingDocument(doc('a', 'hold', '2026-10-01', { deletedAt: new Date() }))).toBe(false);
+    expect(isCountingDocument(doc('a', 'Complete', '2026-10-01'))).toBe(true);
+    expect(isCountingDocument(doc('a', 'Rejected', '2026-10-01'))).toBe(false);
+    expect(isCountingDocument(doc('a', 'Hold', '2026-10-01', { isDeleted: true }))).toBe(false);
+    expect(isCountingDocument(doc('a', 'Hold', '2026-10-01', { deletedAt: new Date() }))).toBe(false);
   });
 
   it('makes the newest counting document the slot and older counting ones legacy', () => {
     const pick = pickSlotAndLegacy([
-      doc('old', 'COMPLETE', '2026-09-01'),
-      doc('rejected', 'REJECT', '2026-09-20'),
-      doc('new', 'hold', '2026-10-01'),
-      doc('deleted', 'hold', '2026-10-05', { isDeleted: true }),
+      doc('old', 'Complete', '2026-09-01'),
+      doc('Rejected', 'Rejected', '2026-09-20'),
+      doc('new', 'Hold', '2026-10-01'),
+      doc('deleted', 'Hold', '2026-10-05', { isDeleted: true }),
     ]);
     expect(pick.slot?.id).toBe('new');
     expect(pick.legacy.map((d) => d.id)).toEqual(['old']);
@@ -326,23 +326,23 @@ describe('isCountingDocument / pickSlotAndLegacy / slotState', () => {
   });
 
   it('shows the newest rejected document when nothing counts, so the slot reads "rejected"', () => {
-    const pick = pickSlotAndLegacy([doc('r1', 'REJECT', '2026-09-01'), doc('r2', 'REJECT', '2026-09-02')]);
+    const pick = pickSlotAndLegacy([doc('r1', 'Rejected', '2026-09-01'), doc('r2', 'Rejected', '2026-09-02')]);
     expect(pick.slot?.id).toBe('r2');
     expect(pick.counting).toEqual([]);
-    expect(slotState(pick.slot)).toBe('rejected');
+    expect(slotState(pick.slot)).toBe('Rejected');
   });
 
   it('is empty with no documents', () => {
     const pick = pickSlotAndLegacy([]);
     expect(pick.slot).toBeNull();
-    expect(slotState(pick.slot)).toBe('missing');
+    expect(slotState(pick.slot)).toBe('Missing');
   });
 
   it('maps statuses to the Arrivals chips', () => {
-    expect(slotState(doc('a', 'hold', '2026-10-01'))).toBe('pending');
-    expect(slotState(doc('a', 'approved', '2026-10-01'))).toBe('pending');
-    expect(slotState(doc('a', 'COMPLETE', '2026-10-01'))).toBe('approved');
-    expect(slotState(doc('a', 'REJECT', '2026-10-01'))).toBe('rejected');
+    expect(slotState(doc('a', 'Hold', '2026-10-01'))).toBe('Pending');
+    expect(slotState(doc('a', 'Approved', '2026-10-01'))).toBe('Pending');
+    expect(slotState(doc('a', 'Complete', '2026-10-01'))).toBe('Approved');
+    expect(slotState(doc('a', 'Rejected', '2026-10-01'))).toBe('Rejected');
   });
 });
 

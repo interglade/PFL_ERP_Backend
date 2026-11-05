@@ -21,8 +21,8 @@ import {
   SourceLineInput,
 } from './receiving.types';
 
-export const REJECTED_STATUS = 'REJECT';
-export const COMPLETE_STATUS = 'COMPLETE';
+export const REJECTED_STATUS = 'Rejected';
+export const COMPLETE_STATUS = 'Complete';
 
 export const PROCESSING_DOC_LABEL: Record<ProcessingDocType, string> = {
   aqr: 'Arrival Quality Report',
@@ -119,6 +119,7 @@ export function aggregateSourceLines(lines: SourceLineInput[]): Map<string, Aggr
       existing.receivedKg = round3(existing.receivedKg + kg);
       existing.receivedQty = round3(existing.receivedQty + qty);
       existing.receivedGrossKg = round3(existing.receivedGrossKg + grossKg);
+      if (line.rtv !== false) existing.rtvAllowed = true;
       if (existing.productName == null && line.productName) existing.productName = line.productName;
       if (existing.variantName == null && line.variantName) existing.variantName = line.variantName;
       if (existing.uomId == null && line.uomId) {
@@ -130,6 +131,7 @@ export function aggregateSourceLines(lines: SourceLineInput[]): Map<string, Aggr
     }
     result.set(key, {
       key,
+      rtvAllowed: line.rtv !== false,
       productId: line.productId,
       productName: line.productName ?? null,
       variantId,
@@ -244,8 +246,10 @@ export function buildProductRows(
     const rtvKg = rtv ? rtv.kg : 0;
     const loss = source && arrivedKg !== null ? transitLoss(source, arrivedKg, arrivedQty) : null;
 
+    const rtvAllowed = source ? source.rtvAllowed : true;
     rows.push({
       key,
+      rtvAllowed,
       productId: fallback.productId,
       productName: source?.productName ?? aqr?.productName ?? inward?.productName ?? dump?.productName ?? rtv?.productName ?? null,
       variantId: fallback.variantId,
@@ -271,7 +275,7 @@ export function buildProductRows(
       suggested: {
         inwardKg: neverBelowZero(basisKg - dumpKg - rtvKg),
         dumpKg: neverBelowZero(basisKg - inwardKg - rtvKg),
-        rtvKg: neverBelowZero(basisKg - inwardKg - dumpKg),
+        rtvKg: rtvAllowed ? neverBelowZero(basisKg - inwardKg - dumpKg) : 0,
       },
     });
   }
@@ -328,7 +332,7 @@ function optionalStepFinished(step: StepDocuments, skipped: boolean): boolean {
  * - `received` when the vehicle was received (or no dispatch is needed), else `in-transit`.
  */
 export function deriveState(input: DeriveStateInput): ReceivingState {
-  if (!input.isComplete) return 'not-received';
+  if (!input.isComplete) return 'Not Received';
   const hasDocument = input.aqr.counting + input.inward.counting + input.dump.counting + input.rtv.counting > 0;
   if (hasDocument) {
     const done =
@@ -337,10 +341,10 @@ export function deriveState(input: DeriveStateInput): ReceivingState {
       optionalStepFinished(input.dump, input.skipped.dump) &&
       (!input.rtvApplicable || optionalStepFinished(input.rtv, input.skipped.rtv)) &&
       input.products.every((p) => round3(p.differenceKg) === 0);
-    return done ? 'done' : 'in-progress';
+    return done ? 'Done' : 'In Progress';
   }
-  if (!input.canReceive) return 'not-received';
-  return input.arrived ? 'received' : 'in-transit';
+  if (!input.canReceive) return 'Not Received';
+  return input.arrived ? 'Received' : 'In Transit';
 }
 
 /** A document counts when its `documents.status` is not REJECT and the business row is not deleted. */
@@ -380,10 +384,10 @@ export function pickSlotAndLegacy<T extends CountingDocumentLike>(docs: T[]): Sl
 
 /** Arrivals chip for a slot. */
 export function slotState(slot: CountingDocumentLike | null): SlotState {
-  if (!slot) return 'missing';
-  if (slot.status === REJECTED_STATUS) return 'rejected';
-  if (slot.status === COMPLETE_STATUS) return 'approved';
-  return 'pending';
+  if (!slot) return 'Missing';
+  if (slot.status === REJECTED_STATUS) return 'Rejected';
+  if (slot.status === COMPLETE_STATUS) return 'Approved';
+  return 'Pending';
 }
 
 export interface ValidateContext {
@@ -479,11 +483,17 @@ export function validateLinesAgainstSource(
       errors.push(`Quantity for ${label(key)} cannot be negative`);
       continue;
     }
+    if (docType === 'rtv' && kg > 0 && sourceAgg.get(key)?.rtvAllowed === false) {
+      errors.push(`${label(key)} is not marked for Return To Vendor on ${sourceNo}`);
+      continue;
+    }
     if (kg > 0) anyPositive = true;
     kgByKey.set(key, kg);
   }
 
   sourceAgg.forEach((source, key) => {
+    // An RTV lists only the GRN lines marked for Return To Vendor
+    if (docType === 'rtv' && !source.rtvAllowed) return;
     if (!seen.has(key)) {
       errors.push(`${productLabel(source.productName, source.variantName)} from ${sourceNo} is missing from the lines`);
     }

@@ -29,6 +29,7 @@ import { ApprovalAssignment, DocumentbService, DocumentWithRelatedData } from ".
 import { DocDoubleApproverService } from "../../approvalFlow/service/docDoubleApprover.service";
 import { ReturnToVendor } from "../entity/returnToVendor.entity";
 import { ReceivingGuardService } from "../../receiving/service/receivingGuard.service";
+import { attachToReceivingSource, refreshProcessingTransaction } from "../../receiving/receiving.transaction";
 import { priceLineFromSource, refId, round2 } from "../../receiving/receiving.helpers";
 import { ResolvedSource } from "../../receiving/receiving.types";
 
@@ -206,6 +207,14 @@ export class ReturnToVendorService {
             lastActionBy: { id: requestedBy },
             document_type_id: savedreturn.id,
           });
+          // The RTV joins its GRN's transaction (docs/transaction-tracking-plan.md §9.4).
+          savedreturn.txnNo = await attachToReceivingSource(queryRunner.manager, {
+            sourceType: 'grn',
+            sourceId: resolvedSource.sourceId,
+            docType: 'rtv',
+            docId: savedreturn.id,
+            docNo: rtvNo,
+          });
 
           // Commit only once the RTV and its document both exist, so a failure
           // in either rolls both back. (Previously the commit happened before
@@ -292,6 +301,7 @@ export class ReturnToVendorService {
                     createdTime,
                     grnNo: rd.grnNo?.grnNo ?? null,
                     rtvNo: rd.rtvNo ?? null,
+                    txnNo: rd.txnNo ?? null,
                     companyName: rd.companyName?.name ?? null,
                     location: rd.location?.name ?? null,
                     selectedVendor: rd.selectedVendor?.companyName ?? null,
@@ -388,6 +398,7 @@ export class ReturnToVendorService {
 
             const result = {
                 id: returnRecord.id,
+                txnNo: returnRecord.txnNo ?? null,
                 grnNo: returnRecord.grnNo?.id || null,
                 companyName: returnRecord.companyName.id || null,
                 location: returnRecord.location.id || null,
@@ -450,6 +461,7 @@ export class ReturnToVendorService {
                 approvalSummary: document1.approvalSummary ?? null,
                 grnNo: returnRecord.grnNo?.grnNo ?? null,
                 rtvNo: returnRecord.rtvNo ?? null,
+                txnNo: returnRecord.txnNo ?? null,
                 companyName: returnRecord.companyName?.name ?? null,
                 location: returnRecord.location?.name ?? null,
                 selectedVendor: returnRecord.selectedVendor?.companyName ?? null,
@@ -541,7 +553,16 @@ export class ReturnToVendorService {
                 }
 
                 Object.assign(existingRecord, updateData);
-                return manager.save(existingRecord);
+                const saved = await manager.save(existingRecord);
+                // Re-attach: moves the RTV when its GRN changed, else refreshes the transaction.
+                saved.txnNo = await attachToReceivingSource(manager, {
+                    sourceType: 'grn',
+                    sourceId: resolvedSource.sourceId,
+                    docType: 'rtv',
+                    docId: id,
+                    docNo: saved.rtvNo ?? null,
+                });
+                return saved;
             });
             // Also bust the view cache keyed by documentId
             const rtvWithDoc = await this.postReturnToVendorRepository.findOne({
@@ -580,6 +601,7 @@ export class ReturnToVendorService {
         record.isDeleted = true;
         record.deletedAtNew = new Date();
         await this.postReturnToVendorRepository.save(record);
+        await refreshProcessingTransaction(this.postReturnToVendorRepository.manager, 'rtv', id);
         // Also bust the view cache keyed by documentId
         const rtvWithDoc = await this.postReturnToVendorRepository.findOne({
             where: { id },
@@ -619,6 +641,7 @@ export class ReturnToVendorService {
             .set({ isDeleted: true, deletedAtNew: now } as any)
             .whereInIds(ids)
             .execute();
+        for (const id of ids) await refreshProcessingTransaction(this.postReturnToVendorRepository.manager, 'rtv', id);
 
         await Promise.all([
             ...ids.flatMap(id => [

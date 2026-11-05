@@ -50,7 +50,7 @@ export class CompanyService {
     return saved;
   }
 
-  // ─── Update Company (admin only — enforced in controller) ─────────────────
+  // ─── Update Company (Super Admin only — enforced in controller) ─────────────────
 
   async updateCompany(id: string, dto: UpdateCompanyDto, updatedBy: string): Promise<any> {
     await this.dataSource.transaction(async (manager) => {
@@ -74,7 +74,7 @@ export class CompanyService {
     return this.getCompanyById(id);
   }
 
-  // ─── Bank Details (admin only — enforced in controller) ───────────────────
+  // ─── Bank Details (Super Admin only — enforced in controller) ───────────────────
 
   async addBankDetail(companyId: string, dto: CreateBankDetailsDto, updatedBy: string): Promise<any> {
     const saved = await this.dataSource.transaction(async (manager) => {

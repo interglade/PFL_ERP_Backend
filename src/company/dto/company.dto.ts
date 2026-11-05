@@ -27,6 +27,7 @@ export interface UpdateBankDetailsDto extends Partial<CreateBankDetailsDto> {}
 
 const GST_REGEX = /^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$/;
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const FSSAI_REGEX = /^\d{14}$/;
 const ACCOUNT_NO_REGEX = /^\d{6,20}$/;
 
 function pick<T extends object>(body: any, keys: (keyof T)[]): Partial<T> {
@@ -56,6 +57,9 @@ export function validateUpdateCompany(body: any): UpdateCompanyDto {
   if (dto.gstNo) {
     dto.gstNo = dto.gstNo.toUpperCase();
     if (!GST_REGEX.test(dto.gstNo)) throw new AppError(400, 'Invalid GST number');
+  }
+  if (dto.fassaiNo && !FSSAI_REGEX.test(dto.fassaiNo)) {
+    throw new AppError(400, 'FSSAI licence number must be 14 digits');
   }
   return dto;
 }

@@ -138,6 +138,8 @@ export interface InwardRegisterViewDto {
   id: string;
   inwardType: string;
   inwardNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   batchNo: string | null;
   remarks: string | null;
   source: string;
@@ -192,6 +194,8 @@ export interface InwardRegisterUpdateDto {
   createdTime: string | null;
 
   inwardType: string;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   location: string | null;
   fromLocation: string | null;
@@ -234,6 +238,8 @@ export interface InwardRegisterListItemDto {
   batchNo: string | null;
   inwardType: string | null;
   inwardNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   source: string | null;
 
   inwardNetQty: number | null;

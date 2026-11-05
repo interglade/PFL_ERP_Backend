@@ -1,3 +1,4 @@
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -46,7 +47,7 @@ export class BranchessController {
 
   // ─── Create ───────────────────────────────────────────────────────────────
 
-  @httpPost('/:branchType')
+  @httpPost('/:branchType', requireRole(Role.ADMIN))
   public async createBranch(
     @request() req: Request<{ branchType: string }, {}, CreateBranchDto>,
     @response() res: Response,
@@ -200,7 +201,7 @@ export class BranchessController {
 
   // ─── Update ───────────────────────────────────────────────────────────────
 
-  @httpPatch('/:branchType/:id', captureUser)
+  @httpPatch('/:branchType/:id', requireRole(Role.ADMIN), captureUser)
   public async updateBranch(
     @requestParam('id') id: string,
     @requestParam('branchType') branchType: string,
@@ -255,7 +256,7 @@ export class BranchessController {
 
   // ─── Delete (schedule) ────────────────────────────────────────────────────
 
-  @httpDelete('/')
+  @httpDelete('/', requireRole(Role.SUPER_ADMIN))
   public async deleteBranch(
     @request() req: Request,
     @response() res: Response,
@@ -302,7 +303,7 @@ export class BranchessController {
 
   // ─── Soft Delete Multiple ─────────────────────────────────────────────────
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', requireRole(Role.SUPER_ADMIN))
   public async softDeleteMultipleBranches(
     @request() req: Request,
     @response() res: Response,

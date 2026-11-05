@@ -1,3 +1,7 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView, restartApprovalAfterEditOf } from '../../../approvalFlow/documentAccess';
+import { checkPermission } from '../../../middleware/checkPermission';
 import { controller, httpDelete, httpGet, httpPatch, httpPost, next, request, requestParam, response } from "inversify-express-utils";
 import { captureUser, deserializeUser, requireUser } from "../../../middleware/deserializeUser";
 import { isAdminUser } from "../../../utils/isAdminUser";
@@ -38,7 +42,7 @@ export class StockTranferDeliveryChallanController {
         private readonly documentExportService: DocumentExportService,
         
       ) {}
- @httpPost('/', uploadAttachments)
+ @httpPost('/', checkPermission('deliveryChallan-Stock-Transfer', 'create'), uploadAttachments)
   public async create(
     @request() req: Request,
     @response() res: Response,
@@ -107,7 +111,7 @@ export class StockTranferDeliveryChallanController {
   }
 
 
-@httpDelete('/delete/multiple')
+@httpDelete('/delete/multiple', checkPermission('deliveryChallan-Stock-Transfer', 'delete'), guardDocumentDelete(ApprovalDocType.DC_TYPE_STOCK_TRANSFER, 'Stock Transfer DC'))
   public async deleteMultipleDCForStockTransfer(
     @request() req: Request,
     @response() res: Response,
@@ -163,7 +167,7 @@ export class StockTranferDeliveryChallanController {
       next(error);
     }
   }
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkPermission('deliveryChallan-Stock-Transfer', 'edit'), guardDocumentEdit(ApprovalDocType.DC_TYPE_STOCK_TRANSFER, 'Stock Transfer DC'))
   public async getByIdforupdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -189,7 +193,7 @@ export class StockTranferDeliveryChallanController {
     }
   }
 
-  @httpGet('/view/:id')
+  @httpGet('/view/:id', checkPermission('deliveryChallan-Stock-Transfer', 'view'), guardDocumentView(ApprovalDocType.DC_TYPE_STOCK_TRANSFER, 'Stock Transfer DC'))
   public async getByIdforview(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -221,7 +225,7 @@ export class StockTranferDeliveryChallanController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('deliveryChallan-Stock-Transfer', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -235,7 +239,7 @@ export class StockTranferDeliveryChallanController {
     });
   }
 
-  @httpGet('/')
+  @httpGet('/', checkPermission('deliveryChallan-Stock-Transfer', 'view'))
   public async getAll(
     @request() req: Request,
     @response() res: Response,
@@ -279,7 +283,7 @@ export class StockTranferDeliveryChallanController {
     }
   }
 
-  @httpPatch('/:id', captureUser, uploadAttachments)
+  @httpPatch('/:id', checkPermission('deliveryChallan-Stock-Transfer', 'edit'), guardDocumentEdit(ApprovalDocType.DC_TYPE_STOCK_TRANSFER, 'Stock Transfer DC'), captureUser, uploadAttachments, protectBody)
   public async update(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -300,6 +304,8 @@ export class StockTranferDeliveryChallanController {
         ControllerLogger.logError('Stock Transfer Delivery Challan update', new AppError(404, 'Challan not found or could not be updated'), req, res);
         return next(new AppError(404, 'Challan not found or could not be updated'));
       }
+      // Edited before the second approval: the approval starts again
+      await restartApprovalAfterEditOf(ApprovalDocType.DC_TYPE_STOCK_TRANSFER, id, 'Stock Transfer DC edited: approval restarted');
 
       ControllerLogger.logSuccess('Stock Transfer Delivery Challan updated', id, req, res);
 
@@ -340,7 +346,7 @@ export class StockTranferDeliveryChallanController {
     }
   }
 
-  @httpDelete('/')
+  @httpDelete('/', checkPermission('deliveryChallan-Stock-Transfer', 'delete'), guardDocumentDelete(ApprovalDocType.DC_TYPE_STOCK_TRANSFER, 'Stock Transfer DC'))
   public async delete(
     @request() req: Request,
     @response() res: Response,

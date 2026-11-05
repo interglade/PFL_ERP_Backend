@@ -1,3 +1,4 @@
+import { restartApprovalAfterEdit } from '../../../approvalFlow/documentAccess';
 import { compactDate, nextDocumentNumber, SERIES } from '../../../global/numbering/documentNumber';
 import { assertGrnFreeForVoucher, resolveVoucherGrn } from '../../voucherGrnLink';
 import { relationIdOf } from '../../../grn/grnLinks.sql';
@@ -121,7 +122,8 @@ export class TPVoucherService {
       const document = await this.documentbService.createDocument({
               type: DocumentTypeEnum.TRANSPORT_PAYMENT_VOUCHER,
               docDef: DocDefEnum.PROCUREMENT,
-              totalAmt: tpvoucherData.totalAmt,
+              // A transport voucher has no totalAmt: the amount paid is the final payable amount
+              totalAmt: Number(tpvoucherData.finalPayableAmt ?? tpvoucherData.totalPayableAmt ?? 0) || 0,
               status: DocumentStatus.HOLD,
               remarks: 'Document auto-created with GRN',
               lastActionBy: { id: tpvoucherData.requestedBy },
@@ -314,7 +316,7 @@ public async getAllTPVouchers(
           paymentMode: rd.paymentMode || null,
           receiverName: rd.receiverName || null,
           remark: rd.remark || null,
-          totalAmt: rd.totalPayableAmt || null,
+          totalAmt: rd.finalPayableAmt || rd.totalPayableAmt || null,
           vehicleNo: rd.vehicleNo || null,
           voucherNo: rd.voucherNo || null,
           freightAmt: rd.freightAmt || null,
@@ -538,6 +540,8 @@ public async getAllTPVouchers(
     voucher,
     updatedBy,
   );
+  // Edited before Finalizer 2: the approval starts again from the verifier
+  await restartApprovalAfterEdit(this.documentbService, DocumentTypeEnum.TRANSPORT_PAYMENT_VOUCHER, id, 'Transport Payment Voucher edited: approval restarted');
 
   await this.invalidateCache(id);
   return savedVoucher;

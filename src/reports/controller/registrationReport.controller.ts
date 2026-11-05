@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import {
   controller,
@@ -90,7 +91,7 @@ export class RegistrationReportsController {
    *   "count": 10
    * }
    */
-  @httpPost('/generate')
+  @httpPost('/generate', checkPermission('user-performance-report', 'view'))
   public async generateRegistrationReport(
     @request() req: Request,
     @response() res: Response,
@@ -245,7 +246,7 @@ export class RegistrationReportsController {
    *   }
    * }
    */
-  @httpPost('/summary')
+  @httpPost('/summary', checkPermission('user-performance-report', 'view'))
   public async getRegistrationSummary(
     @request() req: Request,
     @response() res: Response,
@@ -352,7 +353,7 @@ export class RegistrationReportsController {
    *   }
    * }
    */
-  @httpPost('/download')
+  @httpPost('/download', checkPermission('user-performance-report', 'export'))
   public async downloadRegistrationReport(
     @request() req: Request,
     @response() res: Response,

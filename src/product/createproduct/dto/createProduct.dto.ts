@@ -2,12 +2,14 @@ import { z } from "zod";
 import { Acceptability } from "../entity/quantityParameter.entity";
 
 
-export const ProductVariantSchema = z.object({
-  count: z.string().optional(),
-  size: z.string().optional(),
-  variety: z.string().optional(),
-  origin: z.string().optional(),
-  brand: z.string().optional(),
+/**
+ * The allowed attribute values and the combinations to keep as variants
+ * (docs/product-variant-plan.md §3). Sent as a JSON string by the multipart
+ * product form.
+ */
+export const VariantSetupSchema = z.object({
+  attributeValueIds: z.array(z.string().uuid()),
+  combinations: z.array(z.array(z.string().uuid())).optional(),
 });
 
 export const QualityParameterSchema = z.object({
@@ -44,7 +46,7 @@ export const CreateProductSchema = z
 
     thresholdStock: z.coerce.number().optional(),
 
-    variant: z.array(ProductVariantSchema).optional(),
+    variantSetup: z.union([z.string(), VariantSetupSchema]).optional(),
 
     qualityParameters: z
       .array(QualityParameterSchema)

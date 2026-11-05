@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from "typeorm";
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany, Index } from "typeorm";
 import Model from "../../global/model.entity";
 import { DeliveryChallanPurchase } from "../../deliveryChallans/deliverychllan/entity/deliveryChallan.entity";
 import { PostReturnByCustomer } from "../../returnByCustomer/entity/postReturnByCustomer.entity";
@@ -15,6 +15,12 @@ export enum DumpType {
 }
 @Entity("dump_register")
 export class DumpRegister extends Model {
+  /** Transaction number of the deal this document belongs to (docs/transaction-tracking-plan.md §9). */
+  @Index('IDX_dump_register_txn_no')
+  // Written only by src/transactions (raw SQL); never from a request body through an entity save.
+  @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true, insert: false, update: false })
+  txnNo: string | null;
+
 
   @ManyToOne(() => DeliveryChallanPurchase, {
     nullable: true,

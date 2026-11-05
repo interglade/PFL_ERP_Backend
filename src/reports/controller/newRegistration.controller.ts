@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import {
   controller,
@@ -58,7 +59,7 @@ export class NewRegistrationController {
     this.bucketName = process.env.DO_SPACES_BUCKET || 'your-bucket-name';
   }
 
-  @httpPost('/download')
+  @httpPost('/download', checkPermission('user-performance-report', 'export'))
   public async downloadRegistrationReport(
     @request() req: Request,
     @response() res: Response,

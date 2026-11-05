@@ -14,8 +14,10 @@ import { Transporter } from '../../transporter/entity/transporter.entity';
 import {
   CACHE_TTL_DETAIL,
   CACHE_TTL_LIST,
+  TransportExcelConfig,
   TransportRegistrationService,
 } from '../../transport/transportRegistration.service';
+import { DRIVER_SHEET, driverRowBody } from '../../transport/transportExcel';
 import {
   AddressPayload,
   assertMatches,
@@ -52,6 +54,13 @@ export class DriversService extends TransportRegistrationService<Drivers> {
   protected readonly tableName = 'drivers';
   protected readonly codeColumn = 'driverCode';
   protected readonly codePrefix = 'DR-';
+  protected readonly excel: TransportExcelConfig = {
+    sheet: DRIVER_SHEET,
+    master: 'driver',
+    fileStem: 'Drivers',
+    relations: ['address', 'transporter'],
+    toBody: driverRowBody,
+  };
 
   constructor(
     @inject(TYPES.DriverRepository) driverRepository: DriverRepository,

@@ -82,7 +82,7 @@ export const GRN_EXPORT: ExportDefinition = {
         { header: 'Other Charges', maps: 'grns.otherCharges', type: 'amount', get: (r) => r.record.otherCharges },
         { header: 'Total Amount', maps: 'grns.totalAmt', type: 'amount', get: (r) => r.record.totalAmt },
         { header: 'Amount In Words', maps: 'grns.amtWords', get: (r) => r.record.amtWords },
-        { header: 'Amount Status', maps: 'grns.ammountStatus (unpaid | partial | paid)', get: (r) => r.record.ammountStatus },
+        { header: 'Amount Status', maps: 'grns.ammountStatus (Unpaid | Partial | Paid)', get: (r) => r.record.ammountStatus },
         { header: 'Paid Amount', maps: 'grns.paid_amount (sum of live payments, advance excluded)', type: 'amount', get: (r) => r.record.paidAmt },
         {
           header: 'Balance Amount',

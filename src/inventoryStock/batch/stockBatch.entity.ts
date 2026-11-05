@@ -52,6 +52,11 @@ export class StockBatch {
   @Column({ name: 'origin_no', type: 'varchar', length: 120, nullable: true })
   originNo: string | null;
 
+  /** Transaction that created the batch (purchase, transfer, or the sale whose RBC returned it), §9.4. */
+  @Index('IDX_stock_batch_origin_txn_no')
+  @Column({ name: 'origin_txn_no', type: 'varchar', length: 13, nullable: true })
+  originTxnNo: string | null;
+
   /** On hand, in the unit `uomId`. */
   @Column({ type: 'decimal', precision: 16, scale: 3, default: 0 })
   qty: string;

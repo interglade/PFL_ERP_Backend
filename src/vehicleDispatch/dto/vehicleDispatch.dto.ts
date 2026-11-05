@@ -47,6 +47,8 @@ export interface VehicleDispatchListItemDto {
   id: string | null;
   dispatchType: DispatchType | null;
   vehicleDispatchNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   date: Date | string | null;
   batchNo: string | null;
   sourceNo: string | null;
@@ -107,6 +109,8 @@ export interface VehicleDispatchUpdateFormDto {
   dispatchType: DispatchType;
   sourceId: string | null;
   sourceNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   date: Date | string | null;
   batchNo: string | null;
   transporterId: string | null;

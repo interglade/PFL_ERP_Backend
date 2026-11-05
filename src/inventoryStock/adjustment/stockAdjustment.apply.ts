@@ -74,7 +74,7 @@ export async function applyApprovedAdjustment(manager: EntityManager, rollUpAppl
   const repo = manager.getRepository(StockAdjustment);
   await manager.query(`SELECT id FROM stock_adjustment WHERE id = $1 FOR UPDATE`, [id]);
   const adj = await repo.findOneBy({ id });
-  if (!adj || adj.status !== 'PENDING') return;
+  if (!adj || adj.status !== 'Pending') return;
 
   const qtyDelta = num(adj.qtyDelta);
   const key = { company_id: adj.companyId, location_id: adj.locationId, product_id: adj.productId, variant_id: adj.variantId };
@@ -97,7 +97,7 @@ export async function applyApprovedAdjustment(manager: EntityManager, rollUpAppl
     });
     await rollUpApplier.applyManualAdjustment(rollUp(key, num(adj.kgDelta), valueDelta), manager);
   }
-  Object.assign(adj, { status: 'APPROVED', valueDelta: String(valueDelta), decidedBy: userId, decidedAt: new Date() });
+  Object.assign(adj, { status: 'Approved', valueDelta: String(valueDelta), decidedBy: userId, decidedAt: new Date() });
   await repo.save(adj);
 }
 
@@ -106,7 +106,7 @@ export async function applyApprovedRepack(manager: EntityManager, rollUpApplier:
   const repo = manager.getRepository(StockRepack);
   await manager.query(`SELECT id FROM stock_repack WHERE id = $1 FOR UPDATE`, [id]);
   const rp = await repo.findOneBy({ id });
-  if (!rp || rp.status !== 'PENDING') return;
+  if (!rp || rp.status !== 'Pending') return;
 
   const batch = await loadBatch(manager, rp.stockBatchId);
   const out = await consumeDocument(manager, { docType: REPACK_DOC, docId: rp.id, docNo: rp.repackNo, movementType: 'REPACK_OUT', postedBy: userId });
@@ -119,7 +119,7 @@ export async function applyApprovedRepack(manager: EntityManager, rollUpApplier:
   });
   // Roll-up: value stays; net kg changes by the repack loss.
   await rollUpApplier.applyManualAdjustment(rollUp(batch, round3(num(rp.toKg) - out.kg), 0), manager);
-  Object.assign(rp, { status: 'APPROVED', value: String(out.value), decidedBy: userId, decidedAt: new Date() });
+  Object.assign(rp, { status: 'Approved', value: String(out.value), decidedBy: userId, decidedAt: new Date() });
   await repo.save(rp);
 }
 
@@ -135,8 +135,8 @@ export async function applyRejectedAdjustmentOrRepack(
   if (!table) return;
   await releaseDocument(manager, type, id);
   await manager.query(
-    `UPDATE ${table} SET status = 'REJECTED', decided_by = $2, decided_at = now(), decision_remark = $3, updated_at = now()
-      WHERE id = $1 AND status = 'PENDING'`,
+    `UPDATE ${table} SET status = 'Rejected', decided_by = $2, decided_at = now(), decision_remark = $3, updated_at = now()
+      WHERE id = $1 AND status = 'Pending'`,
     [id, userId, reason ?? null],
   );
 }

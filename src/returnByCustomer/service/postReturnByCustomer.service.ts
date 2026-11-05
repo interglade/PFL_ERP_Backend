@@ -1,4 +1,5 @@
 import { assertDeliveryConfirmed, assertDeliveryNotConfirmed } from '../../deliveryChallans/customerDeliveryChllan/service/dcDelivery';
+import { requireStatus } from '../../utils/status.enum';
 import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
@@ -14,6 +15,8 @@ import { UserLogger } from '../../utils/logger';
 import { DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 import { DocumentTypeEnum as DocDefEnum } from "../../documentDef/entity/documentdef.entity";
 import { dcIdsOfSalesDocuments, syncCustomerDcSalesLinks } from '../../deliveryChallans/customerDeliveryChllan/service/dcSalesLinks';
+import { attachToDcTransaction } from '../../deliveryChallans/customerDeliveryChllan/service/dcTransaction';
+import { refreshTransactionOf } from '../../transactions/transaction.core';
 import { ApprovalFlowService } from "../../approvalFlow/service/approvalFlow.service";
 import { CustomerDeliveryChallanService } from "../../deliveryChallans/customerDeliveryChllan/service/customerDeliveryChallan.service";
 import AppError from "../../utils/appError";
@@ -334,6 +337,9 @@ export class PostReturnByCustomerService {
       // RBC is approved (see syncCustomerDcSalesLinks).
       await syncCustomerDcSalesLinks(queryRunner.manager, [returnData.deliveryChallanNo]);
 
+      // 7️⃣ Transaction number: the RBC joins its Customer DC's Sale (docs/transaction-tracking-plan.md §9.4).
+      savedReturnEntity.txnNo = await attachToDcTransaction(queryRunner.manager, 'return-by-customer', savedReturnEntity.id);
+
       // 8️⃣ Create document and start approval flow
       const document = await this.documentbService.createDocument({
         type: DocumentTypeEnum.RETURN_BY_CUSTOMER,
@@ -405,7 +411,7 @@ export class PostReturnByCustomerService {
           .leftJoin('returnedProducts.productName', 'productName')
           .leftJoin('returnedProducts.saleUoM', 'saleUoM')
           .select([
-            'rbc.id', 'rbc.rbcNo', 'rbc.date', 'rbc.remark',
+            'rbc.id', 'rbc.rbcNo', 'rbc.txnNo', 'rbc.date', 'rbc.remark',
             'companyName.name',
             'deliveryChallanNo.challanNo',
             'returnedProducts.id', 'returnedProducts.unitPrice',
@@ -432,6 +438,7 @@ export class PostReturnByCustomerService {
           createdTime,
           id: rd.id,
           rbcNo: rd.rbcNo ?? null,
+          txnNo: rd.txnNo ?? null,
           date: formatDateTime(rd.date).createdDate,
           remark: rd.remark ?? null,
           companyName: rd.companyName?.name ?? null,
@@ -486,7 +493,7 @@ export class PostReturnByCustomerService {
       .leftJoin('returnedProduct.saleUoM', 'saleUoM')
       .leftJoin('postReturn.customerName', 'customerName')
       .select([
-        'postReturn.id', 'postReturn.date', 'postReturn.remark', 'postReturn.createdAt',
+        'postReturn.id', 'postReturn.txnNo', 'postReturn.date', 'postReturn.remark', 'postReturn.createdAt',
         'company.name', 'location.name',
         'deliveryChallanNo.challanNo',
         'customerName.organisationName',
@@ -518,6 +525,7 @@ export class PostReturnByCustomerService {
       location: result.location?.name ?? null,
       date: formatDateTime(result.date).createdDate,
       deliveryChallanNo: result.deliveryChallanNo?.challanNo ?? null,
+      txnNo: result.txnNo ?? null,
       remark: result.remark ?? null,
       returnedProducts: (result.returnedProducts ?? []).map((p) => ({
         productName: p.productName?.name ?? null,
@@ -573,7 +581,7 @@ export class PostReturnByCustomerService {
       .leftJoin('returnedProduct.saleUoM', 'saleUoM')
       .leftJoin('postReturn.customerName', 'customerName')
       .select([
-        'postReturn.id', 'postReturn.date', 'postReturn.remark', 'postReturn.createdAt',
+        'postReturn.id', 'postReturn.txnNo', 'postReturn.date', 'postReturn.remark', 'postReturn.createdAt',
         'company.id', 'location.id', 'deliveryChallanNo.id', 'customerName.id',
         'returnedProduct.id', 'returnedProduct.unitPrice',
         'returnedProduct.returnedQty', 'returnedProduct.returnedQtyAmt',
@@ -603,6 +611,7 @@ export class PostReturnByCustomerService {
       date: formatDateTime(result.date).createdDate,
       location: result.location?.id ?? null,
       deliveryChallanNo: result.deliveryChallanNo?.id ?? null,
+      txnNo: result.txnNo ?? null,
       remark: result.remark ?? null,
       returnedProducts: (result.returnedProducts ?? []).map((p) => ({
         productName: p.productName?.id ?? null,
@@ -682,6 +691,7 @@ export class PostReturnByCustomerService {
       createdTime,
 
       deliveryChallanNo: result.deliveryChallanNo?.challanNo,
+      txnNo: result.txnNo ?? null,
       // ? {
       //   id: result.deliveryChallanNo.id,
       //   deliveryChallanNo: result.deliveryChallanNo.challanNo
@@ -860,6 +870,8 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
       // The DC can take a new RBC again and loses this one's quantities.
       const dcIds = await dcIdsOfSalesDocuments(this.dataSource.manager, DocumentTypeEnum.RETURN_BY_CUSTOMER, [rbc.id]);
       await syncCustomerDcSalesLinks(this.dataSource.manager, dcIds);
+      // The Sale's return step goes away.
+      await refreshTransactionOf(this.dataSource.manager, 'return-by-customer', rbc.id);
       await Promise.all([this.invalidateCache(rbc.id), ...dcIds.map((dcId) => this.customerDeliveryChallanService.invalidateCDCCache(dcId))]);
       success.push({id,No:rbc.rbcNo});
     } catch (error: any) {
@@ -910,6 +922,7 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
     }
 
     // Update main entity fields
+    if (returnData) delete returnData.txnNo; // the transaction number is server-owned
     Object.assign(postReturn, returnData);
 
     // Save updated entity
@@ -920,6 +933,10 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
     // The DC line figures follow the approved returns (an edit of an approved RBC changes them).
     if (postReturn.deliveryChallanNo?.id) {
       await syncCustomerDcSalesLinks(this.dataSource.manager, [postReturn.deliveryChallanNo.id]);
+    }
+    // Transaction number follows the DC on the saved row (moves to the new DC's Sale when it was switched).
+    if (!(await attachToDcTransaction(this.dataSource.manager, 'return-by-customer', id))) {
+      await refreshTransactionOf(this.dataSource.manager, 'return-by-customer', id);
     }
 
     // Same staleness as createReturn: this edit changed both this return and the
@@ -1100,8 +1117,7 @@ if (filter.approvedBy) {
 }
 
 if (filter.status) {
-  const statuses = toArray(filter.status);
-
+  const statuses = toArray(filter.status).map((s) => requireStatus(DocumentStatus, s, 'status'));
   qb.andWhere('doc.status IN (:...statuses)', { statuses });
 }
 
@@ -1484,13 +1500,14 @@ if (filter.status) {
   */
 
   const STATUS_MAP: Record<string, { label: string; color: string }> = {
-      hold: { label: 'Hold', color: 'FFFF5700' },
-      VERIFIED: { label: 'Verified', color: 'FF6A00FF' },
-      approved: { label: 'Approved', color: 'FF40BF40' },
-      FINALIZING: { label: 'Finalized', color: 'FF0063B1' },
-      COMPLETE: { label: 'Complete', color: 'FF006600' },
-      REJECT: { label: 'Reject', color: 'FFAF0606' },
-    };
+    [DocumentStatus.DRAFT]: { label: DocumentStatus.DRAFT, color: 'FF757575' },
+    [DocumentStatus.HOLD]: { label: DocumentStatus.HOLD, color: 'FFFF5700' },
+    [DocumentStatus.VERIFIED]: { label: DocumentStatus.VERIFIED, color: 'FF6A00FF' },
+    [DocumentStatus.APPROVED]: { label: DocumentStatus.APPROVED, color: 'FF40BF40' },
+    [DocumentStatus.FINALIZING]: { label: DocumentStatus.FINALIZING, color: 'FF0063B1' },
+    [DocumentStatus.COMPLETE]: { label: DocumentStatus.COMPLETE, color: 'FF006600' },
+    [DocumentStatus.REJECT]: { label: DocumentStatus.REJECT, color: 'FFAF0606' },
+  };
 
 
     const safe = (val: any) => (val === null || val === undefined ? '' : val);

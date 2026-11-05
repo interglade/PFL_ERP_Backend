@@ -185,7 +185,7 @@ export async function remindOpenReceiving(
   dataSource: DataSource,
   notifier: Notifier,
   listArrivals: (filter: {
-    state: Array<'in-transit' | 'received' | 'in-progress'>;
+    state: Array<'In Transit' | 'Received' | 'In Progress'>;
     endDate: string;
     page: number;
     limit: number;
@@ -199,13 +199,13 @@ export async function remindOpenReceiving(
   };
   let sent = 0;
   for (let page = 1; page <= 10; page += 1) {
-    const { data } = await listArrivals({ state: ['in-transit', 'received', 'in-progress'], endDate: yesterday, page, limit: 100 });
+    const { data } = await listArrivals({ state: ['In Transit', 'Received', 'In Progress'], endDate: yesterday, page, limit: 100 });
     for (const row of data) {
       const type = typeOf[row.sourceType];
       if (!type) continue;
       const what =
-        row.state === 'in-transit' ? 'is waiting: the vehicle has not been received'
-          : row.state === 'received' ? 'has not started'
+        row.state === 'In Transit' ? 'is waiting: the vehicle has not been received'
+          : row.state === 'Received' ? 'has not started'
             : 'is still in progress';
       await notifyDocumentPeople(dataSource.manager, notifier, type, row.sourceId,
         `Reminder: receiving of ${row.sourceNo ?? 'a source'}${row.locationName ? ` at ${row.locationName}` : ''} ${what}`);

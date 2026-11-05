@@ -1,3 +1,6 @@
+import AppError from '../../utils/appError';
+import { ApprovalFlow } from '../entity/approvalFlow.entity';
+import { APPROVER_SLOTS, assertAmountBandsValid, assertFlowPeopleValid, assertValidFlow, flowPeopleFromEntity, flowPeopleFromInput } from '../approvalFlowRules';
 import { inject, injectable } from 'inversify';
 import { TYPES } from '../../types';
 import { ApprovalFlowRepository } from '../repository/approvalFlow.repository';
@@ -76,9 +79,15 @@ export class ApprovalFlowService {
     
     
     
-    const creator = await this.userRepository.findOneBy({ id: data.creator });
-    if (!creator) throw new Error('Creator not found');
+    const creator = data.creator ? await this.userRepository.findOneBy({ id: data.creator }) : null;
+    if (!creator) throw new AppError(400, 'Creator not found');
     const type = data.type;
+    await assertValidFlow(this.approvalFlowRepository, {
+      creatorId: creator.id,
+      type,
+      slots: flowPeopleFromInput(data),
+    });
+    assertAmountBandsValid(data.approvers);
     const verifiers = await this.userRepository.findBy({
       id: In(data.verifiers || []),
     });
@@ -493,126 +502,83 @@ export class ApprovalFlowService {
       .getOne();
 
     if (!result) {
-      throw new Error(`ApprovalFlow with ID ${id} not found`);
+      throw new AppError(404, 'Approval Flow not found');
     }
 
-    if (data.verifiers) {
-      const verifiers = await this.userRepository.findBy({
-        id: In(data.verifiers),
-      });
-      logger.log(
-        'Fetched verifiers:',
-        verifiers.map((v) => v.id),
-      );
-      result.verifiers = verifiers;
+    // Validate the flow as it will be after this update (saved people overridden by the payload)
+    await assertValidFlow(
+      this.approvalFlowRepository,
+      {
+        creatorId: data.creator ?? result.creator?.id,
+        type: data.type ?? result.type,
+        slots: { ...flowPeopleFromEntity(result), ...flowPeopleFromInput(data) },
+      },
+      id,
+    );
+    assertAmountBandsValid(data.approvers);
+
+    if (data.creator && data.creator !== result.creator?.id) {
+      const creator = await this.userRepository.findOneBy({ id: data.creator });
+      if (!creator) throw new AppError(400, 'Creator not found');
+      result.creator = creator;
+    }
+
+    // An empty list clears a step; a missing key leaves it as saved
+    const findUsers = (userIds: string[] | null | undefined) =>
+      this.userRepository.findBy({ id: In(userIds ?? []) });
+
+    if (data.verifiers !== undefined) {
+      result.verifiers = await findUsers(data.verifiers);
     }
 
     if (data.approvers) {
-      const approverData = data.approvers;
+      // Only this flow's own blocks are edited; a step that was never saved gets a new block
+      const approversEntity = result.approvers ?? this.approvalLevelRepository.create();
 
-      const approverBlockMap = {
-        ...(approverData.firstApprover && {
-          firstApprover: approverData.firstApprover,
-        }),
-        ...(approverData.secondApprover && {
-          secondApprover: approverData.secondApprover,
-        }),
-        ...(approverData.thirdApprover && {
-          thirdApprover: approverData.thirdApprover,
-        }),
-        ...(approverData.fourthApprover && {
-          fourthApprover: approverData.fourthApprover,
-        }),
-        ...(approverData.fifthApprover && {
-          fifthApprover: approverData.fifthApprover,
-        }),
-        ...(approverData.sixthApprover && {
-          sixthApprover: approverData.sixthApprover,
-        }),
-      };
+      for (const slot of APPROVER_SLOTS) {
+        const approverInput = data.approvers[slot] as Partial<ApproverBlockInput> | null | undefined;
+        if (!approverInput) continue;
 
-      const approversEntity = result.approvers;
+        const approverEntity =
+          (approversEntity as any)[slot] ?? this.approverBlockRepository.create({ users: [] });
 
-      for (const [key, approverInputRaw] of Object.entries(approverBlockMap)) {
-        const approverInput = approverInputRaw as ApproverBlockInput & {
-          id?: string;
-        };
-        if (!approverInput?.id) continue;
-
-        const approverEntity = await this.approverBlockRepository.findOne({
-          where: { id: approverInput.id },
-          relations: ['users'],
-        });
-
-        if (!approverEntity)
-          throw new Error(
-            `Approver block with id ${approverInput.id} not found`,
-          );
-
-        if (
-          approverInput.hierarchy !== undefined &&
-          approverInput.hierarchy !== null
-        ) {
+        if (approverInput.hierarchy !== undefined && approverInput.hierarchy !== null) {
           approverEntity.hierarchy = approverInput.hierarchy;
         }
-
-        if (
-          approverInput.minAmtCanApprove !== undefined &&
-          approverInput.minAmtCanApprove !== null
-        ) {
-          approverEntity.minAmtCanApprove = Number(
-            approverInput.minAmtCanApprove,
-          );
+        if (approverInput.minAmtCanApprove !== undefined) {
+          approverEntity.minAmtCanApprove =
+            approverInput.minAmtCanApprove === null ? null : Number(approverInput.minAmtCanApprove);
+        }
+        if (approverInput.maxAmtCanApprove !== undefined) {
+          approverEntity.maxAmtCanApprove =
+            approverInput.maxAmtCanApprove === null ? null : Number(approverInput.maxAmtCanApprove);
+        }
+        if (approverInput.users !== undefined) {
+          approverEntity.users = await findUsers(approverInput.users);
         }
 
-        if (
-          approverInput.maxAmtCanApprove !== undefined &&
-          approverInput.maxAmtCanApprove !== null
-        ) {
-          approverEntity.maxAmtCanApprove = Number(
-            approverInput.maxAmtCanApprove,
-          );
-        }
-
-        if (approverInput.users && approverInput.users.length > 0) {
-          const userEntities = await this.userRepository.findByIds(
-            approverInput.users,
-          );
-          approverEntity.users = userEntities;
-        }
-
-        await this.approverBlockRepository.save(approverEntity);
-        (approversEntity as any)[key] = approverEntity;
+        (approversEntity as any)[slot] = await this.approverBlockRepository.save(approverEntity);
       }
 
-      await this.approvalLevelRepository.save(approversEntity);
+      result.approvers = await this.approvalLevelRepository.save(approversEntity);
     }
 
     if (data.finalizers) {
-      const firstFinalizers = await this.userRepository.findBy({
-        id: In(data.finalizers.firstFinalizers || []),
-      });
+      const finalizerBlock =
+        result.finalizers ??
+        this.finalizerBlockRepository.create({ firstFinalizers: [], secondFinalizers: [] });
 
-      const secondFinalizers = await this.userRepository.findBy({
-        id: In(data.finalizers.secondFinalizers || []),
-      });
-
-      const finalizerBlock = await this.finalizerBlockRepository.findOne({
-        where: { id: result.finalizers?.id },
-        relations: ['firstFinalizers', 'secondFinalizers'],
-      });
-
-      if (finalizerBlock) {
-        finalizerBlock.firstFinalizers = firstFinalizers;
-        finalizerBlock.secondFinalizers = secondFinalizers;
-
-        await this.finalizerBlockRepository.save(finalizerBlock);
-        result.finalizers = finalizerBlock;
+      if (data.finalizers.firstFinalizers !== undefined) {
+        finalizerBlock.firstFinalizers = await findUsers(data.finalizers.firstFinalizers);
       }
+      if (data.finalizers.secondFinalizers !== undefined) {
+        finalizerBlock.secondFinalizers = await findUsers(data.finalizers.secondFinalizers);
+      }
+
+      result.finalizers = await this.finalizerBlockRepository.save(finalizerBlock);
     }
 
-    const { verifiers, approvers, finalizers, ...rest } = data;
-    Object.assign(result, rest);
+    if (data.type) result.type = data.type;
 
     const updated = await this.approvalFlowRepository.save(result);
     await this.invalidateCache(id);
@@ -677,6 +643,30 @@ export class ApprovalFlowService {
           WHERE "creator_id" = $1`,
         [oldUserId, newUserId],
       );
+
+      // The flows the new user now owns or sits in must still follow the configuration rules;
+      // otherwise the whole replacement is rolled back.
+      const duplicate: Array<{ type: string }> = await manager.query(
+        `SELECT type::text AS type FROM approval_flows
+          WHERE creator_id = $1 AND COALESCE("isDeleted", false) = false
+          GROUP BY type HAVING COUNT(*) > 1`,
+        [newUserId],
+      );
+      if (duplicate.length) {
+        throw new AppError(400, `The replacement would give this employee two ${duplicate[0].type} approval flows`);
+      }
+      const flows = await manager.getRepository(ApprovalFlow).find({
+        relations: [
+          'creator', 'verifiers',
+          ...APPROVER_SLOTS.flatMap((slot) => [`approvers.${slot}`, `approvers.${slot}.users`]),
+          'finalizers', 'finalizers.firstFinalizers', 'finalizers.secondFinalizers',
+        ],
+      });
+      for (const flow of flows) {
+        const slots = flowPeopleFromEntity(flow);
+        const involved = flow.creator?.id === newUserId || Object.values(slots).some((ids) => ids.includes(newUserId));
+        if (involved) assertFlowPeopleValid(flow.creator?.id ?? '', slots);
+      }
     });
 
     // Invalidate all approval flow cache entries since user references changed across all flows

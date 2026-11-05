@@ -1,3 +1,7 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView, restartApprovalAfterEditOf } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
 import { controller, httpPost, httpGet, httpPut, next, requestBody, request, response, httpDelete } from "inversify-express-utils";
 
 import { inject } from "inversify";
@@ -32,7 +36,7 @@ export class ReturnToVendorController {
 
   }
 
-  @httpPost("/")
+  @httpPost("/", checkPermission('return-to-vendor', 'create'))
   public async createReturnToVendor(@requestBody() postReturnData: any,
     @request() req: Request,
     @response() res: Response,
@@ -89,7 +93,7 @@ export class ReturnToVendorController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('return-to-vendor', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -103,7 +107,7 @@ export class ReturnToVendorController {
     });
   }
 
-  @httpGet("/")
+  @httpGet("/", checkPermission('return-to-vendor', 'view'))
   public async getAllReturnToVendor(
     @request() req: Request,
     @response() res: Response,
@@ -135,7 +139,7 @@ export class ReturnToVendorController {
     }
   }
 
-  @httpGet("/:id")
+  @httpGet("/:id", checkPermission('return-to-vendor', 'view'), guardDocumentView(ApprovalDocType.RETURN_TO_VENDOR, 'Return To Vendor'))
   public async getReturnToVendorById(
     @request() req: Request,
     @response() res: Response,
@@ -164,7 +168,7 @@ export class ReturnToVendorController {
       next(error);
     }
   }
-  @httpGet("/view/:docid")
+  @httpGet("/view/:docid", checkPermission('return-to-vendor', 'view'), guardDocumentView(ApprovalDocType.RETURN_TO_VENDOR, 'Return To Vendor'))
   public async getReturnToVendorByIdForView(
     @request() req: Request,
     @response() res: Response,
@@ -193,7 +197,7 @@ export class ReturnToVendorController {
       next(error);
     }
   }
-  @httpGet("/update/:id")
+  @httpGet("/update/:id", checkPermission('return-to-vendor', 'edit'), guardDocumentEdit(ApprovalDocType.RETURN_TO_VENDOR, 'Return To Vendor'))
   public async getReturnToVendorByIdForUpdate(
     @request() req: Request,
     @response() res: Response,
@@ -223,7 +227,7 @@ export class ReturnToVendorController {
     }
   }
 
-  @httpPut("/:id")
+  @httpPut("/:id", checkPermission('return-to-vendor', 'edit'), guardDocumentEdit(ApprovalDocType.RETURN_TO_VENDOR, 'Return To Vendor'), protectBody)
   public async updateReturnToVendor(
     @request() req: Request,
     @response() res: Response,
@@ -240,6 +244,8 @@ export class ReturnToVendorController {
       }
 
       const updatedReturn = await this.returnToVendorService.updateReturn(id, updateData);
+      // Edited before the second approval: the approval starts again
+      await restartApprovalAfterEditOf(ApprovalDocType.RETURN_TO_VENDOR, id, 'Return To Vendor edited: approval restarted');
 
       ControllerLogger.logSuccess('Return to vendor updated', id, req, res);
 
@@ -284,7 +290,7 @@ export class ReturnToVendorController {
     }
   }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", checkPermission('return-to-vendor', 'delete'), guardDocumentDelete(ApprovalDocType.RETURN_TO_VENDOR, 'Return To Vendor'))
   public async deleteReturn(
     @request() req: Request,
     @response() res: Response,
@@ -322,7 +328,7 @@ export class ReturnToVendorController {
     }
   }
 
-  @httpDelete("/delete/multiple")
+  @httpDelete("/delete/multiple", checkPermission('return-to-vendor', 'delete'), guardDocumentDelete(ApprovalDocType.RETURN_TO_VENDOR, 'Return To Vendor'))
   public async deleteMultipleReturnToVendor(
     @request() req: Request<{}, {}, { ids: string[] }>,
     @response() res: Response,

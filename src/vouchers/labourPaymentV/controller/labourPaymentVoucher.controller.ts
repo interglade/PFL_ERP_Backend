@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../../approvalFlow/documentAccess';
+import { checkPermission } from '../../../middleware/checkPermission';
+import { requireRole } from '../../../middleware/requireRole';
+import { Role } from '../../../employee/entity/user.entity';
 import { Request, Response, NextFunction } from "express";
 
 import { inject } from "inversify";
@@ -43,7 +49,7 @@ export class LabourPaymentVoucherController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('labor-payment-voucher', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -58,7 +64,7 @@ export class LabourPaymentVoucherController {
   }
 
   // Get all Labour Payment Vouchers
-  @httpGet("/")
+  @httpGet("/", checkPermission('labor-payment-voucher', 'view'))
   public async getAllVouchers(
     @request() req: Request,
     @response() res: Response,
@@ -109,7 +115,7 @@ export class LabourPaymentVoucherController {
 
 
 
-  @httpGet("/:id/view")
+  @httpGet("/:id/view", checkPermission('labor-payment-voucher', 'view'), guardDocumentView(ApprovalDocType.LABOR_PAYMENT_VOUCHER, 'voucher'))
   public async getVoucherByIdForView(
     @request() req: Request,
     @response() res: Response,
@@ -138,7 +144,7 @@ export class LabourPaymentVoucherController {
     }
   }
 
-  @httpGet("/:id/update")
+  @httpGet("/:id/update", checkPermission('labor-payment-voucher', 'edit'), guardDocumentEdit(ApprovalDocType.LABOR_PAYMENT_VOUCHER, 'voucher'))
   public async getVoucherByIdForUpdate(
     @request() req: Request,
     @response() res: Response,
@@ -168,7 +174,7 @@ export class LabourPaymentVoucherController {
   }
 
   // Create a new Labour Payment Voucher
-  @httpPost("/", uploadAttachments)
+  @httpPost("/", checkPermission('labor-payment-voucher', 'create'), uploadAttachments)
   public async createVoucher(
     @request() req: Request,
     @response() res: Response,
@@ -236,7 +242,7 @@ export class LabourPaymentVoucherController {
   }
 
   // Update a Labour Payment Voucher
-  @httpPatch("/:id", uploadAttachments, captureUser)
+  @httpPatch("/:id", checkPermission('labor-payment-voucher', 'edit'), guardDocumentEdit(ApprovalDocType.LABOR_PAYMENT_VOUCHER, 'voucher'), uploadAttachments, captureUser, protectBody)
   public async updateVoucher(
     @request() req: Request,
     @response() res: Response,
@@ -303,7 +309,7 @@ export class LabourPaymentVoucherController {
   }
 
   // Delete a Labour Payment Voucher
-  @httpDelete("/:id")
+  @httpDelete("/:id", checkPermission('labor-payment-voucher', 'delete'), guardDocumentDelete(ApprovalDocType.LABOR_PAYMENT_VOUCHER, 'voucher'))
   public async deleteVoucher(
     @request() req: Request,
     @response() res: Response,
@@ -352,7 +358,7 @@ export class LabourPaymentVoucherController {
     }
   }
 
-   @httpGet("/recyclebin")
+   @httpGet("/recyclebin", requireRole(Role.SUPER_ADMIN))
   public async getAllRecycleBinVouchers(
     @request() req: Request,
     @response() res: Response,
@@ -389,7 +395,7 @@ export class LabourPaymentVoucherController {
   }
 
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('labor-payment-voucher', 'delete'), guardDocumentDelete(ApprovalDocType.LABOR_PAYMENT_VOUCHER, 'voucher'))
       public async deleteMultipleLPVoucher(
         @request() req: Request,
         @response() res: Response,

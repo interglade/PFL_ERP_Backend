@@ -65,6 +65,12 @@ export const CENTRE_DELIVERY_MODES: readonly GrnDeliveryMode[] = [GrnDeliveryMod
 // GRN must release its batch no, which a partial index cannot express.
 @Index('IDX_grns_company_batch_no', ['companyName', 'batchNo'])
 export class GRN extends Model {
+  /** Transaction number of the deal this document belongs to (docs/transaction-tracking-plan.md §9). */
+  @Index('IDX_grns_txn_no')
+  // Written only by src/transactions (raw SQL); never from a request body through an entity save.
+  @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true, insert: false, update: false })
+  txnNo: string | null;
+
   @ManyToOne(() => Company, {
     cascade: true,
     nullable: true,
@@ -333,7 +339,7 @@ timeIn: string | null;
   @Column({ default: false })
   isVehicleDispatchCreated: boolean;
 
-  /** unpaid / partial / paid, worked out from the GRN's payments (GrnPaymentService). */
+  /** Unpaid / Partial / Paid, worked out from the GRN's payments (GrnPaymentService). */
   @Column({
     type: 'enum',
     enum: GrnPaymentStatus,

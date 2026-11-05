@@ -1,3 +1,5 @@
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from "inversify";
 import {
   controller,
@@ -21,7 +23,7 @@ import { TYPES } from "../../types";
  * kg roll-up, bypassing batch stock. Corrections are made with Stock Adjustment
  * (/stock/adjustments, batch-level, Operation approval like the Dump Register).
  * Creating and approving are switched off (410); history stays readable and
- * leftover pending corrections can still be rejected (no stock effect).
+ * leftover pending corrections can still be rejected by an admin (no stock effect).
  */
 const RETIRED = 'Stock Correction is retired. Use Stock Adjustment (Inventory → Stock Adjustments) to correct stock by batch.';
 
@@ -103,7 +105,8 @@ export class StockCorrectionController {
   }
 
   // PATCH /stock-correction/:id/reject
-  @httpPatch("/:id/reject")
+  // Admin only: clears leftover pending corrections (no stock effect)
+  @httpPatch("/:id/reject", requireRole(Role.ADMIN))
   public async reject(
     @requestParam("id") id: string,
     @request() req: Request,

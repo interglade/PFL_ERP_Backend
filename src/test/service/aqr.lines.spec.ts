@@ -37,8 +37,8 @@ const firmness = (quantity: number | string | null | undefined, extra: Partial<A
 
 /** The walkthrough AQR: Tomato (Grade A) 1000 arrived / 100 sampled, Onion 500 / 50. */
 const goodLines = (): AqrLineInput[] => [
-  { product: { id: TOMATO }, variant: { id: GRADE_A }, arrivedQty: 1000, samplingQty: 100, totalQty: 100, totalpercent: 100, parameters: [firmness(92)] },
-  { product: { id: ONION }, variant: null, arrivedQty: 500, samplingQty: 50, parameters: [firmness(45)] },
+  { product: { id: TOMATO }, variant: { id: GRADE_A }, arrivedQty: 1000, samplingQty: 100, totalQty: 100, totalpercent: 100, parameters: [firmness(100)] },
+  { product: { id: ONION }, variant: null, arrivedQty: 500, samplingQty: 50, parameters: [firmness(50)] },
 ];
 
 describe('refIdOf / parseQuantity / legacyQuantityToNumber / defaultPercentage', () => {
@@ -231,7 +231,14 @@ describe('validateAqrLines — complete-or-nothing', () => {
   });
 
   it('accepts a parameter quantity of 0 and a missing percentage', () => {
-    expect(validateAqrLines([{ product: { id: TOMATO }, arrivedQty: 100, samplingQty: 10, parameters: [{ ...firmness(0), percentage: null }] }])).toEqual([]);
+    expect(validateAqrLines([{ product: { id: TOMATO }, arrivedQty: 100, samplingQty: 0, parameters: [{ ...firmness(0), percentage: null }] }])).toEqual([]);
+  });
+
+  it('requires the parameter quantities to add up to the sampling quantity', () => {
+    expect(validateAqrLines([{ product: { id: TOMATO }, arrivedQty: 100, samplingQty: 10, parameters: [firmness(4), firmness(4)] }])).toEqual([
+      'Product line 1: quality parameter quantities add up to 8, they must equal the sampling quantity (10)',
+    ]);
+    expect(validateAqrLines([{ product: { id: TOMATO }, arrivedQty: 100, samplingQty: 10, parameters: [firmness(4), firmness(6)] }])).toEqual([]);
   });
 
   it('rejects a parameters value that is not a list', () => {

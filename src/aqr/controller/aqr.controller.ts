@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { Request, Response, NextFunction } from "express";
 import { inject } from "inversify";
 import {
@@ -36,7 +42,7 @@ export class AqrController {
   ) {}
 
   // ─── Create ───────────────────────────────────────────────────────────────
-@httpPost("/")
+@httpPost("/", checkPermission('aqr', 'create'))
 public async createAqr(
   @request() req: Request,
   @response() res: Response,
@@ -90,7 +96,7 @@ public async createAqr(
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('aqr', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -104,7 +110,7 @@ public async createAqr(
     });
   }
 
-  @httpGet("/")
+  @httpGet("/", checkPermission('aqr', 'view'))
   public async getAllAqrs(
     @request() req: Request,
     @response() res: Response,
@@ -150,7 +156,7 @@ public async createAqr(
 
   // ─── Recycle Bin ──────────────────────────────────────────────────────────
 
-  @httpGet("/recycle-bin")
+  @httpGet("/recycle-bin", requireRole(Role.SUPER_ADMIN))
   public async getAllRecycleBinAqrs(
     @request() req: Request,
     @response() res: Response,
@@ -194,7 +200,7 @@ public async createAqr(
 
   // ─── View (with approval info) ────────────────────────────────────────────
 
-  @httpGet("/view/:docid")
+  @httpGet("/view/:docid", checkPermission('aqr', 'view'), guardDocumentView(ApprovalDocType.AQR, 'AQR'))
   public async getAQRByIdForView(
     @requestParam("docid") docid: string,
     @request() req: Request,
@@ -222,7 +228,7 @@ public async createAqr(
 
   // ─── Get For Update ───────────────────────────────────────────────────────
 
-  @httpGet("/update/:id")
+  @httpGet("/update/:id", checkPermission('aqr', 'edit'), guardDocumentEdit(ApprovalDocType.AQR, 'AQR'))
   public async getAqrByIdForUpdate(
     req: Request,
     res: Response,
@@ -248,7 +254,7 @@ public async createAqr(
 
   // ─── Update ───────────────────────────────────────────────────────────────
 
-  @httpPatch("/:id")
+  @httpPatch("/:id", checkPermission('aqr', 'edit'), guardDocumentEdit(ApprovalDocType.AQR, 'AQR'), protectBody)
   public async updateAqr(
     @request() req: Request<{ id: string }, {}, UpdateAqrDto>,
     @response() res: Response,
@@ -325,7 +331,7 @@ public async createAqr(
 // }
   // ─── Delete ───────────────────────────────────────────────────────────────
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", checkPermission('aqr', 'delete'), guardDocumentDelete(ApprovalDocType.AQR, 'AQR'))
   public async deleteAqr(
     @request() req: Request,
     @response() res: Response,
@@ -368,7 +374,7 @@ public async createAqr(
 
   // ─── Delete Multiple ──────────────────────────────────────────────────────
 
-  @httpDelete("/delete/multiple")
+  @httpDelete("/delete/multiple", checkPermission('aqr', 'delete'), guardDocumentDelete(ApprovalDocType.AQR, 'AQR'))
   public async deleteMultipleAqrs(
     @request() req: Request,
     @response() res: Response,

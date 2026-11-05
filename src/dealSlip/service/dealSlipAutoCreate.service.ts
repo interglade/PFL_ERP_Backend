@@ -13,6 +13,7 @@ import { DocumentbService } from "../../approvalFlow/service/documentb.service";
 import { ApprovalFlowService } from "../../approvalFlow/service/approvalFlow.service";
 import { DocumentStatus, DocumentTypeEnum } from "../../approvalFlow/entity/docuemnt.entity";
 import { DocumentTypeEnum as DocDefEnum } from "../../documentDef/entity/documentdef.entity";
+import { attachToTransaction } from "../../transactions/transaction.core";
 import { RFPA_COPY_RELATIONS, copyRfpaPaymentInfo, copyRfpaProducts, dealSlipHeaderFromRfpa } from "./dealSlipRfpaCopy";
 
 /**
@@ -120,6 +121,14 @@ export class DealSlipAutoCreateService {
         remarks: 'Deal Slip auto-created as draft; waiting for lot no and loading location',
         lastActionBy: { id: requestedBy },
         document_type_id: savedDealSlip.id,
+      });
+
+      // The deal slip joins its RFPA's purchase (number read from the RFPA row, §9.4).
+      savedDealSlip.txnNo = await attachToTransaction(queryRunner.manager, {
+        txnNo: rfpa.txnNo,
+        docType: 'deal-slip',
+        docId: savedDealSlip.id,
+        docNo: savedDealSlip.dealSlipNo ?? null,
       });
 
       await queryRunner.commitTransaction();

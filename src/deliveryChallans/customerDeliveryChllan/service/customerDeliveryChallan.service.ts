@@ -4,7 +4,8 @@ import { assertDirectSaleWithinGrn, isDirectSaleGrn, resolveDcLines } from '../.
 import { refId as refIdOf } from '../../../receiving/receiving.helpers';
 import { GrnDeliveryMode } from '../../../grn/entity/grn.entity';
 import { applyDirectSaleSource, assertDirectSaleSource, loadDirectSaleSource } from './directSale';
-import { compactDate, nextSerial, SERIES } from '../../../global/numbering/documentNumber';
+import { linkDirectSale, openTransaction, refreshTransactionOf } from '../../../transactions/transaction.core';
+import { DcTypeCode, nextDeliveryChallanNo } from '../../../global/numbering/documentNumber';
 import { assertDcChangeable, dcChangeBlockedReason } from '../../deliverychllan/service/dcChangeGuard';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../../utils/approvalMessage';
@@ -20,7 +21,7 @@ import { DocumentTypeEnum } from '../../../approvalFlow/entity/docuemnt.entity';
 import { DocumentStatus } from '../../../approvalFlow/entity/docuemnt.entity';
 import { DocumentTypeEnum as DocDefEnum } from '../../../documentDef/entity/documentdef.entity';
 
-import { LessThanOrEqual, DataSource, In, IsNull } from 'typeorm';
+import { LessThanOrEqual, DataSource, EntityManager, In, IsNull } from 'typeorm';
 import { InventoryStockRepository } from '../../../inventoryStock/repository/inventoryStock.repository';
 import { DitemRepository } from '../../deliverychllan/repository/dItem.repository';
 import { ProductVarientsRepository } from '../../../product/productVarient/repository/productVarients.repository';
@@ -48,7 +49,6 @@ import { BulkDeleteResultDto } from '../../../global/general.dto';
 import { DocumentbService, DocumentWithRelatedData } from '../../../approvalFlow/service/documentb.service';
 import { DocDoubleApproverService } from '../../../approvalFlow/service/docDoubleApprover.service';
 import { DeliveryChallanService } from '../../deliverychllan/service/deliveryChallan.service';
-import { ProductVarientService } from '../../../product/productVarient/service/productVarient.service';
 import { ApprovalFlowService } from '../../../approvalFlow/service/approvalFlow.service';
 import { DocumentbRepository } from '../../../approvalFlow/repository/documentb.repository';
 import { CustomerDeliveryChallan } from '../entity/customerDeliveryChallan.entity';
@@ -77,8 +77,6 @@ export class CustomerDeliveryChallanService {
     private readonly deliveryChallanService: DeliveryChallanService,
     @inject(TYPES.ProductVarientsRepository)
     private readonly variantRepository: ProductVarientsRepository,
-    @inject(TYPES.ProductVarientService)
-    private readonly productVarientService: ProductVarientService,
 
     @inject(TYPES.ProductRepository)
     private readonly productRepository: ProductRepository,
@@ -125,15 +123,12 @@ export class CustomerDeliveryChallanService {
    * The serial runs per type across days and comes from the shared sequence, so
    * the three DC types no longer collide or reuse numbers.
    */
-  public async generateVoucherNo(type: string = 'C'): Promise<string> {
-    const typeCode = (type || 'C').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2) || 'C';
-    const serial = await nextSerial(
-      this.dataSource.manager,
-      `delivery_challan_purchase:CN-${typeCode}`,
-      SERIES.deliveryChallan,
-      `^CN[0-9]{8}${typeCode}([0-9]+)$`,
-    );
-    return `CN${compactDate()}${typeCode}${String(serial).padStart(5, '0')}`;
+  /**
+   * Challan number of all three DC types (`DC-2026-C00001`, `-O…`, `-S…`). Pass the
+   * create transaction's manager so a failed create does not use up a number.
+   */
+  public async generateVoucherNo(type: DcTypeCode, manager: EntityManager = this.dataSource.manager): Promise<string> {
+    return nextDeliveryChallanNo(manager, type);
   }
 
   private async checkApprovalFlowExists(userId: string | null | undefined, documentType: DocDefEnum): Promise<void> {
@@ -195,8 +190,11 @@ export class CustomerDeliveryChallanService {
         data.deliveryAddress = data.deliveryDetails.deliveryAddress;
       }
 
+      // The transaction number is server-owned (issued below).
+      delete data.txnNo;
+
       // 3. Generate Challan No
-      data.challanNo = await this.generateVoucherNo(data.type || 'C');
+      data.challanNo = await this.generateVoucherNo('C', queryRunner.manager);
 
       // 4. Normalize variants list
       let variantIds: string[] = [];
@@ -254,6 +252,19 @@ export class CustomerDeliveryChallanService {
         document_type_id: actualChallan.id,
       });
 
+      // Transaction number (docs/transaction-tracking-plan.md §9.4): a Customer DC starts a Sale (S).
+      // A direct sale (Referred GRN) also links its GRN's purchase to this sale.
+      actualChallan.txnNo = await openTransaction(queryRunner.manager, {
+        type: 'sale',
+        origin: { docType: 'dc-customer', docId: actualChallan.id, docNo: actualChallan.challanNo ?? null },
+        companyId: refIdOf(data.companyName),
+        locationId: refIdOf(data.fromLocation),
+        partyType: 'customer',
+        partyId: cus.id,
+        partyName: cus.organisationName ?? null,
+      });
+      if (referredGrnId) await linkDirectSale(queryRunner.manager, actualChallan.id);
+
       // 10. Inventory is NOT reduced here. The check above holds this DC's kg
       //     against later DCs while it is pending; the stock movement happens when
       //     its document reaches COMPLETE (InventoryMovementService.planDeliveryChallan),
@@ -309,7 +320,7 @@ export class CustomerDeliveryChallanService {
       .leftJoin('challan.offices', 'office')
       .leftJoin('challan.grnNo', 'grn')
       .select([
-        'challan.id', 'challan.challanNo', 'challan.poNumber', 'challan.transitInsuranceNo',
+        'challan.id', 'challan.challanNo', 'challan.txnNo', 'challan.poNumber', 'challan.transitInsuranceNo',
         'challan.receiverName', 'challan.rmn',
         'challan.totalProductAmount', 'challan.netProductWeight',
         'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
@@ -347,6 +358,7 @@ export class CustomerDeliveryChallanService {
     const formattedChallan = {
       id: challan.id,
       challanNo: challan.challanNo,
+      txnNo: challan.txnNo ?? null,
       poNumber: challan.poNumber ?? null,
       customerName: challan.customerName?.id ?? null,
       fromLocation: challan.fromLocation?.id ?? null,
@@ -430,7 +442,7 @@ export class CustomerDeliveryChallanService {
       .leftJoin('challan.offices', 'office')
       .leftJoin('challan.grnNo', 'grn')
       .select([
-        'challan.id', 'challan.challanNo', 'challan.poNumber', 'challan.transitInsuranceNo',
+        'challan.id', 'challan.challanNo', 'challan.txnNo', 'challan.poNumber', 'challan.transitInsuranceNo',
         'challan.receiverName',
         'challan.totalProductAmount', 'challan.netProductWeight',
         'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
@@ -470,6 +482,7 @@ export class CustomerDeliveryChallanService {
       id: challan.id,
       documentId: document.id,
       challanNo: challan.challanNo,
+      txnNo: challan.txnNo ?? null,
       poNumber: challan.poNumber ?? null,
       customerName: challan.customerName?.organisationName ?? null,
       transitInsuranceNo: challan.transitInsuranceNo ?? null,
@@ -568,7 +581,7 @@ export class CustomerDeliveryChallanService {
         .leftJoin('challan.grnNo', 'grn')
         .leftJoin('challan.deliveryChallanProducts', 'products')
         .select([
-          'challan.id', 'challan.challanNo', 'challan.poNumber', 'challan.transitInsuranceNo',
+          'challan.id', 'challan.challanNo', 'challan.txnNo', 'challan.poNumber', 'challan.transitInsuranceNo',
           'challan.isReturned', 'challan.totalProductAmount', 'challan.netProductWeight',
           'challan.netPackagingMaterialWeight', 'challan.totalPackagingMaterialAmount',
           'challan.totalAmtInWords', 
@@ -619,6 +632,7 @@ export class CustomerDeliveryChallanService {
           createdDate,
           createdTime,
           challanNo: challan.challanNo,
+          txnNo: challan.txnNo ?? null,
           poNumber: challan.poNumber ?? null,
           customerName: challan.customerName?.organisationName ?? null,
           billingAddress: mapAddress(challan.billingAddress),
@@ -676,6 +690,7 @@ export class CustomerDeliveryChallanService {
 
       if (!challan) return null;
 
+      delete (data as Record<string, any>).txnNo; // the transaction number is server-owned
       const updated = Object.assign(challan, data);
       // Lines and their batch hold change together (re-reserved; anything held before is released).
       const saved = await this.dataSource.transaction(async (manager) => {
@@ -799,6 +814,8 @@ export class CustomerDeliveryChallanService {
       await this.documentbService.rejectDispatchesForSource(
         DocumentTypeEnum.DC_TYPE_CUSTOMER, [customerDC.id], 'deleted', `Customer DC ${customerDC.challanNo ?? ''}`.trim(),
       );
+      // The sale is cancelled (its origin is gone); a direct-sale purchase moves back.
+      await refreshTransactionOf(this.dataSource.manager, 'dc-customer', customerDC.id);
       success.push({id,No:customerDC.challanNo});
     } catch (error: any) {
       failed.push({ id, reason: error.message || 'Unknown error' });

@@ -217,7 +217,7 @@ async function linkPurchaseAqrsToGrn(runner: QueryRunner): Promise<void> {
          JOIN documents d
            ON d.document_type_id = g.id::text
           AND d.type = 'grn'
-          AND d.status = 'COMPLETE'
+          AND d.status = 'Complete'
           AND d."isDeleted" = false
           AND d."deletedAt" IS NULL
          JOIN grn_products gp

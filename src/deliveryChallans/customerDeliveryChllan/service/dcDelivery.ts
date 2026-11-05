@@ -96,8 +96,8 @@ export interface DeliveryStatus {
   confirmedByName: string | null;
   /** The RBC's approval document id (for the RBC view link). */
   rbcDocumentId: string | null;
-  /** PENDING until confirmed. */
-  state: 'PENDING' | DeliveryOutcome;
+  /** Pending until confirmed. */
+  state: 'Pending' | DeliveryOutcome;
   rbc: { id: string; no: string | null; status: string | null } | null;
   invoice: { id: string; no: string | null } | null;
   canConfirm: boolean;
@@ -127,6 +127,15 @@ export async function deliveryStatus(manager: EntityManager, dcId: string, userI
   if (dc.deleted) blockers.push('The DC was deleted');
   if (confirmation) blockers.push('Delivery is already confirmed');
   if (!confirmation && !dc.deleted) {
+    // Only the DC's creator confirms its delivery (client decision G1)
+    if (userId) {
+      const creator: Array<{ id: string | null }> = await manager.query(
+        `SELECT d.last_action_by::text AS id FROM documents d
+          WHERE d.document_type_id = $1 AND d.type::text = $2 ORDER BY d."createdAt" DESC LIMIT 1`,
+        [dcId, DocumentTypeEnum.DC_TYPE_CUSTOMER],
+      );
+      if (creator[0]?.id && creator[0].id !== userId) blockers.push('Only the creator of this DC can confirm its delivery');
+    }
     const notReady = await dispatchBlocker(manager, dcId);
     if (notReady) blockers.push(notReady);
     if (rbc && rbc.status !== DocumentStatus.COMPLETE) blockers.push(`Return By Customer ${rbc.no ?? ''} is awaiting approval`.replace('  ', ' '));
@@ -153,12 +162,12 @@ export async function deliveryStatus(manager: EntityManager, dcId: string, userI
     confirmation,
     confirmedByName: names[0]?.name || null,
     rbcDocumentId: rbcDocs[0]?.id ?? null,
-    state: confirmation ? confirmation.outcome : 'PENDING',
+    state: confirmation ? confirmation.outcome : 'Pending',
     rbc,
     invoice,
     canConfirm: blockers.length === 0,
     blockers,
-    nextOutcome: confirmation ? null : rbc ? 'DELIVERED_WITH_RETURN' : 'DELIVERED_NO_RETURN',
+    nextOutcome: confirmation ? null : rbc ? 'Delivered With Return' : 'Delivered No Return',
     canUndo: !undoBlockedReason,
     undoBlockedReason,
   };
@@ -167,11 +176,9 @@ export async function deliveryStatus(manager: EntityManager, dcId: string, userI
 /** Why `userId` may not undo this confirmation, or null when allowed. */
 async function undoPermission(manager: EntityManager, dcId: string, confirmation: DcDeliveryConfirmation, userId: string): Promise<string | null> {
   if (confirmation.confirmedBy === userId) return 'The user who confirmed the delivery cannot undo it';
+  // Only the DC's own approvers undo a confirmation (client decision 2026-10-27)
   const allowed = await approverIds(manager, DocumentTypeEnum.DC_TYPE_CUSTOMER, dcId);
-  // Approvers of a rejected / deleted Final Invoice of this DC may undo too.
-  const invoices: Array<{ id: string }> = await manager.query(`SELECT id::text AS id FROM invoices WHERE delivery_challan_id = $1`, [dcId]);
-  for (const inv of invoices) (await approverIds(manager, DocumentTypeEnum.FINAL_INVOICE, inv.id)).forEach((id) => allowed.add(id));
-  return allowed.has(userId) ? null : 'Only an approver of this DC or of its Final Invoice can undo the delivery confirmation';
+  return allowed.has(userId) ? null : 'Only an approver of this DC can undo the delivery confirmation';
 }
 
 export async function confirmDelivery(
@@ -181,12 +188,12 @@ export async function confirmDelivery(
   input: { receiverName?: string | null; remark?: string | null; proofUrl?: string | null },
 ): Promise<DcDeliveryConfirmation> {
   await manager.query(`SELECT id FROM delivery_challan_purchase WHERE id = $1 FOR UPDATE`, [dcId]);
-  const status = await deliveryStatus(manager, dcId);
+  const status = await deliveryStatus(manager, dcId, userId);
   if (!status.canConfirm) throw new AppError(409, `Delivery cannot be confirmed: ${status.blockers.join('; ')}`);
   const repo = manager.getRepository(DcDeliveryConfirmation);
   return repo.save(repo.create({
     dcId,
-    outcome: status.nextOutcome ?? 'DELIVERED_NO_RETURN',
+    outcome: status.nextOutcome ?? 'Delivered No Return',
     rbcId: status.rbc?.id ?? null,
     rbcNo: status.rbc?.no ?? null,
     receiverName: input.receiverName?.trim() || null,
@@ -226,9 +233,9 @@ export async function assertDeliveryNotConfirmed(manager: EntityManager, dcId: s
 }
 
 /** Delivery state per DC for list columns. */
-export async function deliveryStates(manager: EntityManager, dcIds: string[]): Promise<Record<string, { state: 'PENDING' | DeliveryOutcome; confirmedAt: Date | null; rbcNo: string | null }>> {
-  const result: Record<string, { state: 'PENDING' | DeliveryOutcome; confirmedAt: Date | null; rbcNo: string | null }> = {};
-  for (const id of dcIds) result[id] = { state: 'PENDING', confirmedAt: null, rbcNo: null };
+export async function deliveryStates(manager: EntityManager, dcIds: string[]): Promise<Record<string, { state: 'Pending' | DeliveryOutcome; confirmedAt: Date | null; rbcNo: string | null }>> {
+  const result: Record<string, { state: 'Pending' | DeliveryOutcome; confirmedAt: Date | null; rbcNo: string | null }> = {};
+  for (const id of dcIds) result[id] = { state: 'Pending', confirmedAt: null, rbcNo: null };
   if (!dcIds.length) return result;
   const rows: Array<{ dc_id: string; outcome: DeliveryOutcome; confirmed_at: Date; rbc_no: string | null }> = await manager.query(
     `SELECT dc_id::text AS dc_id, outcome, confirmed_at, rbc_no FROM dc_delivery_confirmation

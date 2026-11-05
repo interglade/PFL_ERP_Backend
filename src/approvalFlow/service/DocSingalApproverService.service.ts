@@ -1,3 +1,4 @@
+import { assertEngineAccepts, assertNotCreator } from '../approvalGuards';
 import { inject, injectable } from "inversify";
 import { DocumentStatus, DocumentTypeEnum } from "../entity/docuemnt.entity";
 import { TYPES } from "../../types";
@@ -21,6 +22,7 @@ import { InventoryMovementService } from "../../inventoryStock/service/inventory
 import { DealSlipAutoCreateService } from "../../dealSlip/service/dealSlipAutoCreate.service";
 import { syncGrnVehicleDispatchFlagForDispatch } from "../../vehicleDispatch/service/dispatchSource";
 import { prepareDispatchApproval } from "../../vehicleDispatch/service/dispatchRules";
+import { refreshTransactionOf } from "../../transactions/transaction.core";
 
 
 @injectable()
@@ -171,6 +173,8 @@ export class DocSingalApproverService {
     if (document.status === DocumentStatus.DRAFT) {
       throw new Error('This document is still a draft and has not been sent for approval');
     }
+    assertEngineAccepts('single', type);
+    assertNotCreator(document, userId);
 
     //TODO  : 1) Single approval documents
     if (this.isSingleApprovalBasedDocument(type)) {
@@ -204,7 +208,7 @@ export class DocSingalApproverService {
         // (e.g. the goods are no longer available) we must fail here, while the
         // action is still fully retryable — once the stage record is saved the
         // "already acted" guard would block a second attempt.
-        if (action === 'approved') {
+        if (action === ApproverStatus.APPROVED) {
           await this.inventoryMovementService.assertMovementIsApplicable(document);
           // A vehicle dispatch is approved only after its source document is COMPLETE;
           // its product lines are re-copied from the final source here.
@@ -231,7 +235,7 @@ export class DocSingalApproverService {
           const readableType = getReadableDocumentType(document.type);
           const docLabel = docNo ? `${readableType} #${docNo}` : readableType;
 
-          if (action === 'reject') {
+          if (action === ApproverStatus.REJECTED) {
           const remark = `${document.type} Document Rejected By Approvers`;
           document.status = DocumentStatus.REJECT;
           document.remarks = remark;
@@ -241,6 +245,8 @@ export class DocSingalApproverService {
             await syncGrnVehicleDispatchFlagForDispatch(this.documentbRepository.manager, document.document_type_id);
             await this.cacheService.invalidatePattern('grn:numbers:*');
           }
+          // Transaction step / status (never throws).
+          await refreshTransactionOf(this.documentbRepository.manager, document.type, document.document_type_id);
           await this.invalidateRelatedCache(document.type, documentId, document.document_type_id ?? undefined);
           // 🔔 Creator
           if (document.lastActionBy?.id) {
@@ -257,7 +263,7 @@ export class DocSingalApproverService {
               rejectPeerIds
             );
           }
-        } else if (action === 'approved') {
+        } else if (action === ApproverStatus.APPROVED) {
           const remark = `${document.type} Document Approved By Approvers`;
           document.status = DocumentStatus.COMPLETE;
           document.remarks = remark;
@@ -270,6 +276,8 @@ export class DocSingalApproverService {
           if (document.type === DocumentTypeEnum.RFPA && document.document_type_id) {
             await this.dealSlipAutoCreateService.createForCompletedRfpa(document.document_type_id);
           }
+          // Transaction step / status (never throws).
+          await refreshTransactionOf(this.documentbRepository.manager, document.type, document.document_type_id);
 
           await this.invalidateRelatedCache(document.type, documentId, document.document_type_id ?? undefined);
 

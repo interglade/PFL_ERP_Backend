@@ -57,19 +57,22 @@ export function dealSlipGrnBlockReason(row: DealSlipGrnCheckRow | undefined): { 
   const label = row.deal_slip_no ? `Deal slip ${row.deal_slip_no}` : 'The deal slip';
   if (!row.live) return { status: 400, message: `${label} has been deleted` };
   if (row.status !== DocumentStatus.COMPLETE) {
-    const state = row.status === DocumentStatus.REJECT || row.status === DocumentStatus.DISAPPROVED ? 'rejected' : 'not approved yet';
+    const state = row.status === DocumentStatus.REJECT ? 'rejected' : 'not approved yet';
     return { status: 400, message: `${label} is ${state}; a GRN can only be raised against an approved deal slip` };
   }
   if (row.used_by_grn_no !== null && row.used_by_grn_no !== undefined) {
-    return { status: 409, message: `${label} is already used by GRN ${row.used_by_grn_no}`.trim() };
+    // One Deal Slip = one GRN (docs/transaction-tracking-plan.md §9.4).
+    const slip = row.deal_slip_no ? `Deal Slip ${row.deal_slip_no}` : 'The deal slip';
+    return { status: 409, message: `${slip} is already used by GRN ${row.used_by_grn_no}`.trim() };
   }
   return null;
 }
 
 /**
  * Throws unless `dealSlipId` may back the GRN `excludeGrnId` (or a new GRN).
- * Serialises GRNs of the same slip on an advisory lock held until the caller's
- * transaction ends, so call it inside the transaction that saves the GRN.
+ * Serialises GRNs of the same slip on an advisory lock and a row lock on the
+ * deal slip (`FOR UPDATE OF ds`), both held until the caller's transaction
+ * ends, so call it inside the transaction that saves the GRN.
  */
 export async function assertDealSlipUsableForGrn(
   manager: EntityManager,
@@ -87,7 +90,8 @@ export async function assertDealSlipUsableForGrn(
                 AND ($2::uuid IS NULL OR g.id <> $2::uuid)
                 AND ${notRejectedSql('g.id', DocumentTypeEnum.GRN, 'g_d')}
               ORDER BY g."createdAt" ASC LIMIT 1) AS used_by_grn_no
-       FROM deal_slips ds WHERE ds.id = $1::uuid`,
+       FROM deal_slips ds WHERE ds.id = $1::uuid
+        FOR UPDATE OF ds`,
     [dealSlipId, isUuid(excludeGrnId) ? excludeGrnId : null],
   );
   const block = dealSlipGrnBlockReason(rows[0]);

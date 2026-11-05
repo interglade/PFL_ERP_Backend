@@ -120,6 +120,8 @@ export interface ChallanProductUpdateDto {
 export interface CustomerDeliveryChallanUpdateFormDto {
   id: string;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   poNumber: string | null;
   customerName: string | null;
   fromLocation: string | null;
@@ -176,6 +178,8 @@ export interface CustomerDeliveryChallanViewDto {
   id: string;
   documentId: string | null;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   poNumber: string | null;
   /** Customer organisation name */
   customerName: string | null;
@@ -241,6 +245,8 @@ export interface CustomerDeliveryChallanListItemDto {
   createdDate: string | null;
   createdTime: string | null;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   poNumber: string | null;
   customerName: string | null;
   billingAddress: ChallanAddressDto | null;

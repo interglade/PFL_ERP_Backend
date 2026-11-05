@@ -1,3 +1,5 @@
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from "inversify";
 import {
   controller,
@@ -21,7 +23,7 @@ import { ControllerLogger } from "../../utils/controllerLogger";
 import AppError from "../../utils/appError";
 
 
-@controller('/saleOrders',deserializeUser,requireUser)
+@controller('/saleOrders',deserializeUser,requireUser, requireRole(Role.ADMIN))
 export class SaleOrderController {
   constructor(
     @inject(TYPES.SaleOrderService)

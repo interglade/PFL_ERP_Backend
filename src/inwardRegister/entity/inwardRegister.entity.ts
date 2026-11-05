@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany, Index } from 'typeorm';
 
 import { Source } from '../../utils/status.enum';
 import { InwardProduct } from './inwardProduct.entity';
@@ -24,6 +24,12 @@ export enum InwardType {
 }
 @Entity('inward_register')
 export class InwardRegister extends Model {
+  /** Transaction number of the deal this document belongs to (docs/transaction-tracking-plan.md §9). */
+  @Index('IDX_inward_register_txn_no')
+  // Written only by src/transactions (raw SQL); never from a request body through an entity save.
+  @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true, insert: false, update: false })
+  txnNo: string | null;
+
   @ManyToOne(() => GRN, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'grn_id' })
   grnNo: GRN;

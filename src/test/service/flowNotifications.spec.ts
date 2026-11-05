@@ -32,8 +32,8 @@ const fakeDataSource = (queries: Array<[RegExp, unknown[]]>, document: unknown =
 
 describe('receivable GRN statuses (client decision 2026-10-15)', () => {
   it('lets goods move only once the whole approval is complete', () => {
-    expect(isGrnReceivableStatus('COMPLETE')).toBe(true);
-    expect(['approved', 'FINALIZING', 'FINALIZED', 'hold', 'VERIFIED', 'REJECT', null].map(isGrnReceivableStatus)).toEqual(
+    expect(isGrnReceivableStatus('Complete')).toBe(true);
+    expect(['Approved', 'Finalizing', 'Draft', 'Hold', 'Verified', 'Rejected', null].map(isGrnReceivableStatus)).toEqual(
       [false, false, false, false, false, false, false],
     );
   });
@@ -47,12 +47,12 @@ describe('D-9 flow notifications', () => {
 
   it('tells the GRN people (not the actor) when a GRN completes its approval, and the pending dispatch people', async () => {
     const { dataSource } = fakeDataSource([
-      [/FROM documents WHERE id/, [{ type: 'grn', status: 'COMPLETE', record_id: 'g1' }]],
+      [/FROM documents WHERE id/, [{ type: 'grn', status: 'Complete', record_id: 'g1' }]],
       [/FROM grns/, [{ no: 'BR-00012' }]],
-      [/FROM dispatch d WHERE d.grn_id/, [{ id: 'v1', no: 'VDP2610150001', status: 'hold' }]],
+      [/FROM dispatch d WHERE d.grn_id/, [{ id: 'v1', no: 'VDP2610150001', status: 'Hold' }]],
     ]);
     const notifier = { createBatchNoti: jest.fn(async () => undefined) };
-    await notifyApprovalTransition(dataSource, notifier, 'doc1', 'FINALIZING', 'a1');
+    await notifyApprovalTransition(dataSource, notifier, 'doc1', 'Finalizing', 'a1');
     expect(notifier.createBatchNoti).toHaveBeenCalledTimes(2);
     const [grnMessage, grnPeople] = (notifier.createBatchNoti.mock.calls as unknown as Array<[string, string[]]>)[0];
     expect(grnMessage).toContain('GRN BR-00012 has completed its approval');
@@ -69,12 +69,12 @@ describe('D-9 flow notifications', () => {
 
   it('tells the GRN people that an approved purchase dispatch is on the way', async () => {
     const { dataSource } = fakeDataSource([
-      [/FROM documents WHERE id/, [{ type: 'vehicle-dispatch-register', status: 'COMPLETE', record_id: 'v1' }]],
+      [/FROM documents WHERE id/, [{ type: 'vehicle-dispatch-register', status: 'Complete', record_id: 'v1' }]],
       [/FROM dispatch d LEFT JOIN branches/, [{ no: 'VDP2610150001', type: 'purchase', grn_id: 'g1', dc_id: null, to_name: 'Satana CC' }]],
       [/FROM grns/, [{ no: 'BR-00012' }]],
     ]);
     const notifier = { createBatchNoti: jest.fn(async () => undefined) };
-    await notifyApprovalTransition(dataSource, notifier, 'doc1', 'hold', 'x');
+    await notifyApprovalTransition(dataSource, notifier, 'doc1', 'Hold', 'x');
     expect((notifier.createBatchNoti.mock.calls as unknown as Array<[string, string[]]>)[0][0]).toBe(
       'Dispatch VDP2610150001 of GRN BR-00012 is approved and on the way to Satana CC: receive it in Arrivals',
     );

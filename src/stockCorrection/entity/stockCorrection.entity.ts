@@ -9,9 +9,9 @@ import { User } from "../../employee/entity/user.entity";
 
 
 export enum CorrectionStatus {
-  PENDING = "pending",
-  APPROVED = "approved",
-  REJECTED = "rejected",
+  PENDING = "Pending",
+  APPROVED = "Approved",
+  REJECTED = "Rejected",
 }
 
 export enum CorrectionType {

@@ -1,3 +1,4 @@
+import { restartApprovalAfterEdit } from '../../../approvalFlow/documentAccess';
 import { compactDate, nextDocumentNumber, SERIES } from '../../../global/numbering/documentNumber';
 import { assertGrnFreeForVoucher, resolveVoucherGrn } from '../../voucherGrnLink';
 import { relationIdOf } from '../../../grn/grnLinks.sql';
@@ -450,6 +451,8 @@ remark : voucher.remark || null,
     const updatedVoucher = await this.lpVoucherRepository.save(voucher);
 
     await this.auditLogService.logChange('LPVoucher', voucher.id, originalVoucher, updatedVoucher, updatedBy);
+    // Edited before Finalizer 2: the approval starts again from the verifier
+    await restartApprovalAfterEdit(this.documentbService, DocumentTypeEnum.LABOR_PAYMENT_VOUCHER, id, 'LP Voucher edited: approval restarted');
     await this.invalidateCache(id);
     return updatedVoucher;
   }

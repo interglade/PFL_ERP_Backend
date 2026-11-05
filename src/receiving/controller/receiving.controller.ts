@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import { controller, httpDelete, httpGet, httpPost, next, request, requestParam, response } from 'inversify-express-utils';
 import { NextFunction, Request, Response } from 'express';
@@ -29,14 +30,6 @@ const SOURCE_TYPE_TITLE: Record<ReceivingSourceType, string> = {
   rbc: 'RBC',
 };
 
-const STATE_TITLE: Record<ReceivingState, string> = {
-  'not-received': 'Not Received',
-  'in-transit': 'In Transit',
-  received: 'Received',
-  'in-progress': 'In Progress',
-  done: 'Done',
-};
-
 interface ArrivalColumn {
   header: string;
   width: number;
@@ -59,7 +52,7 @@ function timestampPart(value: Date | string | null | undefined, pattern: string)
 
 /** Same columns, in the same order, as the Arrivals list (the Receive button aside). */
 const ARRIVAL_COLUMNS: ArrivalColumn[] = [
-  { header: 'State', width: 13, get: (r) => STATE_TITLE[r.state] ?? r.state },
+  { header: 'State', width: 13, get: (r) => r.state },
   { header: 'Source No', width: 20, get: (r) => r.sourceNo },
   { header: 'Dispatch No', width: 18, get: (r) => r.dispatch?.dispatchNo ?? null },
   { header: 'Type', width: 14, get: (r) => SOURCE_TYPE_TITLE[r.sourceType] },
@@ -129,7 +122,7 @@ function parseArrivalsFilter(query: Request['query']): ArrivalsFilter {
   const locationId = firstString(query.locationId);
   if (locationId) filter.locationId = locationId;
 
-  // One or more states: `state=received`, `state=in-transit,received` or `state=received&state=in-progress`.
+  // One or more states: `state=Received`, `state=In Transit,Received` or `state=Received&state=In Progress`.
   const states = manyStrings(query.state);
   if (states.length) {
     const invalid = states.find((s) => !RECEIVING_STATES.includes(s as ReceivingState));
@@ -179,7 +172,7 @@ export class ReceivingController {
    * becomes Received. Idempotent; sources that need no dispatch are already
    * received. Body: `{ sourceType, sourceId }`. Returns the new status.
    */
-  @httpPost('/receive')
+  @httpPost('/receive', checkPermission('arrivals', 'create'))
   public async receive(
     @request() req: Request,
     @response() res: Response,
@@ -197,6 +190,7 @@ export class ReceivingController {
       }
       if (!status.dispatch) throw new AppError(400, 'No vehicle dispatch found for this source');
       await this.vehicleDispatchService.markArrived(status.dispatch.id, res.locals.user.id);
+      await this.receivingStatusService.refreshSourceTransaction(sourceType, sourceId);
       const updated = await this.receivingStatusService.getSourceStatus(sourceType, sourceId);
       res.status(200).json({ status: 'success', message: 'Vehicle received', data: updated });
     } catch (error) {
@@ -231,7 +225,7 @@ export class ReceivingController {
    * the statuses are never all held in memory. `X-Export-Truncated: true`
    * when the cap cut the result.
    */
-  @httpGet('/arrivals/excel')
+  @httpGet('/arrivals/excel', checkPermission('arrivals', 'export'))
   public async exportArrivals(
     @request() req: Request,
     @response() res: Response,
@@ -320,7 +314,7 @@ export class ReceivingController {
   }
 
   /** Marks the Dump / RTV step of a source as not needed. Body: `{ sourceType, sourceId, docType }`. */
-  @httpPost('/skip')
+  @httpPost('/skip', checkPermission('arrivals', 'edit'))
   public async skipStep(
     @request() req: Request,
     @response() res: Response,
@@ -336,7 +330,7 @@ export class ReceivingController {
   }
 
   /** Removes the "not needed" mark. Body or query: `{ sourceType, sourceId, docType }` (query works where proxies drop DELETE bodies). */
-  @httpDelete('/skip')
+  @httpDelete('/skip', checkPermission('arrivals', 'edit'))
   public async unskipStep(
     @request() req: Request,
     @response() res: Response,
@@ -352,7 +346,7 @@ export class ReceivingController {
   }
 
   /** Arrivals worklist: receivable sources (GRN only cc / dc) with their receiving state. */
-  @httpGet('/arrivals')
+  @httpGet('/arrivals', checkPermission('arrivals', 'view'))
   public async listArrivals(
     @request() req: Request,
     @response() res: Response,

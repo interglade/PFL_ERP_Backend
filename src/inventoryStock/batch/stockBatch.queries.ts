@@ -214,7 +214,7 @@ export async function traceBatch(manager: EntityManager, batchNo: string) {
        FROM stock_allocation a JOIN stock_batch b ON b.id = a.stock_batch_id
        LEFT JOIN branches br ON br.id = b.location_id
        LEFT JOIN product p ON p.id = b.product_id
-      WHERE UPPER(a.batch_no) = UPPER($1) AND a.status = 'RESERVED'
+      WHERE UPPER(a.batch_no) = UPPER($1) AND a.status = 'Reserved'
       ORDER BY a.created_at`,
     [batchNo],
   );
@@ -224,7 +224,7 @@ export async function traceBatch(manager: EntityManager, batchNo: string) {
 /**
  * C7 — In transit: per approved Stock Transfer DC and batch, what left the
  * from-location and is not yet accounted for at the destination (Inward +
- * Dump lines of that batch on non-rejected documents).
+ * Dump lines of that batch, plus the transit loss on the AQR, on non-rejected documents).
  */
 export async function inTransit(manager: EntityManager, f: { companyId?: string | null; locationId?: string | null; toLocationId?: string | null }) {
   const params: unknown[] = [DocumentTypeEnum.DC_TYPE_STOCK_TRANSFER, DocumentStatus.COMPLETE, DocumentStatus.REJECT];
@@ -240,7 +240,7 @@ export async function inTransit(manager: EntityManager, f: { companyId?: string 
        SELECT a.doc_id, a.doc_no, a.batch_no, b.product_id, b.variant_id, b.uom_id, b.company_id, b.location_id,
               SUM(a.qty) AS qty, SUM(a.net_kg) AS kg, SUM(a.qty * COALESCE(a.unit_cost, 0)) AS value
          FROM stock_allocation a JOIN stock_batch b ON b.id = a.stock_batch_id
-        WHERE a.doc_type = $1 AND a.status = 'CONSUMED'
+        WHERE a.doc_type = $1 AND a.status = 'Consumed'
         GROUP BY a.doc_id, a.doc_no, a.batch_no, b.product_id, b.variant_id, b.uom_id, b.company_id, b.location_id
      ),
      received AS (
@@ -254,6 +254,13 @@ export async function inTransit(manager: EntityManager, f: { companyId?: string 
          FROM dump_product l JOIN dump_register rec ON rec.id = l.dump_register_id
         WHERE rec.delivery_challan_id IS NOT NULL AND COALESCE(rec."isDeleted", false) = false
           AND COALESCE(${latestStatus('rec', DocumentTypeEnum.DUMP_REGISTER)}, '') <> $3
+        GROUP BY 1, 2, 3, 4
+       UNION ALL
+       -- Transit loss recorded on the AQR is no longer on the road either
+       SELECT rec.delivery_challan_id::text, UPPER(l."batchNo"), l.product_id, l.uom_id, SUM(COALESCE(l."lossUnits", l."lossKg", 0))
+         FROM aqr_product l JOIN aqr rec ON rec.id = l.aqr_id
+        WHERE rec.delivery_challan_id IS NOT NULL AND COALESCE(rec."isDeleted", false) = false
+          AND COALESCE(${latestStatus('rec', DocumentTypeEnum.AQR)}, '') <> $3
         GROUP BY 1, 2, 3, 4
      )
      SELECT s.doc_id::text AS "dcId", s.doc_no AS "dcNo", s.batch_no AS "batchNo",
@@ -292,7 +299,7 @@ export async function documentAllocations(manager: EntityManager, docType: strin
             a.qty::float AS qty, a.net_kg::float AS "netKg", a.unit_cost::float AS "unitCost", a.status,
             b.first_in_at AS "firstInAt", (b.qty - b.reserved_qty)::float AS "batchAvailable"
        FROM stock_allocation a JOIN stock_batch b ON b.id = a.stock_batch_id
-      WHERE a.doc_type = $1 AND a.doc_id = $2 AND a.status IN ('RESERVED', 'CONSUMED')
+      WHERE a.doc_type = $1 AND a.doc_id = $2 AND a.status IN ('Reserved', 'Consumed')
       ORDER BY a.created_at, a.id`,
     [docType, docId],
   );

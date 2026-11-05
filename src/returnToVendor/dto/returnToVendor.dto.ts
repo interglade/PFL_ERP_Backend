@@ -62,6 +62,8 @@ export interface RTVListItemDto {
   createdDate: string | null;
   createdTime: string | null;
   rtvNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   grnNo: string | null;
   companyName: string | null;
   location: string | null;
@@ -120,6 +122,8 @@ export interface RTVViewDto {
     secondFinalized?: { userId: string; name: string; status: string; reason: string | null } | null;
   } | null;
   rtvNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   grnNo: string | null;
   companyName: string | null;
   location: string | null;
@@ -156,6 +160,8 @@ export interface RTVUpdateFormDto {
   id: string;
   /** GRN entity ID */
   grnNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   /** Company entity ID */
   companyName: string | null;
   /** Branch entity ID */

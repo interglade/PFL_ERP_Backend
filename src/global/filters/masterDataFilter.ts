@@ -38,6 +38,8 @@ export interface MasterFilterField {
   exprs: string[];
   /** Allowed values for `enum`. */
   values?: readonly string[];
+  /** `enum` of a status: matched exactly (statuses are Title Case), not in any case. */
+  exact?: boolean;
   /** `date` columns compare by day; `timestamp` columns by IST day boundaries. */
   columnType?: 'date' | 'timestamp';
   /** Name of an `existsGroups` entry: the condition is checked on a related row. */
@@ -71,7 +73,7 @@ export type MasterFilterCriteria = Record<string, string | string[]>;
  */
 export function commonMasterFilters(alias: string, address: { city: string[]; state: string[] }): MasterFilterField[] {
   return [
-    { param: 'status', kind: 'enum', values: Object.values(Status), exprs: [`${alias}.status`] },
+    { param: 'status', kind: 'enum', values: Object.values(Status), exact: true, exprs: [`${alias}.status`] },
     { param: 'createdFrom', aliases: ['startDate', 'dateFrom'], kind: 'dayFrom', exprs: [`${alias}.createdAt`] },
     { param: 'createdTo', aliases: ['endDate', 'dateTo'], kind: 'dayTo', exprs: [`${alias}.createdAt`] },
     // Compared through the foreign key, so it does not depend on the createdBy join.
@@ -99,7 +101,7 @@ function parseValue(field: MasterFilterField, raw: string): string | string[] {
     case 'enum': {
       const allowed = field.values ?? [];
       return list(raw).map((v) => {
-        const match = allowed.find((a) => a.toLowerCase() === v.toLowerCase());
+        const match = field.exact ? allowed.find((a) => a === v) : allowed.find((a) => a.toLowerCase() === v.toLowerCase());
         if (!match) throw new AppError(400, `Invalid ${field.param} '${v}'. Allowed values: ${allowed.join(', ')}`);
         return match;
       });

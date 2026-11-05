@@ -1,3 +1,5 @@
+import { Role } from '../employee/entity/user.entity';
+import { requireRole } from '../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -15,7 +17,7 @@ import { deserializeUser, requireUser } from '../middleware/deserializeUser';
 import logger from '../utils/logger';
 import { NotificationService } from '../notification/service/notification.service';
 
-@controller('/test', deserializeUser, requireUser)
+@controller('/test', deserializeUser, requireUser, requireRole(Role.ADMIN))
 export class TestController {
   constructor(
     @inject(TYPES.NotificationService)

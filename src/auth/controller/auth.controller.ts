@@ -4,8 +4,11 @@ import bcrypt from 'bcryptjs';
 
 import AppError from '../../utils/appError';
 import { signJwt, verifyJwt } from '../../utils/jwt';
+import { hasRole } from '../../utils/roles';
+import { EmployeeStatus, Role } from '../../employee/entity/user.entity';
 import { inject } from 'inversify';
-import { controller, httpPost, request, response, next } from 'inversify-express-utils';
+import { controller, httpGet, httpPost, request, response, next } from 'inversify-express-utils';
+import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
 import { TYPES } from '../../types';
 import logger from '../../utils/logger';
 import { ControllerLogger } from '../../utils/controllerLogger';
@@ -21,7 +24,6 @@ import { CacheService } from '../../global/cache.service';
 import { UserActivityLogService } from '../../employeeActivity/service/userActivityLog.service';
 
 import { WorkflowHierarchyRepository } from '../../workFlow/repository/WorkflowHierarchy.repository';
-import { MoreThan } from 'typeorm';
 import { UserService } from '../../employee/service/user.service';
 import { ActiveSessionRepository } from '../repository/activeSession.repository';
 import { NotificationService } from '../../notification/service/notification.service';
@@ -79,6 +81,15 @@ export class AuthController {
   ) {}
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
+
+  /** Workflow departments where the user has direct team members. */
+  private async leadDepartmentsOf(userId: string): Promise<string[]> {
+    const rows: Array<{ department: string }> = await this.workflowrepo.query(
+      `SELECT DISTINCT department FROM workflow_hierarchy WHERE ancestor_id = $1 AND depth = 1`,
+      [userId],
+    );
+    return rows.map((r) => r.department);
+  }
 
   private blacklistCacheKey(token: string): string {
     // SHA256 hash of full token — avoids truncation collisions
@@ -146,17 +157,17 @@ export class AuthController {
         return next(new AppError(403, 'You need to re-authenticate. Please log in.'));
       }
 
-      // Try cache first for user lookup
-      const userCacheKey = this.userCacheKey(decoded.sub);
-      let user = await this.cacheService.get<any>(userCacheKey);
-      if (!user) {
-        user = await this.userService.findUserById(decoded.sub);
-        if (user) await this.cacheService.set(userCacheKey, user, USER_CACHE_TTL);
-      }
+      // Read from the database, not the user cache: a deactivated user must not be refreshed
+      const user = await this.userService.findUserById(decoded.sub);
 
       if (!user) {
         logger.warn(`Refresh token for non-existent user from IP: ${req.ip}`);
         return next(new AppError(403, 'You need to re-authenticate. Please log in.'));
+      }
+
+      if (user.status !== EmployeeStatus.ACTIVE) {
+        logger.warn(`Refresh token for ${user.status} user ${user.id} from IP: ${req.ip}`);
+        return next(new AppError(401, 'Your account is not active. Please contact administrator.'));
       }
 
       const access_token = signJwt({ sub: user.id }, 'accessTokenPrivateKey', {
@@ -204,8 +215,9 @@ export class AuthController {
         throw new AppError(404, 'Username or email is incorrect');
       }
 
-      if (user.status === 'INACTIVE') {
-        throw new AppError(403, 'Your account is inactive. Please contact administrator.');
+      // Only ACTIVE users may sign in (INACTIVE, SUSPENDED and DRAFT are refused)
+      if (user.status !== EmployeeStatus.ACTIVE) {
+        throw new AppError(403, 'Your account is not active. Please contact administrator.');
       }
 
      // const isPasswordMatch = user.tempPlainPassword === trimmedPassword;
@@ -234,6 +246,7 @@ const isPasswordMatch = await bcrypt.compare(trimmedPassword, user.password);
         canEdit: permission.canEdit,
         canDelete: permission.canDelete,
         canDownload: permission.canDownload,
+        canExport: permission.canExport,
       }));
 
       const name = `${user.firstName} ${user.lastName}`;
@@ -290,14 +303,9 @@ const isPasswordMatch = await bcrypt.compare(trimmedPassword, user.password);
       //  const hasWorkflow = workflowTree > 0;
 
       // Check if the user has any subordinates in the workflow hierarchy (depth > 0 means actual children)
-      const workflowCount = await this.workflowrepo.count({
-        where: {
-          ancestor: { id: user.id },
-          depth: MoreThan(0),
-          isDeleted: false,
-        },
-      });
-      const hasChild = workflowCount > 0;
+      // Departments where the user has direct team members (team leader there)
+      const leadDepartments = await this.leadDepartmentsOf(user.id);
+      const hasChild = leadDepartments.length > 0;
 
       ControllerLogger.logAuth('User login', req, res, true);
       logger.info('User logged in successfully', { userId: user.id });
@@ -314,9 +322,65 @@ const isPasswordMatch = await bcrypt.compare(trimmedPassword, user.password);
         employeeId: user.employeeId,
         permissions,
         hasChild,
+        leadDepartments,
       });
     } catch (err) {
       logger.error('Unexpected error during login', { error: err });
+      next(err);
+    }
+  }
+
+  // ─── Current user (access refresh) ────────────────────────────────────────
+
+  /**
+   * The signed-in user's current roles and permissions, same shape as the login response
+   * (without tokens). The frontend calls it on start, on window focus and after a token
+   * refresh, so access changes apply without signing out. Inactive users get 401 from
+   * deserializeUser.
+   */
+  @httpGet('/me', deserializeUser, requireUser)
+  public async currentUserHandler(
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const user = await this.userRepository.findOne({
+        where: { id: res.locals.user.id },
+        relations: ['permissions', 'permissions.documentDefinition', 'currentWorkLocation'],
+      });
+      if (!user) return next(new AppError(401, 'You need to re-authenticate. Please log in.'));
+
+      const permissions = (user.permissions ?? []).map((permission: any) => ({
+        documentDefinition: permission.documentDefinition
+          ? {
+              id: permission.documentDefinition.id,
+              name: permission.documentDefinition.name,
+              uniqueKey: permission.documentDefinition.uniqueKey,
+            }
+          : null,
+        canCreate: permission.canCreate,
+        canView: permission.canView,
+        canEdit: permission.canEdit,
+        canDelete: permission.canDelete,
+        canDownload: permission.canDownload,
+        canExport: permission.canExport,
+      }));
+
+      const leadDepartments = await this.leadDepartmentsOf(user.id);
+
+      res.status(200).json({
+        status: 'success',
+        id: user.id,
+        userName: `${user.firstName} ${user.lastName}`,
+        roles: user.roles,
+        currentWorkLocation: (user as any).currentWorkLocation?.id,
+        employeeId: user.employeeId,
+        permissions,
+        hasChild: leadDepartments.length > 0,
+        leadDepartments,
+      });
+    } catch (err) {
       next(err);
     }
   }
@@ -335,7 +399,11 @@ const isPasswordMatch = await bcrypt.compare(trimmedPassword, user.password);
       if (!refresh_token) return next(new AppError(400, 'Refresh token not provided'));
       if (!access_token) return next(new AppError(400, 'Access token not provided'));
 
-      const decoded = verifyJwt<{ sub: string }>(access_token, 'accessTokenPublicKey');
+      // An expired access token (signing out after a long idle) still names the user
+      // through the refresh token, so the user is marked offline and the session closed.
+      const decoded =
+        verifyJwt<{ sub: string }>(access_token, 'accessTokenPublicKey') ??
+        verifyJwt<{ sub: string }>(refresh_token, 'refreshTokenPublicKey');
       const user = decoded?.sub
         ? await this.userRepository.findOne({ where: { id: decoded.sub } })
         : null;
@@ -363,7 +431,8 @@ const isPasswordMatch = await bcrypt.compare(trimmedPassword, user.password);
 
       // Log logout activity (fire-and-forget) - skip for admin role
       if (user) {
-        const isAdmin = user.roles?.some((role: any) => role.name?.toLowerCase() === 'admin');
+        // roles is a list of Role values (strings); Super Admins hold admin too
+        const isAdmin = hasRole(user, Role.ADMIN);
         if (!isAdmin) {
           //const userName = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
           const userName = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || (user as any).username || 'Unknown User';

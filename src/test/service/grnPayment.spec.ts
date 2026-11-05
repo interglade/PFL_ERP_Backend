@@ -41,11 +41,11 @@ describe('GRN payment summary (balance, status, partial / full)', () => {
     expect(s.rows[0].paymentType).toBe('full');
   });
 
-  it('an advance covering the total is paid only once a finalizer confirms it', () => {
+  it('an advance covering the total is paid only once a Payment Manager confirms it', () => {
     expect(summarizeGrnPayments({ totalAmt: 1000, advancePaidAmt: 1000, payments: [] })).toMatchObject({
       balanceAmt: 0, status: GrnPaymentStatus.UNPAID, advanceCoversTotal: true,
     });
-    expect(summarizeGrnPayments({ totalAmt: 1000, advancePaidAmt: 1000, payments: [], storedStatus: 'paid' }).status)
+    expect(summarizeGrnPayments({ totalAmt: 1000, advancePaidAmt: 1000, payments: [], storedStatus: 'Paid' }).status)
       .toBe(GrnPaymentStatus.PAID);
   });
 
@@ -120,9 +120,11 @@ describe('GRN payment validation', () => {
 });
 
 describe('who manages GRN payments', () => {
-  it('only users with the finalizer role', () => {
-    expect(GrnPaymentService.canManage({ id: 'u', roles: ['employee', 'finalizer'] })).toBe(true);
+  it('only Payment Managers (finalizers, admins and Super Admins no longer)', () => {
+    expect(GrnPaymentService.canManage({ id: 'u', roles: ['employee', 'payment_manager'] })).toBe(true);
+    expect(GrnPaymentService.canManage({ id: 'u', roles: ['employee', 'finalizer'] })).toBe(false);
     expect(GrnPaymentService.canManage({ id: 'u', roles: ['employee', 'admin'] })).toBe(false);
+    expect(GrnPaymentService.canManage({ id: 'u', roles: ['employee', 'super_admin', 'admin'] })).toBe(false);
     expect(GrnPaymentService.canManage({ id: 'u', roles: null })).toBe(false);
     expect(GrnPaymentService.canManage(undefined)).toBe(false);
   });

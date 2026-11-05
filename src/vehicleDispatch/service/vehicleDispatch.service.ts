@@ -60,6 +60,18 @@ import {
   pendingDispatchCounts,
   sourceDispatchStatuses,
 } from './dispatchRules';
+import { attachToTransaction, refreshTransactionOf, txnNoOf } from '../../transactions/transaction.core';
+import { TxnDocType } from '../../transactions/transaction.types';
+
+/**
+ * Approval-flow type of each register (client decision 2026-10-30): the creator's
+ * Procurement / Operation / Sale flow, one level (approver 1, no verifier).
+ */
+export const DISPATCH_APPROVAL_FLOW: Record<DispatchType, DocDefEnum> = {
+  [DispatchType.PURCHASE]: DocDefEnum.PROCUREMENT,
+  [DispatchType.STOCK_TRANSFER]: DocDefEnum.OPERATION,
+  [DispatchType.SALES]: DocDefEnum.SALE,
+};
 
 const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 const IST = 'Asia/Kolkata';
@@ -67,6 +79,12 @@ const NUMBER_PREFIX: Record<DispatchType, string> = {
   [DispatchType.PURCHASE]: 'VDP',
   [DispatchType.STOCK_TRANSFER]: 'VDT',
   [DispatchType.SALES]: 'VDS',
+};
+/** Transaction document type of each register's source (docs/transaction-tracking-plan.md §9.4). */
+const SOURCE_TXN_DOC: Record<DispatchType, TxnDocType> = {
+  [DispatchType.PURCHASE]: 'grn',
+  [DispatchType.STOCK_TRANSFER]: 'dc-transfer',
+  [DispatchType.SALES]: 'dc-customer',
 };
 const SOURCE_LABEL: Record<DispatchType, string> = {
   [DispatchType.PURCHASE]: 'GRN',
@@ -322,8 +340,8 @@ export class VehicleDispatchService {
   // ─── Create / update ──────────────────────────────────────────────────────
 
   async create(data: CreateVehicleDispatchDto): Promise<CreatedWithApproval<VehicleDispatch>> {
-    await this.checkApprovalFlowExists(data.requestedBy, DocumentTypeEnum.OPERATION);
     const dispatchType = assertDispatchType(data.dispatchType);
+    await this.checkApprovalFlowExists(data.requestedBy, DISPATCH_APPROVAL_FLOW[dispatchType]);
     const sourceId = blankToNull(data.sourceId);
     if (!sourceId) throw new AppError(400, `${SOURCE_LABEL[dispatchType]} is required`);
 
@@ -388,19 +406,28 @@ export class VehicleDispatchService {
       d.vehicleDispatchNo = await this.generateSerialNo(dispatchType, m);
       const created = await m.getRepository(VehicleDispatch).save(d);
       if (dispatchType === DispatchType.PURCHASE) await syncGrnVehicleDispatchFlag(m, sourceId);
+      // The dispatch joins its source's transaction (read from the source row, never the request).
+      created.txnNo = await attachToTransaction(m, {
+        txnNo: await txnNoOf(m, SOURCE_TXN_DOC[dispatchType], sourceId),
+        docType: 'dispatch',
+        docId: created.id,
+        docNo: created.vehicleDispatchNo ?? null,
+      });
       return created;
     });
 
     // Same order as before: the approval document is created after the business row.
     const document = await this.documentbService.createDocument({
       type: DocumentTypeEnum.VEHICLE_DISPATCH_REGISTER,
-      docDef: DocumentTypeEnum.OPERATION,
+      docDef: DISPATCH_APPROVAL_FLOW[dispatchType],
       status: DocumentStatus.HOLD,
       remarks: 'Document auto-created with Vehical_Dispatch',
       lastActionBy: { id: data.requestedBy },
       document_type_id: saved.id,
     });
     const assignment = await this.documentbService.startApprovalFlow(document.id);
+    // The approval row exists now: stage and approval id of the transaction step.
+    await refreshTransactionOf(this.vehicleDispatchRepository.manager, 'dispatch', saved.id);
 
     await this.invalidateCache();
     if (dispatchType === DispatchType.PURCHASE) await this.cacheService.invalidatePattern('grn:numbers:*');
@@ -439,6 +466,14 @@ export class VehicleDispatchService {
       await this.applyTransport(m, d, data, false);
       this.applyMovement(d, data, false);
       await m.getRepository(VehicleDispatch).save(d);
+      // The source cannot change; re-attach so an older dispatch picks up its source's number.
+      const sourceId = d.grn?.id ?? (await m.query(`SELECT delivery_challan_id::text AS id FROM dispatch WHERE id = $1`, [id]))[0]?.id ?? null;
+      const sourceTxn = sourceId ? await txnNoOf(m, SOURCE_TXN_DOC[d.dispatchType], sourceId) : null;
+      if (sourceTxn && sourceTxn !== d.txnNo) {
+        d.txnNo = await attachToTransaction(m, { txnNo: sourceTxn, docType: 'dispatch', docId: id, docNo: d.vehicleDispatchNo ?? null });
+      } else {
+        await refreshTransactionOf(m, 'dispatch', id);
+      }
     });
 
     try {
@@ -492,6 +527,7 @@ export class VehicleDispatchService {
       d.arrivedAt = new Date();
       d.arrivedBy = { id: userId } as any;
       await this.vehicleDispatchRepository.save(d);
+      await refreshTransactionOf(this.vehicleDispatchRepository.manager, 'dispatch', id);
       await this.invalidateCache(id);
     }
     return d;
@@ -539,6 +575,7 @@ export class VehicleDispatchService {
       sourceId: d.grn?.id ?? d.deliveryChallanNo?.id ?? null,
       dispatchType: d.dispatchType ?? null,
       vehicleDispatchNo: d.vehicleDispatchNo ?? null,
+      txnNo: d.txnNo ?? null,
       date: d.date ?? null,
       batchNo: d.batchNo ?? null,
       sourceNo: this.sourceNo(d),
@@ -626,6 +663,7 @@ export class VehicleDispatchService {
       dispatchType: d.dispatchType,
       sourceId: display.sourceId || null,
       sourceNo: display.sourceNo,
+      txnNo: d.txnNo ?? null,
       date: d.date ?? null,
       batchNo: d.batchNo ?? null,
       transporterId: d.transporter?.id ?? null,
@@ -762,6 +800,7 @@ export class VehicleDispatchService {
       id: d.id,
       dispatchType: d.dispatchType ?? null,
       vehicleDispatchNo: d.vehicleDispatchNo ?? null,
+      txnNo: d.txnNo ?? null,
       date: d.date ?? null,
       batchNo: d.batchNo ?? null,
       sourceNo: stored.sourceNo,
@@ -847,6 +886,7 @@ export class VehicleDispatchService {
     sixMonthsFromNow.setHours(0, 0, 0, 0);
     dispatch.deletionScheduledAt = sixMonthsFromNow;
     await this.vehicleDispatchRepository.save(dispatch);
+    await refreshTransactionOf(this.vehicleDispatchRepository.manager, 'dispatch', id);
 
     await this.invalidateCache(id);
     return { No: dispatch.vehicleDispatchNo };
@@ -877,6 +917,7 @@ export class VehicleDispatchService {
       await this.vehicleDispatchRepository.softDelete(vehicalDispatch.id);
       await this.vehicleDispatchRepository.update(vehicalDispatch.id, { isDeleted: true } as any);
       await syncGrnVehicleDispatchFlagForDispatch(this.vehicleDispatchRepository.manager, vehicalDispatch.id);
+      await refreshTransactionOf(this.vehicleDispatchRepository.manager, 'dispatch', vehicalDispatch.id);
       success.push({ id, No: vehicalDispatch.vehicleDispatchNo });
     }
     const message = `Deletion completed. Success: ${success.length}, Failed: ${failed.length}`;

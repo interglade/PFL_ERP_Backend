@@ -1,3 +1,4 @@
+import { refreshTransactionOf } from '../../transactions/transaction.core';
 import { inject, injectable } from "inversify";
 import { TYPES } from "../../types";
 import { DealSlipRepository } from "../repository/dealSlip.repository";
@@ -127,6 +128,7 @@ export class DealSlipService {
           createdDate,
           createdTime,
           dealSlipNo: dealSlip.dealSlipNo,
+          txnNo: dealSlip.txnNo ?? null,
         };
       });
 
@@ -198,6 +200,7 @@ export class DealSlipService {
           createdDate,
           createdTime,
           dealSlipNo: dealSlip.dealSlipNo,
+          txnNo: dealSlip.txnNo ?? null,
           rfpa: dealSlip.rfpa?.rfpaId || null,
           ...this.formatRfpaDetails(dealSlip, 'view'),
       };
@@ -225,6 +228,7 @@ export class DealSlipService {
         response = {
             id: dealSlip.id,
             dealSlipNo: dealSlip.dealSlipNo,
+            txnNo: dealSlip.txnNo ?? null,
             rfpa: dealSlip.rfpa?.rfpaId || null,
             lotNo: dealSlip.lotNo,
             loadingLocation: dealSlip.loadingLocation,
@@ -600,6 +604,7 @@ public async deleteDealSlip(dealSlipId: string): Promise<{ dealSlipNo: string } 
   sixMonthsFromNow.setHours(0, 0, 0, 0);
 
   await this.dealSlipRepository.update({ id: dealSlipId }, { deletionScheduledAt: sixMonthsFromNow } as any);
+  await refreshTransactionOf(this.dataSource.manager, 'deal-slip', dealSlipId);
   await this.invalidateDealSlipCache(dealSlipId);
   return { dealSlipNo: dealSlip.dealSlipNo };
 }
@@ -652,6 +657,7 @@ public async deleteDealSlip(dealSlipId: string): Promise<{ dealSlipNo: string } 
         remark: rd.remark || null,
         specialRequest: rd.specialRequest || null,
         dealSlipNo: rd.dealSlipNo || null,
+        txnNo: rd.txnNo ?? null,
       };
     });
 
@@ -743,6 +749,7 @@ public async getRecycleBinDealSlips(queryOptions: PaginationOptions, userId: str
         dealSlipCreatedAt: rd.dealSlipCreatedAt || null,
         dealSlipApprovedAt: rd.dealSlipApprovedAt || null,
         dealSlipNo: rd.dealSlipNo || null,
+        txnNo: rd.txnNo ?? null,
       };
     });
 
@@ -824,6 +831,7 @@ public async getDealSlipByIdForView(docid: string, userId: string, isAdmin: bool
       dealSlipCreatedAt: dealSlip.dealSlipCreatedAt,
       dealSlipApprovedAt: dealSlip.dealSlipApprovedAt,
       dealSlipNo: dealSlip.dealSlipNo,
+      txnNo: dealSlip.txnNo ?? null,
       rfpa: dealSlip.rfpa?.rfpaId || null,
       ...this.formatRfpaDetails(dealSlip, 'view'),
     };
@@ -867,6 +875,8 @@ public async deleteMultipleDealSlips(ids: string[]): Promise<BulkDeleteDealSlipR
     .set({ isDeleted: true } as any)
     .whereInIds(ids)
     .execute();
+
+  for (const id of ids) await refreshTransactionOf(this.dataSource.manager, 'deal-slip', id);
  
 
   await Promise.all([

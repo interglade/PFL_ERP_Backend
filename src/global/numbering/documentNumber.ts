@@ -34,7 +34,8 @@ export type NumberSeries =
   | { table: 'packing_material_payment'; column: 'voucherNo' }
   | { table: 'transport_payment_voucher'; column: 'voucherNo' }
   | { table: 'stock_adjustment'; column: 'adjustment_no' }
-  | { table: 'stock_repack'; column: 'repack_no' };
+  | { table: 'stock_repack'; column: 'repack_no' }
+  | { table: 'transactions'; column: 'txn_no' };
 
 export const SERIES = {
   rfpa: { table: 'rfpa', column: 'rfpaId' },
@@ -54,6 +55,7 @@ export const SERIES = {
   transportVoucher: { table: 'transport_payment_voucher', column: 'voucherNo' },
   stockAdjustment: { table: 'stock_adjustment', column: 'adjustment_no' },
   stockRepack: { table: 'stock_repack', column: 'repack_no' },
+  transaction: { table: 'transactions', column: 'txn_no' },
 } as const satisfies Record<string, NumberSeries>;
 
 /** Escapes a literal for use inside a POSIX regular expression. */
@@ -119,6 +121,21 @@ export async function nextDocumentNumber(
 ): Promise<string> {
   const serial = await nextSerial(manager, `${series.table}:${prefix}`, series, `^${escapeRegex(prefix)}([0-9]+)$`);
   return `${prefix}${String(serial).padStart(width, '0')}`;
+}
+
+/** Delivery challan types: C = Customer DC, O = Other DC, S = Stock transfer DC. */
+export type DcTypeCode = 'C' | 'O' | 'S';
+
+/**
+ * `DC-<yyyy>-<type><5-digit serial>`, e.g. `DC-2026-C00001`. Each type has its
+ * own serial, and the year in the prefix restarts it every 1 January.
+ */
+export async function nextDeliveryChallanNo(
+  manager: EntityManager,
+  type: DcTypeCode,
+  now: Date = new Date(),
+): Promise<string> {
+  return nextDocumentNumber(manager, SERIES.deliveryChallan, `DC-${now.getFullYear()}-${type}`, 5);
 }
 
 /** `yyyyMMdd` of today (server time, as the existing numbers use). */

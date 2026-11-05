@@ -52,7 +52,7 @@ describe('grnLinks.sql helpers', () => {
     expect(latest).toContain(`x.type::text = 'grn'`);
     expect(latest).toContain('x."deletedAt" IS NULL');
     expect(latest).toContain('ORDER BY x."createdAt" DESC LIMIT 1');
-    expect(notRejectedSql('g.id', 'grn')).toMatch(/^COALESCE\(.*, ''\) <> 'REJECT'$/);
+    expect(notRejectedSql('g.id', 'grn')).toMatch(/^COALESCE\(.*, ''\) <> 'Rejected'$/);
   });
 });
 
@@ -62,24 +62,24 @@ describe('deal slip -> GRN rule', () => {
     expect(sql).toContain('dsg.deal_slip_id = (ds.id)');
     expect(sql).toContain('dsg."isDeleted" = false AND dsg."deletedAt" IS NULL');
     expect(sql).toContain('dsg.id <> $2::uuid');
-    expect(sql).toContain(`<> 'REJECT'`);
+    expect(sql).toContain(`<> 'Rejected'`);
     expect(liveGrnForDealSlipExistsSql('ds.id')).not.toContain('<> $2');
   });
 
   it('available = approved (COMPLETE) and unused', () => {
     const sql = dealSlipAvailableSql('ds');
-    expect(sql).toContain(`= 'COMPLETE'`);
+    expect(sql).toContain(`= 'Complete'`);
     expect(sql).toContain(`type::text = 'deal-slip'`);
     expect(sql).toContain('NOT EXISTS (SELECT 1 FROM grns dsg');
   });
 
   it.each([
     [undefined, 404, /not found/],
-    [{ deal_slip_no: 'DL1', live: false, status: 'COMPLETE', used_by_grn_no: null }, 400, /deleted/],
-    [{ deal_slip_no: 'DL1', live: true, status: 'hold', used_by_grn_no: null }, 400, /not approved yet/],
-    [{ deal_slip_no: 'DL1', live: true, status: 'REJECT', used_by_grn_no: null }, 400, /rejected/],
+    [{ deal_slip_no: 'DL1', live: false, status: 'Complete', used_by_grn_no: null }, 400, /deleted/],
+    [{ deal_slip_no: 'DL1', live: true, status: 'Hold', used_by_grn_no: null }, 400, /not approved yet/],
+    [{ deal_slip_no: 'DL1', live: true, status: 'Rejected', used_by_grn_no: null }, 400, /rejected/],
     [{ deal_slip_no: 'DL1', live: true, status: null, used_by_grn_no: null }, 400, /not approved yet/],
-    [{ deal_slip_no: 'DL1', live: true, status: 'COMPLETE', used_by_grn_no: 'PFL-00007' }, 409, /already used by GRN PFL-00007/],
+    [{ deal_slip_no: 'DL1', live: true, status: 'Complete', used_by_grn_no: 'PFL-00007' }, 409, /already used by GRN PFL-00007/],
   ])('blocks %#', (row, status, message) => {
     const block = dealSlipGrnBlockReason(row as any);
     expect(block?.status).toBe(status);
@@ -87,18 +87,18 @@ describe('deal slip -> GRN rule', () => {
   });
 
   it('lets an approved, unused deal slip through', () => {
-    expect(dealSlipGrnBlockReason({ deal_slip_no: 'DL1', live: true, status: 'COMPLETE', used_by_grn_no: null })).toBeNull();
+    expect(dealSlipGrnBlockReason({ deal_slip_no: 'DL1', live: true, status: 'Complete', used_by_grn_no: null })).toBeNull();
   });
 
   it('locks, then checks the slip excluding the edited GRN', async () => {
-    const manager = fakeManager([[{ deal_slip_no: 'DL1', live: true, status: 'COMPLETE', used_by_grn_no: null }]]);
+    const manager = fakeManager([[{ deal_slip_no: 'DL1', live: true, status: 'Complete', used_by_grn_no: null }]]);
     await expect(assertDealSlipUsableForGrn(manager as any, SLIP, GRN)).resolves.toBeUndefined();
     expect(manager.calls[0].sql).toContain('pg_advisory_xact_lock');
     expect(manager.calls[1].params).toEqual([SLIP, GRN]);
   });
 
   it('rejects a used deal slip with 409 and a bad id with 400 (no query)', async () => {
-    const manager = fakeManager([[{ deal_slip_no: 'DL1', live: true, status: 'COMPLETE', used_by_grn_no: 'G1' }]]);
+    const manager = fakeManager([[{ deal_slip_no: 'DL1', live: true, status: 'Complete', used_by_grn_no: 'G1' }]]);
     await expect(assertDealSlipUsableForGrn(manager as any, SLIP)).rejects.toMatchObject({ statusCode: 409 });
     const untouched = fakeManager([]);
     await expect(assertDealSlipUsableForGrn(untouched as any, 'nope')).rejects.toMatchObject({ statusCode: 400 });
@@ -122,7 +122,7 @@ describe('GRN -> voucher rule', () => {
   });
 
   it('maps exactly one legacy "created=false" flag to its kind', () => {
-    expect(voucherKindFromLegacyFlags({ isPMPVoucherCreated: false, overAllStatus: 'COMPLETE' })).toBe('pmp');
+    expect(voucherKindFromLegacyFlags({ isPMPVoucherCreated: false, overAllStatus: 'Complete' })).toBe('pmp');
     expect(voucherKindFromLegacyFlags({ isMCVoucherCreated: 'false' })).toBe('mc');
     expect(voucherKindFromLegacyFlags({ isMCVoucherCreated: true })).toBeUndefined();
     expect(voucherKindFromLegacyFlags({ isMCVoucherCreated: false, isTPVoucherCreated: false })).toBeUndefined();
@@ -139,7 +139,7 @@ describe('GRN -> voucher rule', () => {
     expect(sql).toContain(`FROM ${table} vg_${kind}`);
     expect(sql).toContain(`vg_${kind}.grn_id = (grn.id)`);
     expect(sql).toContain(`type::text = '${docType}'`);
-    expect(sql).toContain(`<> 'REJECT'`);
+    expect(sql).toContain(`<> 'Rejected'`);
   });
 
   it('builds a clear duplicate message', () => {

@@ -38,7 +38,7 @@ describe('Customer DC sale from GRN: copied values', () => {
   it('lists only direct-to-customer, approved GRNs with an approved purchase dispatch and no live DC', () => {
     const sql = directSaleEligibleSql('g');
     expect(sql).toContain(`g."deliveryMode"::text = 'direct-to-customer'`);
-    expect(sql).toContain(`= 'COMPLETE'`);
+    expect(sql).toContain(`= 'Complete'`);
     expect(sql).toContain(`apd."dispatchType"::text = 'purchase'`);
     expect(sql).toContain('NOT EXISTS (SELECT 1 FROM delivery_challan_purchase ldc');
     expect(directSaleEligibleSql('g', `'dc-1'`)).toContain(`'dc-1'::uuid`);

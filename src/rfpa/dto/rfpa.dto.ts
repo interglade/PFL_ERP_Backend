@@ -124,6 +124,8 @@ export interface RfpaListItemDto {
   createdDate: string | null;
   createdTime: string | null;
   rfpaId: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   remark: string | null;
   source: Source | null;
   deliveryReceivingPerson: string | null;
@@ -182,6 +184,8 @@ export interface RfpaViewResponseDto {
 
 export interface RfpaUpdateFormDto {
   rfpaId: string;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   createdDate: string | null;
   createdTime: string | null;
@@ -279,6 +283,8 @@ export interface RfpaDocumentViewResponseDto {
 
   // ── RFPA fields ───────────────────────────────────────────────────────────
   rfpaId: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   remark: string | null;
   specialReq: string | null;
   otherPurchaseLoc: string | null;

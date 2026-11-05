@@ -1,3 +1,5 @@
+import { Role } from '../employee/entity/user.entity';
+import { requireRole } from '../middleware/requireRole';
 import { controller, httpDelete, httpPatch, request, requestParam, response } from "inversify-express-utils";
 import { Response,Request,NextFunction } from "express";
 import { deserializeUser, requireUser } from "../middleware/deserializeUser";
@@ -5,7 +7,7 @@ import { inject } from "inversify";
 import { TYPES } from "../types";
 import { SuperAdminService } from "./superadmin.service";
 
-@controller("/super-admin", deserializeUser, requireUser)
+@controller("/super-admin", deserializeUser, requireUser, requireRole(Role.SUPER_ADMIN))
 export class SuperAdminController { 
 
 

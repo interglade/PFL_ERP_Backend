@@ -31,7 +31,7 @@ export async function loadPeople(ds: DataSource, ids?: string[]): Promise<Map<st
   const rows: any[] = await ds.query(
     `SELECT e.id, e."firstName", e."middleName", e."lastName", e.username,
             e.roles::text[] AS roles, e.department, e."primaryMobNo" AS phone,
-            (e.status::text = 'ACTIVE' AND e."isDeleted" = false) AS active,
+            (e.status::text = 'Active' AND e."isDeleted" = false) AS active,
             EXISTS (SELECT 1 FROM workflow_hierarchy h
                      WHERE h.ancestor_id = e.id AND h.depth > 0 AND h."isDeleted" = false) AS "isLeader"
        FROM employees e

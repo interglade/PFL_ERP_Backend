@@ -1,6 +1,7 @@
 import { resolveDcLines } from '../../deliveryChallans/deliverychllan/service/dcStock';
 import { allocationRequestsByLine, releaseSecondSaleStock, reserveSecondSaleStock } from '../../inventoryStock/batch/batchDocuments';
 import { priceDcLines } from '../../deliveryChallans/deliverychllan/service/dcPricing';
+import { openTransaction, refreshTransactionOf } from '../../transactions/transaction.core';
 import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from "inversify";
 import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
@@ -24,6 +25,10 @@ import { formatDateTime } from "../../utils/dateUtils";
 import AppError from "../../utils/appError";
 import { SecondSaleProduct } from "../entity/secondSaleProduct.entity";
 import { BulkDeleteResultDto, DeleteResultDto } from "../../global/general.dto";
+import {
+  resolveWalkInCustomer, splitWalkInCustomer, walkInAddressColumns, walkInCustomerColumns,
+  walkInCustomerForForm, walkInCustomerForList,
+} from "../../global/walkInCustomer/walkInCustomer";
 
 
 
@@ -152,9 +157,9 @@ const secondSale = this.secondSaleRepository.create({
   remarks:            secondSaleData.remarks,
   companyName:        secondSaleData.companyName       ? { id: secondSaleData.companyName }       : null,
   location:           secondSaleData.location          ? { id: secondSaleData.location }          : null,
-  deliveryChallanNo:  secondSaleData.deliveryChallanNo ? { id: secondSaleData.deliveryChallanNo } : null,
-  customerAddress:    secondSaleData.customerAddress  ,
   secondSaleProducts: secondSaleData.secondSaleProducts ?? [],
+  // Customer type, alt contact, PAN, billing / shipping address (six columns each), place of supply
+  ...(await resolveWalkInCustomer(queryRunner.manager, secondSaleData as Record<string, any>)),
 } as DeepPartial<SecondSale>);
 
 // Save through queryRunner so it's part of the transaction
@@ -169,6 +174,19 @@ const savedSecondSale = await queryRunner.manager.save(SecondSale, secondSale);
         );
       }
 console.log("savedsecodsale...................",savedSecondSale);
+      // Transaction number (docs/transaction-tracking-plan.md §9.4): a Second Sale starts its own (SS);
+      // the party is the walk-in buyer named on it.
+      {
+        const saved = (Array.isArray(savedSecondSale) ? savedSecondSale[0] : savedSecondSale) as SecondSale;
+        saved.txnNo = await openTransaction(queryRunner.manager, {
+          type: 'second-sale',
+          origin: { docType: 'second-sale', docId: saved.id, docNo: saved.secondSaleNo ?? null },
+          companyId: secondSaleData.companyName ? String(secondSaleData.companyName) : null,
+          locationId: secondSaleData.location ? String(secondSaleData.location) : null,
+          partyType: 'walk-in',
+          partyName: secondSaleData.customerName ?? null,
+        });
+      }
       // 6. Create associated document
       const document = await this.documentbService.createDocument({
         type: DocumentTypeEnum.SECOND_SALE,
@@ -406,9 +424,12 @@ console.log(document.id)
           .createQueryBuilder('ss')
           .leftJoin('ss.companyName', 'companyName')
           .leftJoin('ss.location', 'location')
+          .leftJoin('ss.billingAddress', 'billingAddress')
+          .leftJoin('ss.shippingAddress', 'shippingAddress')
           .select([
-            'ss.id', 'ss.secondSaleNo', 'ss.saleDate', 'ss.customerName',
+            'ss.id', 'ss.secondSaleNo', 'ss.txnNo', 'ss.saleDate', 'ss.customerName',
             'ss.customerContactNo', 'ss.customerEmail', 'ss.reasonForSale',
+            ...walkInCustomerColumns('ss'), ...walkInAddressColumns('billingAddress'), ...walkInAddressColumns('shippingAddress'),
             'ss.totalNetWeight', 'ss.totalGrossWeight', 'ss.totalAmt',
             'ss.totalAmtInWords', 'ss.paidAmount', 'ss.paymentMode',
             'ss.pendingAmt', 'ss.remarks',
@@ -438,10 +459,12 @@ console.log(document.id)
             createdDate:      createdDate ?? null,
             createdTime:      createdTime ?? null,
             secondSaleNo:     rd.secondSaleNo ?? null,
+            txnNo:            rd.txnNo ?? null,
             saleDate:         rd.saleDate ?? null,
             customerName:     rd.customerName ?? null,
             customerContactNo: rd.customerContactNo ?? null,
             customerEmail:    rd.customerEmail ?? null,
+            ...walkInCustomerForList(rd),
             reasonForSale:    rd.reasonForSale ?? null,
             totalNetWeight:   rd.totalNetWeight ?? null,
             totalGrossWeight: rd.totalGrossWeight ?? null,
@@ -514,9 +537,9 @@ console.log(document.id)
       .createQueryBuilder('secondSale')
       .leftJoin('secondSale.secondSaleProducts', 'secondSaleProducts')
       .leftJoin('secondSale.companyName', 'companyName')
-      .leftJoin('secondSale.deliveryChallanNo', 'deliveryChallanNo')
       .leftJoin('secondSale.location', 'location')
-      .leftJoin('secondSale.customerAddress', 'customerAddress')
+      .leftJoin('secondSale.billingAddress', 'billingAddress')
+      .leftJoin('secondSale.shippingAddress', 'shippingAddress')
       .leftJoin('secondSaleProducts.productName', 'product')
       .leftJoin('secondSaleProducts.variant', 'variant')
       .leftJoin('secondSaleProducts.saleUoM', 'saleUoM')
@@ -525,13 +548,12 @@ console.log(document.id)
       .select([
         'secondSale.id', 'secondSale.saleDate', 'secondSale.customerName',
         'secondSale.customerContactNo', 'secondSale.customerEmail',
-        'secondSale.reasonForSale', 'secondSale.secondSaleNo',
+        ...walkInCustomerColumns('secondSale'), ...walkInAddressColumns('billingAddress'), ...walkInAddressColumns('shippingAddress'),
+        'secondSale.reasonForSale', 'secondSale.secondSaleNo', 'secondSale.txnNo',
         'secondSale.totalNetWeight', 'secondSale.totalGrossWeight', 'secondSale.totalAmt',
         'secondSale.totalAmtInWords', 'secondSale.paidAmount', 'secondSale.paymentMode',
         'secondSale.pendingAmt', 'secondSale.remarks', 'secondSale.createdAt',
-        'companyName.name', 'location.name', 'deliveryChallanNo.challanNo',
-        'customerAddress.id', 'customerAddress.address1', 'customerAddress.address2',
-        'customerAddress.city', 'customerAddress.state', 'customerAddress.location', 'customerAddress.pincode',
+        'companyName.name', 'location.name',
         'secondSaleProducts.id', 'secondSaleProducts.quantity', 'secondSaleProducts.unitPrice',
         'secondSaleProducts.amount', 'secondSaleProducts.grossWeight',
         'secondSaleProducts.packagingMaterialWeight', 'secondSaleProducts.netWeight',
@@ -546,7 +568,6 @@ console.log(document.id)
     if (!secondSale) throw new AppError(404, 'Second Sale not found');
 
     const { createdDate, createdTime } = formatDateTime(secondSale.createdAt);
-    const addr = secondSale.customerAddress;
 
     const result:SecondSaleDetailDto = {
       id: secondSale.id,
@@ -556,19 +577,16 @@ console.log(document.id)
       approvalSummary: document.approvalSummary ?? null,
       companyName: secondSale.companyName?.name ?? null,
       location: secondSale.location?.name ?? null,
-      deliveryChallanNo: secondSale.deliveryChallanNo?.challanNo ?? null,
       saleDate: secondSale.saleDate ?? null,
       // createdDate,
       // createdTime,
       customerName: secondSale.customerName ?? null,
       customerContactNo: secondSale.customerContactNo ?? null,
       customerEmail: secondSale.customerEmail ?? null,
-      customerAddress: addr ? {
-        id: addr.id, address1: addr.address1, address2: addr.address2,
-        city: addr.city, state: addr.state, location: addr.location, pincode: addr.pincode,
-      } : null,
+      ...walkInCustomerForForm(secondSale),
       reasonForSale: secondSale.reasonForSale ?? null,
       secondSaleNo: secondSale.secondSaleNo ?? null,
+      txnNo: secondSale.txnNo ?? null,
       totalNetWeight: secondSale.totalNetWeight ?? null,
       totalGrossWeight: secondSale.totalGrossWeight ?? null,
       totalAmt: secondSale.totalAmt ?? null,
@@ -613,9 +631,9 @@ console.log(document.id)
       .createQueryBuilder('secondSale')
       .leftJoin('secondSale.secondSaleProducts', 'secondSaleProducts')
       .leftJoin('secondSale.companyName', 'companyName')
-      .leftJoin('secondSale.deliveryChallanNo', 'deliveryChallanNo')
       .leftJoin('secondSale.location', 'location')
-      .leftJoin('secondSale.customerAddress', 'customerAddress')
+      .leftJoin('secondSale.billingAddress', 'billingAddress')
+      .leftJoin('secondSale.shippingAddress', 'shippingAddress')
       .leftJoin('secondSaleProducts.productName', 'product')
       .leftJoin('secondSaleProducts.variant', 'variant')
       .leftJoin('secondSaleProducts.saleUoM', 'saleUoM')
@@ -624,13 +642,12 @@ console.log(document.id)
       .select([
         'secondSale.id', 'secondSale.saleDate', 'secondSale.customerName',
         'secondSale.customerContactNo', 'secondSale.customerEmail',
-        'secondSale.reasonForSale', 'secondSale.secondSaleNo',
+        ...walkInCustomerColumns('secondSale'), ...walkInAddressColumns('billingAddress'), ...walkInAddressColumns('shippingAddress'),
+        'secondSale.reasonForSale', 'secondSale.secondSaleNo', 'secondSale.txnNo',
         'secondSale.totalNetWeight', 'secondSale.totalGrossWeight', 'secondSale.totalAmt',
         'secondSale.totalAmtInWords', 'secondSale.paidAmount', 'secondSale.paymentMode',
         'secondSale.pendingAmt', 'secondSale.remarks', 'secondSale.createdAt',
-        'companyName.id', 'location.id', 'deliveryChallanNo.id',
-        'customerAddress.id', 'customerAddress.address1', 'customerAddress.address2',
-        'customerAddress.city', 'customerAddress.state', 'customerAddress.location', 'customerAddress.pincode',
+        'companyName.id', 'location.id',
         'secondSaleProducts.id', 'secondSaleProducts.quantity', 'secondSaleProducts.unitPrice',
         'secondSaleProducts.amount', 'secondSaleProducts.grossWeight',
         'secondSaleProducts.packagingMaterialWeight', 'secondSaleProducts.netWeight',
@@ -644,13 +661,11 @@ console.log(document.id)
     if (!secondSale) throw new AppError(404, 'Second Sale not found');
 
     const { createdDate, createdTime } = formatDateTime(secondSale.createdAt);
-    const addr = secondSale.customerAddress;
 
     const formatResponse:SecondSaleDetailDto = {
       id: secondSale.id,
       companyName: secondSale.companyName?.id ?? null,
       location: secondSale.location?.id ?? null,
-      deliveryChallanNo: secondSale.deliveryChallanNo?.id ?? null,
       saleDate: secondSale.saleDate ?? null,
       // createdDate,
       // createdTime,
@@ -659,10 +674,8 @@ console.log(document.id)
       customerEmail: secondSale.customerEmail ?? null,
       reasonForSale: secondSale.reasonForSale ?? null,
       secondSaleNo: secondSale.secondSaleNo ?? null,
-      customerAddress: addr ? {
-        id: addr.id, address1: addr.address1, address2: addr.address2,
-        city: addr.city, state: addr.state, location: addr.location, pincode: addr.pincode,
-      } : null,
+      txnNo: secondSale.txnNo ?? null,
+      ...walkInCustomerForForm(secondSale),
       totalNetWeight: secondSale.totalNetWeight ?? null,
       totalGrossWeight: secondSale.totalGrossWeight ?? null,
       totalAmt: secondSale.totalAmt ?? null,
@@ -704,6 +717,7 @@ console.log(document.id)
 
     const secondSale = await this.secondSaleRepository.findOne({
       where: { id },
+      relations: ['billingAddress', 'shippingAddress'],
     });
     
     if (!secondSale) {
@@ -722,8 +736,12 @@ console.log(document.id)
     }
 
     // Update the Second Sale entity; its lines and their batch hold change together.
-    Object.assign(secondSale, secondSaleData);
+    delete (secondSaleData as Record<string, any>).txnNo; // the transaction number is server-owned
+    // Customer details are saved through resolveWalkInCustomer (addresses in their own rows).
+    const { customer, rest } = splitWalkInCustomer(secondSaleData as Record<string, any>);
+    Object.assign(secondSale, rest);
     const updatedSecondSale = await this.AppDataSource.transaction(async (manager) => {
+      Object.assign(secondSale, await resolveWalkInCustomer(manager, customer, secondSale));
       const saved = await manager.save(secondSale);
       const lines = (secondSaleData as { secondSaleProducts?: unknown[] }).secondSaleProducts;
       if (Array.isArray(lines)) {
@@ -770,6 +788,7 @@ console.log(document.id)
     await this.secondSaleRepository.save(secondSale);
     // Scheduled for deletion: it no longer holds returned stock.
     await releaseSecondSaleStock(this.AppDataSource.manager, secondSale.id);
+    await refreshTransactionOf(this.AppDataSource.manager, 'second-sale', secondSale.id);
     await this.invalidateCache(id);
 
     if(!secondSale.secondSaleNo){
@@ -806,6 +825,8 @@ console.log(document.id)
       await this.secondSaleRepository.update(secondSale.id, { isDeleted: true } as any);
       // Whatever it held goes back to returned stock.
       await releaseSecondSaleStock(this.AppDataSource.manager, secondSale.id);
+      // The second sale's transaction is cancelled (its origin is gone).
+      await refreshTransactionOf(this.AppDataSource.manager, 'second-sale', secondSale.id);
 
       if(secondSale.secondSaleNo)
       success.push({id,No:secondSale.secondSaleNo})

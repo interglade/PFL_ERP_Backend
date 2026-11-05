@@ -1,3 +1,7 @@
+import { protectBody } from '../../middleware/protectBody';
+import { checkPermission } from '../../middleware/checkPermission';
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -16,6 +20,7 @@ import { TYPES } from '../../types';
 import AppError from '../../utils/appError';
 import { Status } from '../../utils/status.enum';
 import { ControllerLogger } from '../../utils/controllerLogger';
+import { uploadSingle } from '../../middleware/uploadsingle.middleware';
 import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
 import { readIds, readListOptions } from '../../transport/transport.query';
 import { VehicleService } from '../service/vehicle.service';
@@ -28,7 +33,65 @@ export class VehicleController {
     private readonly vehicleService: VehicleService,
   ) {}
 
-  @httpPost('/')
+  // ─── Excel (docs/master-data-excel-plan.md Phase 7) ───────────────────────
+
+  @httpGet('/export/excel', checkPermission('vehicles', 'export'))
+  public async exportExcel(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const file = await this.vehicleService.exportToExcel(res.locals.user.id);
+      ControllerLogger.logList('Vehicle Excel export', req, res);
+      res.status(200).json({
+        status: 'success',
+        message: `${file.rowCount} vehicle(s) exported successfully`,
+        data: { downloadUrl: file.downloadUrl, fileName: file.fileName, totalRecords: file.rowCount },
+      });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Excel export', err, req, res);
+      next(err);
+    }
+  }
+
+  @httpGet('/download/template', checkPermission('vehicles', 'create'))
+  public async downloadExcelTemplate(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const file = await this.vehicleService.buildExcelTemplate();
+      ControllerLogger.logList('Vehicle Excel template', req, res);
+      res.status(200).json({
+        status: 'success',
+        message: 'Template ready',
+        data: { downloadUrl: file.downloadUrl, fileName: file.fileName, totalRecords: 0 },
+      });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Excel template', err, req, res);
+      next(err);
+    }
+  }
+
+  @httpPost('/upload', checkPermission('vehicles', 'create'), uploadSingle.single('file'))
+  public async uploadExcel(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const fileUrl = (req.file as any)?.location as string | undefined;
+      if (!fileUrl) return next(new AppError(400, 'No file uploaded'));
+
+      const summary = await this.vehicleService.importFromExcel(fileUrl, res.locals.user.id);
+      ControllerLogger.logSuccess('Vehicle Excel uploaded', 'bulk', req, res);
+      res.status(200).json({
+        status: 'success',
+        message:
+          `${summary.created} vehicle(s) imported` +
+          (summary.drafted ? `, ${summary.drafted} saved as draft` : '') +
+          (summary.updated ? `, ${summary.updated} draft(s) completed` : '') +
+          (summary.skipped.length ? `, ${summary.skipped.length} skipped` : '') +
+          (summary.failed.length ? `, ${summary.failed.length} failed` : ''),
+        data: summary,
+      });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Excel upload', err, req, res);
+      next(err);
+    }
+  }
+
+  @httpPost('/', checkPermission('vehicles', 'create'))
   public async createVehicle(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const vehicle = await this.vehicleService.create(req.body, res.locals.user.id);
@@ -45,7 +108,7 @@ export class VehicleController {
     }
   }
 
-  @httpGet('/')
+  @httpGet('/', checkPermission('vehicles', 'view'))
   public async getAllVehicles(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const options = readListOptions(req, VEHICLE_FILTERS);
@@ -94,7 +157,7 @@ export class VehicleController {
     }
   }
 
-  @httpGet('/view/:id')
+  @httpGet('/view/:id', checkPermission('vehicles', 'view'))
   public async getVehicleForView(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -112,7 +175,7 @@ export class VehicleController {
     }
   }
 
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkPermission('vehicles', 'edit'))
   public async getVehicleForUpdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -131,7 +194,7 @@ export class VehicleController {
   }
 
   /** Submits a draft (pending, or approved straight away for an admin / verifier). */
-  @httpPatch('/submit/:id')
+  @httpPatch('/submit/:id', checkPermission('vehicles', 'create'))
   public async submitVehicle(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -152,7 +215,7 @@ export class VehicleController {
     }
   }
 
-  @httpPatch('/approve/:id')
+  @httpPatch('/approve/:id', requireRole(Role.ADMIN, Role.VERIFIER))
   public async approveVehicle(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -174,7 +237,7 @@ export class VehicleController {
     }
   }
 
-  @httpPut('/:id')
+  @httpPut('/:id', checkPermission('vehicles', 'edit'), protectBody)
   public async updateVehicle(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -195,7 +258,7 @@ export class VehicleController {
     }
   }
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', requireRole(Role.SUPER_ADMIN))
   public async deleteMultipleVehicles(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
     try {
       const ids = readIds(req);
@@ -212,7 +275,7 @@ export class VehicleController {
     }
   }
 
-  @httpDelete('/:id')
+  @httpDelete('/:id', requireRole(Role.SUPER_ADMIN))
   public async deleteVehicle(
     @requestParam('id') id: string,
     @request() req: Request,

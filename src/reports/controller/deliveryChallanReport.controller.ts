@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import {
   controller,
   httpPost,
@@ -35,7 +36,7 @@ export class DeliveryChallanReportController {
     this.bucketName = process.env.DO_SPACES_BUCKET || 'your-bucket-name';
   }
 
-@httpGet('/download')
+@httpGet('/download', checkPermission('sales-report', 'export'))
   async exportReport(@request() req: Request,
     @response() res: Response,
     @next() next: NextFunction,) {

@@ -222,6 +222,7 @@ const startServer = async () => {
           return res.status(err.statusCode).json({
             status: err.status || 'error',
             message: err.message || 'Internal Server Error',
+            ...(err.details !== undefined ? { data: err.details } : {}),
           });
         }
         //console.log(err);

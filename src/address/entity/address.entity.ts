@@ -4,7 +4,6 @@ import { Branches } from '../../branch/entity/branches.entity';
 import { User } from '../../employee/entity/user.entity';
 import { OfficesData } from '../../office/entity/offices.entity';
 import { DeliveryDetails } from '../../customer/addcustomer/entity/deliveryDetailsCust.entity';
-import { SecondSale } from '../../secondSale/entity/secondSale.entity';
 import Model from '../../global/model.entity';
 import { Farmer } from '../../farmer/entity/farmer.entity';
 
@@ -49,6 +48,4 @@ export class Address extends Model {
   @OneToOne(() => Farmer, (farmer) => farmer.residensialAddress,{ onDelete: "SET NULL" })
   farmer: Farmer;
 
-  @OneToOne(() => SecondSale, (secondSale) => secondSale.customerAddress, { onDelete: "SET NULL" })
-  secondSaleRegister: SecondSale;
 }

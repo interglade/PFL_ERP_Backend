@@ -1,3 +1,10 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
+import { dispatchKeyFromRecord, dispatchKeyFromRequest } from '../dispatchPermissionKey';
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from "inversify";
 import {
   controller,
@@ -45,7 +52,7 @@ export class VehicleDispatchController {
     
   ) {}
 
-  @httpPost("/")
+  @httpPost("/", checkPermission(dispatchKeyFromRequest, 'create'))
   public async createVehicleDispatch(
     @request() req: Request<{}, {}, CreateVehicleDispatchDto>,
     @response() res: Response,
@@ -116,7 +123,7 @@ export class VehicleDispatchController {
     }
   }
  //TODO: get All Recycle Bin Vehical Dispatch.....By Vaishali
-    @httpGet('/recyclebin')
+    @httpGet('/recyclebin', requireRole(Role.SUPER_ADMIN))
     public async getAllRecycleBinVehicalDispatch(
       @request() req: Request,
       @response() res: Response,
@@ -180,7 +187,7 @@ export class VehicleDispatchController {
 
 
   
-  @httpPatch("/:id")
+  @httpPatch("/:id", checkPermission(dispatchKeyFromRecord, 'edit'), guardDocumentEdit(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'), protectBody)
   public async updateVehicleDispatch(
     @requestParam("id") id: string,
     @request() req: Request<{}, {}, UpdateVehicleDispatchDto>,
@@ -253,7 +260,7 @@ export class VehicleDispatchController {
     }
   }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", checkPermission(dispatchKeyFromRecord, 'delete'), guardDocumentDelete(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'))
   public async deleteVehicleDispatch(
     @requestParam("id") id: string,
     @response() res: Response,
@@ -318,7 +325,7 @@ export class VehicleDispatchController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission(dispatchKeyFromRequest, 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -334,7 +341,7 @@ export class VehicleDispatchController {
   }
 
   //TODO: get All Vehical Dispatch.....By Vaishali
-    @httpGet('/')
+    @httpGet('/', checkPermission(dispatchKeyFromRequest, 'view'))
     public async getAllvehicalDispatch(
       @request() req: Request,
       @response() res: Response,
@@ -408,7 +415,7 @@ export class VehicleDispatchController {
 
 
      //TODO: Vehical Dispatch get by id for view...BY Vaishali
-      @httpGet('/view/:docid')
+      @httpGet('/view/:docid', checkPermission(dispatchKeyFromRecord, 'view'), guardDocumentView(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'))
       public async getVehicalDispatchByIdForView(
         @requestParam('docid') docid: string,
         @response() res: Response,
@@ -519,7 +526,7 @@ export class VehicleDispatchController {
   }
 
   /** Current values for the edit form. */
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkPermission(dispatchKeyFromRecord, 'edit'), guardDocumentEdit(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'))
   public async getForUpdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -540,7 +547,7 @@ export class VehicleDispatchController {
   // The vehicle's arrival is recorded by POST /receiving/receive (the Arrivals
   // Receive button, docs/arrivals-status-plan.md D7), not here.
 
-@httpDelete('/delete/multiple')
+@httpDelete('/delete/multiple', requireRole(Role.SUPER_ADMIN), guardDocumentDelete(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'))
     public async deleteMultipleVehicleDispatch(
       @request() req: Request,
       @response() res: Response,

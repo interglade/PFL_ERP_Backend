@@ -50,6 +50,8 @@ export interface DealSlipDetailDto {
   createdDate: string | null;
   createdTime: string | null;
   dealSlipNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo?: string | null;
   /** RFPA entity ID */
   rfpa: string | null;
 }
@@ -91,6 +93,8 @@ export interface DealSlipUpdateFormProductDto {
 export interface DealSlipUpdateFormDto {
   id: string;
   dealSlipNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo?: string | null;
   /** RFPA number (rfpaId) */
   rfpa: string | null;
   documentId: string | null;
@@ -144,6 +148,8 @@ export interface DealSlipListItemDto {
   remark: string | null;
   specialRequest: string | null;
   dealSlipNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo?: string | null;
 }
 
 export interface DealSlipListResponseDto {
@@ -175,6 +181,8 @@ export interface DealSlipRecycleBinItemDto {
   dealSlipCreatedAt: Date | null;
   dealSlipApprovedAt: Date | null;
   dealSlipNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo?: string | null;
 }
 
 export interface DealSlipRecycleBinResponseDto {
@@ -219,6 +227,8 @@ export interface DealSlipDocumentViewDto {
   dealSlipCreatedAt: Date | null;
   dealSlipApprovedAt: Date | null;
   dealSlipNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo?: string | null;
   /** RFPA rfpaId string */
   rfpa: string | null;
 }

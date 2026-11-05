@@ -10,7 +10,10 @@ import 'reflect-metadata';
 import { Role } from '../../employee/entity/user.entity';
 import { Status } from '../../utils/status.enum';
 import AppError from '../../utils/appError';
-import { TransportRegistrationService } from '../../transport/transportRegistration.service';
+import {
+  TransportExcelConfig,
+  TransportRegistrationService,
+} from '../../transport/transportRegistration.service';
 
 interface Thing {
   id: string;
@@ -73,6 +76,8 @@ class TestService extends TransportRegistrationService<any> {
   protected readonly tableName = 'things';
   protected readonly codeColumn = 'code';
   protected readonly codePrefix = 'TH-';
+  // The Excel import is covered in transportExcel.spec.ts; this suite tests the life cycle.
+  protected readonly excel = {} as TransportExcelConfig;
   blockDelete = false;
 
   protected displayName(e: Thing) {
@@ -331,11 +336,12 @@ describe('update', () => {
     expect((await service.update(pending.id, { name: 'Z' }, 'admin')).name).toBe('Z');
   });
 
-  it("does not change an approved record's status when its creator edits it", async () => {
+  it('refuses an approved record to its creator; only an admin or verifier edits it (Phase 3)', async () => {
     const { service } = build();
     const pending = await service.create({ name: 'Raju' }, 'emp1');
     await service.approve(pending.id, 'verifier', Status.APPROVED);
-    expect((await service.update(pending.id, { name: 'Raju P' }, 'emp1')).status).toBe(Status.APPROVED);
+    await expect(service.update(pending.id, { name: 'Raju P' }, 'emp1')).rejects.toMatchObject({ statusCode: 403 });
+    expect((await service.update(pending.id, { name: 'Raju P' }, 'verifier')).status).toBe(Status.APPROVED);
   });
 
   it('sends a rejected record back to pending when its creator edits it', async () => {

@@ -2,13 +2,11 @@ import { inject, injectable } from 'inversify';
 import * as fs from 'fs';
 import * as XLSX from "xlsx";
 import { TYPES } from '../../../types';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { ProductSubcategory } from '../../productSubcategory/entity/product_subcategory.entity';
 import { ProductClassification } from '../../productClassification/entity/product_classification.entity';
 import csvParser from 'csv-parser';
 import { buildQuery, PaginationOptions } from '../../../utils/pagination';
-import { ProductVarientsRepository } from '../../productVarient/repository/productVarients.repository';
-import { ProductVarientRepository } from '../../productVarient/repository/varients.repository';
 import { createHash } from 'crypto';
 import { AppDataSource } from '../../../utils/data-source';
 import { QualityParameter } from '../entity/quantityParameter.entity';
@@ -17,7 +15,19 @@ import { Product } from '../entity/product.entity';
 import { ProductCategory } from '../../productCategory/entity/product_category.entity';
 import { UOM } from '../../../uom/entity/uom.entity';
 import { AuditLogService } from '../../../employeeActivity/service/auditLog.service';
-import { generateVariantCode, getVariantIdentifier, ProductVarientsService } from '../../productVarient/service/varients.service';
+import {
+  parseVariantSetup,
+  refreshVariantLabels,
+  sortValues,
+  splitValueList,
+  syncProductVariants,
+} from '../../productVarient/service/variantSync';
+import {
+  ensureDefaultAttributes,
+  resolveValueList,
+} from '../../productAttribute/service/productAttribute.service';
+import { ProductAttribute } from '../../productAttribute/entity/productAttribute.entity';
+import { ProductAttributeValue } from '../../productAttribute/entity/productAttributeValue.entity';
 import { QualityParameterRepository } from '../repository/qualityParameter.repository';
 
 import { PaginatedResponse } from '../../../customer/addcustomer/dto/createCustomer.dto';
@@ -25,6 +35,7 @@ import { CreateProductDto, ProductDetailResponseDto, ProductListResponseDto } fr
 import { ProductVarient } from '../../productVarient/entity/productVarient.entity';
 import AppError from '../../../utils/appError';
 import {
+  attachImportReport,
   buildDataWorkbook,
   buildTemplateWorkbook,
   deleteFromSpaces,
@@ -33,16 +44,27 @@ import {
 } from '../../../excel/excelFile.service';
 import {
   emptySummary,
+  ExcelRow,
   ImportSummary,
   readUploadedSheet,
 } from '../../../excel/excelImport.service';
 import {
+  ATTRIBUTE_COLUMNS,
   PRODUCT_PARAMETER_GROUP,
   PRODUCT_SHEET,
-  PRODUCT_VARIANT_GROUP,
 } from '../excel/product.columns';
 import { Acceptability } from '../entity/quantityParameter.entity';
-import { findOrCreateByName } from '../../../excel/lookupByName';
+import { normaliseName } from '../../../excel/lookupByName';
+import { LookupIndex } from '../../../excel/lookupIndex';
+import { WorkbookLists } from '../../../excel/excelColumn';
+import { assertImportPrerequisites } from '../../../excel/importPrerequisites';
+import { countMasterRecords } from '../../../excel/importPrerequisiteCounts';
+import {
+  PRODUCT_LINK_HEADERS,
+  ProductLinkIndexes,
+  ProductLinkRecord,
+  resolveProductLinks,
+} from '../excel/productLinks';
 
 
 
@@ -65,15 +87,8 @@ export class ProductService {
     private dataSource: DataSource,
     @inject(TYPES.AuditLogService)
     private auditLogService: AuditLogService,
-    @inject(TYPES.ProductVarientsService)
-    private productVarientService: ProductVarientsService,
     @inject(TYPES.QualityParameterRepository)
     private qualityParameterRepository: QualityParameterRepository,
-    // @inject(TYPES.ProductVarientsRepository)
-    // private productVarientsRepository: ProductVarientsRepository,
-
-    @inject(TYPES.ProductVarientRepository)
-    private productVarientsRepository: ProductVarientRepository,
     @inject(TYPES.CacheService)
     private readonly cacheService: CacheService,
   ) {
@@ -99,35 +114,11 @@ export class ProductService {
       tasks.push(
         this.cacheService.del(`${CACHE_PREFIX}:id:${id}`),
         this.cacheService.del(`${CACHE_PREFIX}:variants:${id}`),
+        this.cacheService.del(`${CACHE_PREFIX}:variants:full:${id}`),
         this.cacheService.del(`${CACHE_PREFIX}:partial:${id}`),
       );
     }
     await Promise.all(tasks);
-  }
-
-  public generateCombinations(counts: string[] = [],
-    sizes: string[] = [],
-    varieties: string[] = [],
-    origins: string[] = [],
-  ) {
-    const c = Array.isArray(counts) && counts.length ? counts : [null];
-    const s = Array.isArray(sizes) && sizes.length ? sizes : [null];
-    const v = Array.isArray(varieties) && varieties.length ? varieties : [null];
-    const o = Array.isArray(origins) && origins.length ? origins : [null];
-
-    const combinations = [];
-
-    for (const count of c) {
-      for (const size of s) {
-        for (const variety of v) {
-          for (const productOrigin of o) {
-            combinations.push({ count, size, variety, productOrigin });
-          }
-        }
-      }
-    }
-
-    return combinations;
   }
 
   /**
@@ -200,58 +191,18 @@ export class ProductService {
     dto.prefix = prefix;
     dto.productCode = await this.generateProductCode(prefix);
 
-    const varientData = dto.variant ?? dto.variant;
-    const { variant, ...productDto } = dto;
+    const setup = parseVariantSetup(dto.variantSetup);
+    const { variantSetup: _variantSetup, ...productDto } = dto;
 
-    const product = this.productRepository.create(productDto);
-    const savedProduct = await this.productRepository.save(product);
+    // Product and variants together: a rejected variant leaves no half-made product.
+    const savedProduct = await this.dataSource.transaction(async (manager) => {
+      const saved = await manager.save(Product, manager.create(Product, productDto as any));
+      if (setup) await syncProductVariants(manager, saved.id, setup);
+      return saved;
+    });
 
-    const savedProduct1 = Array.isArray(savedProduct)
-      ? savedProduct[0]
-      : savedProduct;
-
-    if (varientData) {
-      // handle both array and single object payloads
-      const variants = Array.isArray(varientData) ? varientData : [varientData];
-
-      for (const item of variants) {
-        const variantName = await getVariantIdentifier(
-          savedProduct1.name,
-          item.count ?? '',
-          item.size ?? '',
-          item.variety ?? '',
-          item.origin ?? '',
-          item.brand ?? '',
-        );
-
-        console.log("Variant name ", variantName)
-
-        const variantCode = await generateVariantCode(
-          savedProduct1.id,
-          savedProduct1.prefix,
-          item.count ?? '',
-          item.size ?? '',
-          item.variety ?? '',
-          item.origin ?? '',
-          item.brand ?? '',
-        );
-
-        console.log("Variant code ", variantCode);
-
-
-        const variantEntity = this.productVarientsRepository.create({
-          ...item,
-          product: savedProduct,
-          productName: savedProduct1.name,
-          variantName: variantName,
-          variantCode: variantCode,
-        });
-
-        await this.productVarientsRepository.save(variantEntity);
-      }
-    }
     await this.invalidateProductCache();
-    return savedProduct1;
+    return savedProduct;
   }
 
   async getAll(options: PaginationOptions): Promise<PaginatedResponse<ProductListResponseDto>> {
@@ -336,18 +287,25 @@ export class ProductService {
         .createQueryBuilder('product')
         .leftJoin('product.classification', 'classification')
         .leftJoin('product.variant', 'variants')
+        .leftJoin('variants.values', 'variantValues')
+        .leftJoin('product.allowedValues', 'allowedValues')
+        .leftJoin('allowedValues.attribute', 'allowedAttribute')
         .leftJoin('product.category', 'category')
         .leftJoin('product.subcategory', 'subcategory')
         .leftJoin('product.uom', 'uom')
         .leftJoin('product.qualityParameters', 'qualityParameters')
         .select([
           'product.id', 'product.name', 'product.image', 'product.description',
-          'product.prefix', 'product.packingType', 'product.shelfLife', 'product.storageTemp',
-          'product.thresholdStock',
+          'product.prefix', 'product.productCode', 'product.packingType', 'product.shelfLife',
+          'product.storageTemp', 'product.thresholdStock',
           'classification.id', 'category.id', 'subcategory.id', 'uom.id',
           'qualityParameters.id', 'qualityParameters.name', 'qualityParameters.type',
-          'variants.id', 'variants.variantCode', 'variants.count', 'variants.size',
+          'variants.id', 'variants.variantCode', 'variants.variantName', 'variants.isActive',
+          'variants.sequence', 'variants.count', 'variants.size',
           'variants.variety', 'variants.origin', 'variants.brand',
+          'variantValues.id',
+          'allowedValues.id', 'allowedValues.value',
+          'allowedAttribute.id', 'allowedAttribute.name', 'allowedAttribute.sortOrder',
         ])
         .where('product.id = :id', { id })
         .getOne();
@@ -369,15 +327,13 @@ export class ProductService {
         subcategory: product.subcategory?.id ?? null,
         uom: product.uom?.id ?? null,
         qualityParameters: product.qualityParameters,
-        variant: product.variant?.map((v) => ({
-          id: v.id,
-          variantCode: v.variantCode,
-          count: v.count,
-          size: v.size,
-          variety: v.variety,
-          origin: v.origin,
-          brand: v.brand,
-        })) ?? [],
+        attributeValues: sortValues(product.allowedValues ?? []).map((value) => ({
+          id: value.id,
+          value: value.value,
+          attributeId: value.attribute?.id,
+          attribute: value.attribute?.name,
+        })),
+        variant: this.formatVariants(product.variant),
       };
 
       await this.cacheService.set(key, response, CACHE_TTL_DETAIL);
@@ -425,23 +381,11 @@ export class ProductService {
       .where('product.id = :id', { id })
       .getOne();
 
-      console.log("product data",product);
-
     if (!product) throw new Error('Product not found');
 
-
-    const result = {
-      variants: product.variant?.map((v) => ({
-        id: v.id,
-        variantName: v.variantName,
-        variantCode: v.variantCode,
-        count: v.count,
-        size: v.size,
-        variety: v.variety,
-        origin: v.origin,
-        brand: v.brand,
-      })) || [],
-    };
+    // Inactive variants are included so documents that already carry one still
+    // show it; the pickers offer only the active ones for new lines.
+    const result = { variants: this.formatVariants(product.variant) };
     await this.cacheService.set(key, result, CACHE_TTL_DETAIL);
     return result;
   }
@@ -502,6 +446,8 @@ export class ProductService {
       .leftJoinAndSelect('product.subcategory', 'subcategory')
       .leftJoinAndSelect('product.uom', 'uom')
       .leftJoinAndSelect('product.variant', 'variant')
+      .leftJoinAndSelect('product.allowedValues', 'allowedValues')
+      .leftJoinAndSelect('allowedValues.attribute', 'allowedAttribute')
       .leftJoinAndSelect('product.qualityParameters', 'qualityParameters')
       .orderBy('product.createdAt', 'DESC');
 
@@ -511,7 +457,8 @@ export class ProductService {
       'product',
     );
 
-    const workbook = buildDataWorkbook(PRODUCT_SHEET, data as Product[]);
+    const lists = this.workbookLists(await this.loadLinkIndexes());
+    const workbook = buildDataWorkbook(PRODUCT_SHEET, data as Product[], lists);
     return uploadWorkbookToSpaces(workbook, 'Products', data.length);
   }
 
@@ -520,8 +467,51 @@ export class ProductService {
    * from the same column map as the export so the two can never drift apart.
    */
   async buildExcelTemplate(): Promise<UploadedExport> {
-    const workbook = buildTemplateWorkbook(PRODUCT_SHEET);
+    const lists = this.workbookLists(await this.loadLinkIndexes());
+    const workbook = buildTemplateWorkbook(PRODUCT_SHEET, lists);
     return uploadWorkbookToSpaces(workbook, 'Product_Template', 0);
+  }
+
+  /**
+   * The masters a product links to, each loaded once per file so a sheet of a
+   * few thousand rows is matched in memory rather than with queries per row.
+   */
+  private async loadLinkIndexes(): Promise<ProductLinkIndexes> {
+    const live = <T extends ProductLinkRecord>(records: T[]) =>
+      records.filter((record) => !record.isDeleted);
+
+    const [uoms, classifications, categories, subcategories] = await Promise.all([
+      this.uomRepository.find(),
+      this.classificationRepository.find(),
+      this.categoryRepository.find({ relations: ['productClassification'] }),
+      this.subcategoryRepository.find({ relations: ['category'] }),
+    ]);
+
+    return {
+      uoms: LookupIndex.fromRecords<ProductLinkRecord>(live(uoms), {
+        names: (uom) => [uom.unit, uom.abbreviation],
+      }),
+      classifications: LookupIndex.fromRecords<ProductLinkRecord>(live(classifications), {
+        names: (classification) => [classification.name],
+      }),
+      categories: LookupIndex.fromRecords<ProductLinkRecord>(live(categories), {
+        names: (category) => [category.name],
+      }),
+      subcategories: LookupIndex.fromRecords<ProductLinkRecord>(live(subcategories), {
+        names: (subcategory) => [subcategory.name],
+        scope: (subcategory) => subcategory.category?.id ?? null,
+      }),
+    };
+  }
+
+  /** Current master names for the dropdowns in the template and the export. */
+  private workbookLists(indexes: ProductLinkIndexes): WorkbookLists {
+    return {
+      uom: indexes.uoms.displayNames(),
+      'product-classification': indexes.classifications.displayNames(),
+      'product-category': indexes.categories.displayNames(),
+      'product-subcategory': indexes.subcategories.displayNames(),
+    };
   }
 
   /**
@@ -530,6 +520,12 @@ export class ProductService {
    * A row whose product already exists is skipped and reported rather than
    * updated, and the uploaded file is removed from Spaces once read - success
    * or failure.
+   *
+   * UoM, Classification, Category and Subcategory must be imported first
+   * (docs/master-data-excel-plan.md Phase 5): the import is blocked while any
+   * of them is empty, and they are never created from this sheet. A name that
+   * does not match is left empty on the product and listed in the import
+   * report; a row whose UoM does not match is skipped.
    */
   async createProductWithExcel(fileUrl: string): Promise<ImportSummary> {
     if (!fileUrl) {
@@ -539,6 +535,8 @@ export class ProductService {
     const summary = emptySummary();
 
     try {
+      await assertImportPrerequisites('product', countMasterRecords);
+
       const sheet = await readUploadedSheet(fileUrl, PRODUCT_SHEET);
       summary.unknownColumns = sheet.unknownColumns;
       summary.missingColumns = sheet.missingColumns;
@@ -558,6 +556,22 @@ export class ProductService {
         return found;
       };
 
+      const linkIndexes = await this.loadLinkIndexes();
+      const attributes = await this.loadAttributesByCode();
+
+      // Existing products by name, loaded once. Names are compared with case,
+      // spacing and punctuation ignored, like every other master; products
+      // saved earlier in this file are added as they go.
+      const existingByName = new Map<string, string>();
+      const existingProducts = await this.productRepository.find({
+        select: { id: true, name: true, productCode: true },
+      });
+      for (const existing of existingProducts) {
+        if (existing.name) {
+          existingByName.set(normaliseName(existing.name), existing.productCode ?? existing.id);
+        }
+      }
+
       for (const row of sheet.rows) {
         try {
           const name = row.cell<string | null>(column('Product Name'));
@@ -569,15 +583,11 @@ export class ProductService {
             continue;
           }
 
-          const existing = await this.productRepository
-            .createQueryBuilder('product')
-            .where('LOWER(product.name) = LOWER(:name)', { name })
-            .getOne();
-
-          if (existing) {
+          const existingCode = existingByName.get(normaliseName(name));
+          if (existingCode) {
             summary.skipped.push({
               row: row.rowNumber,
-              reason: `Product "${name}" already exists (${existing.productCode ?? existing.id})`,
+              reason: `Product "${name}" already exists (${existingCode})`,
             });
             continue;
           }
@@ -594,6 +604,20 @@ export class ProductService {
             continue;
           }
 
+          const links = resolveProductLinks(
+            {
+              uom: row.cell<string | null>(column(PRODUCT_LINK_HEADERS.uom)),
+              classification: row.cell<string | null>(column(PRODUCT_LINK_HEADERS.classification)),
+              category: row.cell<string | null>(column(PRODUCT_LINK_HEADERS.category)),
+              subcategory: row.cell<string | null>(column(PRODUCT_LINK_HEADERS.subcategory)),
+            },
+            linkIndexes,
+          );
+          if (links.skipReason) {
+            summary.skipped.push({ row: row.rowNumber, reason: links.skipReason });
+            continue;
+          }
+
           const product = new Product();
           product.name = name;
           product.description = row.cell(column('Description')) as string;
@@ -607,72 +631,10 @@ export class ProductService {
           // is ignored, and the column is left out of the template entirely.
           product.productCode = await this.generateProductCode(prefix);
 
-          // Every lookup below matches on the name with case, spacing and
-          // punctuation ignored, so "Fresh Produce" in the sheet reuses a
-          // "fresh produce" row instead of adding a near-duplicate.
-          const classificationName = row.cell<string | null>(column('Classification'));
-          if (classificationName) {
-            product.classification = await findOrCreateByName(
-              this.classificationRepository,
-              'name',
-              classificationName,
-            );
-          }
-
-          const uomUnit = row.cell<string | null>(column('UOM'));
-          if (uomUnit) {
-            product.uom = await findOrCreateByName(this.uomRepository, 'unit', uomUnit, {
-              abbreviation:
-                row.cell<string | null>(column('UOM Abbreviation')) ?? undefined,
-              description:
-                row.cell<string | null>(column('UOM Description')) ?? undefined,
-            });
-          }
-
-          const categoryName = row.cell<string | null>(column('Category'));
-          if (categoryName) {
-            const category = await findOrCreateByName(
-              this.categoryRepository,
-              'name',
-              categoryName,
-            );
-            product.category = category;
-
-            const subcategoryName = row.cell<string | null>(column('Subcategory'));
-            if (subcategoryName) {
-              // Scoped to the category: two categories may each have a
-              // "Premium" subcategory and they are not the same row.
-              product.subcategory = await findOrCreateByName(
-                this.subcategoryRepository,
-                'name',
-                subcategoryName,
-                { category },
-                (queryBuilder) =>
-                  queryBuilder
-                    .innerJoin('lookup.category', 'parent')
-                    .andWhere('parent.id = :categoryId', { categoryId: category.id }),
-              );
-            }
-          }
-
-          const variantInputs = row.eachGroupBlock(PRODUCT_VARIANT_GROUP, (index) => {
-            const at = (header: string) => {
-              const col = PRODUCT_VARIANT_GROUP.columns.find(
-                (c) => c.header === header,
-              )!;
-              return (
-                row.groupCell<string | null>(PRODUCT_VARIANT_GROUP, index, col) ?? ''
-              );
-            };
-
-            return {
-              count: at('Count'),
-              size: at('Size'),
-              variety: at('Variety'),
-              origin: at('Origin'),
-              brand: at('Brand'),
-            };
-          });
+          product.uom = links.uom as UOM;
+          if (links.classification) product.classification = links.classification as ProductClassification;
+          if (links.category) product.category = links.category as ProductCategory;
+          if (links.subcategory) product.subcategory = links.subcategory as ProductSubcategory;
 
           product.qualityParameters = row.eachGroupBlock(
             PRODUCT_PARAMETER_GROUP,
@@ -703,47 +665,29 @@ export class ProductService {
             },
           );
 
-          const saved = await this.productRepository.save(product);
-
-          // Variants are saved after the product because their code is built
-          // from the product id and the running per-product sequence - the same
-          // two-step the create form uses. Saving them one at a time is what
-          // makes that sequence advance.
-          for (const input of variantInputs) {
-            const variantName = await getVariantIdentifier(
-              saved.name,
-              input.count,
-              input.size,
-              input.variety,
-              input.origin,
-              input.brand,
-            );
-            const variantCode = await generateVariantCode(
-              saved.id,
-              saved.prefix,
-              input.count,
-              input.size,
-              input.variety,
-              input.origin,
-              input.brand,
-            );
-
-            await this.productVarientsRepository.save(
-              this.productVarientsRepository.create({
-                count: input.count || null,
-                size: input.size || null,
-                variety: input.variety || null,
-                origin: input.origin || null,
-                brand: input.brand || null,
-                product: saved,
-                productName: saved.name,
-                variantName,
-                variantCode,
-              }),
-            );
-          }
+          // Product and its variants in one transaction, so a row whose
+          // variants fail leaves no product behind.
+          const saved = await this.dataSource.transaction(async (manager) => {
+            const created = await manager.save(Product, product);
+            await this.applyAttributeCells(manager, created, row, attributes, summary);
+            return created;
+          });
 
           summary.created++;
+          existingByName.set(normaliseName(saved.name), saved.productCode ?? saved.id);
+
+          // Saved, but with links left empty - listed so they can be filled in.
+          for (const issue of links.issues) {
+            summary.draftIssues.push({
+              row: row.rowNumber,
+              code: saved.productCode ?? null,
+              name: saved.name,
+              field: issue.field,
+              typed: issue.typed,
+              suggestion: issue.suggestion,
+              outcome: 'Saved',
+            });
+          }
         } catch (rowError: any) {
           summary.failed.push({
             row: row.rowNumber,
@@ -756,12 +700,67 @@ export class ProductService {
         await this.invalidateProductCache();
       }
 
+      await attachImportReport(summary, 'Product');
       return summary;
     } finally {
       // The upload is a transient staging file: remove it whether the import
       // succeeded, partially succeeded, or threw.
       await deleteFromSpaces(fileUrl);
     }
+  }
+
+  /** The five standard attributes by code, created first if missing. */
+  private async loadAttributesByCode(): Promise<Map<string, ProductAttribute>> {
+    await ensureDefaultAttributes(this.dataSource.manager);
+    const attributes = await this.dataSource.getRepository(ProductAttribute).find();
+    return new Map(
+      attributes.filter((attribute) => attribute.code).map((attribute) => [attribute.code!, attribute]),
+    );
+  }
+
+  /**
+   * Makes a row's Count / Size / Variety / Origin / Brand lists the product's
+   * attribute set and generates every combination as a variant. Values that
+   * were new to the attribute master are listed in the import report so a
+   * misspelling ("chilli" for Chile) is caught.
+   */
+  private async applyAttributeCells(
+    manager: EntityManager,
+    product: Product,
+    row: ExcelRow,
+    attributes: Map<string, ProductAttribute>,
+    summary: ImportSummary,
+  ) {
+    const allowed: ProductAttributeValue[] = [];
+
+    for (const column of ATTRIBUTE_COLUMNS) {
+      const attribute = attributes.get(column.code);
+      const cell = row.raw(column.header);
+      if (!attribute) {
+        if (splitValueList(cell).length) {
+          throw new Error(`The ${column.header} attribute is missing from the attribute master`);
+        }
+        continue;
+      }
+
+      const { values, created } = await resolveValueList(manager, attribute, cell);
+      allowed.push(...values);
+      for (const typed of created) {
+        summary.draftIssues.push({
+          row: row.rowNumber,
+          code: product.productCode ?? null,
+          name: product.name,
+          field: column.header,
+          typed,
+          suggestion: null,
+          outcome: 'New value added - check the spelling',
+        });
+      }
+    }
+
+    return syncProductVariants(manager, product.id, {
+      attributeValueIds: allowed.map((value) => value.id),
+    });
   }
 
   /**
@@ -843,7 +842,6 @@ export class ProductService {
         'category',
         'subcategory',
         'uom',
-        'variant',
       ],
     });
 
@@ -852,7 +850,7 @@ export class ProductService {
     }
 
     const oldData = { ...product };
-    const existingVariants = product.variant ?? [];
+    const setup = parseVariantSetup(productData.variantSetup);
 
     if (productData?.qualityParameters) {
       await this.qualityParameterRepository.save(
@@ -881,87 +879,24 @@ export class ProductService {
     // `prefix` and `productCode` are owned by this method: the edit form echoes
     // the old code back, and letting it through here would overwrite the code
     // that was just regenerated.
+    // Variant codes are never sent back from here: they are assigned once by
+    // syncProductVariants and survive every later edit of the product.
     const {
-      variant,
+      variantSetup: _variantSetup,
       prefix: _clientPrefix,
       productCode: _clientProductCode,
       ...cleanProductData
-    } = productData;
+    } = productData as CreateProductDto & { productCode?: string };
 
-    product.variant = [];
+    const renamed =
+      cleanProductData.name !== undefined && cleanProductData.name !== product.name;
 
-    const updatedProduct = await this.productRepository.save({
-      ...product,
-      ...cleanProductData,
+    const updatedProduct = await this.dataSource.transaction(async (manager) => {
+      const saved = await manager.save(Product, { ...product, ...cleanProductData } as any);
+      if (setup) await syncProductVariants(manager, saved.id, setup);
+      else if (renamed) await refreshVariantLabels(manager, { productId: saved.id });
+      return saved;
     });
-    console.log('product id is ', updatedProduct.id);
-
-    const incomingVariants: any[] = variant ?? variant ?? [];
-
-    for (const variantData of incomingVariants) {
-      // match by id if present, otherwise fall back to field values
-      const existingVariant = variantData.id
-        ? (existingVariants).find((v: any) => v.id === variantData.id)
-        : (existingVariants).find((v: any) =>
-          v.count === variantData.count &&
-          v.size === variantData.size &&
-          v.variety === variantData.variety &&
-          v.origin === variantData.origin &&
-          v.brand === variantData.brand
-        );
-
-      if (existingVariant) {
-        await this.productVarientsRepository.save({
-          ...existingVariant,
-          ...variantData,
-          id: existingVariant.id,
-          product: updatedProduct,
-          productName: updatedProduct.name,
-          variantName: await getVariantIdentifier(
-            updatedProduct.name,
-            variantData.count,
-            variantData.size,
-            variantData.variety,
-            variantData.origin,
-            variantData.brand,
-          ),
-          variantCode: await generateVariantCode(
-            updatedProduct.id,
-            updatedProduct.prefix,
-            variantData.count,
-            variantData.size,
-            variantData.variety,
-            variantData.origin,
-            variantData.brand,
-          ),
-        });
-      } else {
-        const { id: _id, ...itemData } = variantData;
-        const newVariant = this.productVarientsRepository.create({
-          ...itemData,
-          product: updatedProduct,
-          productName: updatedProduct.name,
-          variantName: await getVariantIdentifier(
-            updatedProduct.name,
-            variantData.count,
-            variantData.size,
-            variantData.variety,
-            variantData.origin,
-            variantData.brand,
-          ),
-          variantCode: await generateVariantCode(
-            updatedProduct.id,
-            updatedProduct.prefix,
-            variantData.count,
-            variantData.size,
-            variantData.variety,
-            variantData.origin,
-            variantData.brand,
-          ),
-        });
-        await this.productVarientsRepository.save(newVariant);
-      }
-    }
 
     await this.auditLogService.logChange('Product', id, oldData, updatedProduct, updatedBy);
     await this.invalidateProductCache(id);
@@ -1011,16 +946,7 @@ export class ProductService {
     const formattedproduct = {
       id: product.id,
       name: product.name,
-      variant: product.variant.map((v) => ({
-        id: v.id,
-        variantName: v.variantName,
-        variantCode: v.variantCode,
-        count: v.count,
-        size: v.size,
-        variety: v.variety,
-        origin: v.origin,
-        brand: v.brand,
-      })),
+      variant: this.formatVariants(product.variant),
     };
     await this.cacheService.set(key, formattedproduct, CACHE_TTL_DETAIL);
     return formattedproduct;
@@ -1029,6 +955,24 @@ export class ProductService {
     const result = await this.productRepository.softDelete({ id: In(userIds) });
     await this.invalidateProductCache();
     return result;
+  }
+
+  /** Variants in the order their codes were handed out. */
+  private formatVariants(variants: ProductVarient[] | undefined) {
+    return [...(variants ?? [])]
+      .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+      .map((v) => ({
+        id: v.id,
+        variantName: v.variantName,
+        variantCode: v.variantCode,
+        isActive: v.isActive ?? true,
+        valueIds: v.values?.map((value) => value.id),
+        count: v.count,
+        size: v.size,
+        variety: v.variety,
+        origin: v.origin,
+        brand: v.brand,
+      }));
   }
 
   async getProductsByIds(ids: string[]): Promise<any[]> {

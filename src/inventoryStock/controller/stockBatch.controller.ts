@@ -1,3 +1,5 @@
+import { isAdminUser } from '../../utils/isAdminUser';
+import { checkPermission, checkAnyPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import { controller, httpGet, httpPost, next, request, requestParam, response } from 'inversify-express-utils';
 import { NextFunction, Request, Response } from 'express';
@@ -34,7 +36,7 @@ export class StockBatchController {
   ) {}
 
   /** Batches that can still be allocated, oldest first: `?companyId&locationId&productId&variantId&uomId&stockType`. */
-  @httpGet('/batches/available')
+  @httpGet('/batches/available', checkAnyPermission(['product-stock', 'view'], ['deliveryChallan-Customer', 'create'], ['deliveryChallan-Customer', 'edit'], ['deliveryChallan-Other', 'create'], ['deliveryChallan-Other', 'edit'], ['deliveryChallan-Stock-Transfer', 'create'], ['deliveryChallan-Stock-Transfer', 'edit'], ['second-sale', 'create'], ['second-sale', 'edit'], ['dump-register', 'create'], ['dump-register', 'edit'], ['return-to-vendor', 'create'], ['return-to-vendor', 'edit'], ['stock-adjustment', 'create'], ['repack', 'create']))
   public async available(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       const filter = stockFilter(req.query);
@@ -49,7 +51,7 @@ export class StockBatchController {
   }
 
   /** Batch Stock: one row per batch (filters: company, location, product, stockType, search, inStock, page, limit). */
-  @httpGet('/batches')
+  @httpGet('/batches', checkAnyPermission(['product-stock', 'view'], ['stock-adjustment', 'create'], ['repack', 'create']))
   public async batches(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       res.status(200).json({ status: 'success', ...(await listBatches(this.dataSource.manager, stockFilter(req.query))) });
@@ -59,7 +61,7 @@ export class StockBatchController {
   }
 
   /** Stock Summary: totals per company, location, product, variant, unit and stock type. */
-  @httpGet('/summary')
+  @httpGet('/summary', checkPermission('product-stock', 'view'))
   public async summary(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       res.status(200).json({ status: 'success', ...(await stockSummary(this.dataSource.manager, stockFilter(req.query))) });
@@ -69,7 +71,7 @@ export class StockBatchController {
   }
 
   /** Stock Ledger (filters: stockBatchId, batchNo, company, location, product, docType, from, to, page, limit). */
-  @httpGet('/ledger')
+  @httpGet('/ledger', checkPermission('product-stock', 'view'))
   public async ledger(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       const q = req.query;
@@ -92,7 +94,7 @@ export class StockBatchController {
   }
 
   /** Batches a document's lines hold or took: `?docType=DC_TYPE_CUSTOMER&docId=…` (DC edit / view). */
-  @httpGet('/allocations')
+  @httpGet('/allocations', checkAnyPermission(['product-stock', 'view'], ['deliveryChallan-Customer', 'view'], ['deliveryChallan-Other', 'view'], ['deliveryChallan-Stock-Transfer', 'view'], ['second-sale', 'view'], ['dump-register', 'view'], ['return-to-vendor', 'view']))
   public async allocations(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       const docType = str(req.query.docType);
@@ -105,7 +107,7 @@ export class StockBatchController {
   }
 
   /** Batch Trace: where the batch is, how it moved, what pending documents hold. */
-  @httpGet('/trace/:batchNo')
+  @httpGet('/trace/:batchNo', checkPermission('product-stock', 'view'))
   public async trace(@requestParam('batchNo') batchNo: string, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       res.status(200).json({ status: 'success', data: await traceBatch(this.dataSource.manager, batchNo) });
@@ -115,7 +117,7 @@ export class StockBatchController {
   }
 
   /** In Transit: approved Stock Transfer DC quantity not yet received / dumped at the destination, per batch. */
-  @httpGet('/in-transit')
+  @httpGet('/in-transit', checkPermission('stock-in-transit', 'view'))
   public async inTransitList(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       const q = req.query;
@@ -135,7 +137,7 @@ export class StockBatchController {
   // Register): PATCH /documents/updatesecondlevel/:documentId.
 
   /** Raise an adjustment: `{ stockBatchId?, companyId?, locationId?, productId?, variantId?, uomId?, batchNo?, stockType?, qtyDelta, kgDelta?, unitCost?, reason, remark? }`. */
-  @httpPost('/adjustments')
+  @httpPost('/adjustments', checkPermission('stock-adjustment', 'create'))
   public async createAdjustment(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       const data = await this.adjustments.createAdjustment(req.body ?? {}, res.locals.user.id);
@@ -145,13 +147,13 @@ export class StockBatchController {
     }
   }
 
-  @httpGet('/adjustments')
+  @httpGet('/adjustments', checkPermission('stock-adjustment', 'view'))
   public async listAdjustments(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       const q = req.query;
       res.status(200).json({ status: 'success', ...(await this.adjustments.list('adjustment', {
         status: str(q.status), locationId: str(q.locationId), page: Number(str(q.page)) || undefined, limit: Number(str(q.limit)) || undefined,
-      })) });
+      }, { userId: res.locals.user.id, isAdmin: isAdminUser(res) })) });
     } catch (error) {
       nextFn(error);
     }
@@ -160,7 +162,7 @@ export class StockBatchController {
   // ─── C9 Repack ───────────────────────────────────────────────────────────
 
   /** Raise a repack: `{ stockBatchId, fromQty, fromKg?, toUomId, toQty, toKg?, remark? }`. */
-  @httpPost('/repacks')
+  @httpPost('/repacks', checkPermission('repack', 'create'))
   public async createRepack(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       const data = await this.adjustments.createRepack(req.body ?? {}, res.locals.user.id);
@@ -170,13 +172,13 @@ export class StockBatchController {
     }
   }
 
-  @httpGet('/repacks')
+  @httpGet('/repacks', checkPermission('repack', 'view'))
   public async listRepacks(@request() req: Request, @response() res: Response, @next() nextFn: NextFunction) {
     try {
       const q = req.query;
       res.status(200).json({ status: 'success', ...(await this.adjustments.list('repack', {
         status: str(q.status), locationId: str(q.locationId), page: Number(str(q.page)) || undefined, limit: Number(str(q.limit)) || undefined,
-      })) });
+      }, { userId: res.locals.user.id, isAdmin: isAdminUser(res) })) });
     } catch (error) {
       nextFn(error);
     }

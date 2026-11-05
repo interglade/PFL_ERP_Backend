@@ -1,3 +1,7 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView, restartApprovalAfterEditOf } from '../../../approvalFlow/documentAccess';
+import { checkPermission, checkAnyPermission } from '../../../middleware/checkPermission';
 import {
   controller,
   httpPost,
@@ -49,7 +53,7 @@ export class CustomerDeliveryChallanController {
     private readonly documentExportService: DocumentExportService,
   ) {}
 
-  @httpPost('/', uploadAttachments)
+  @httpPost('/', checkPermission('deliveryChallan-Customer', 'create'), uploadAttachments)
   public async createChallan(
     @request() req: Request,
     @response() res: Response,
@@ -136,7 +140,7 @@ export class CustomerDeliveryChallanController {
     }
   }
 
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkAnyPermission(['deliveryChallan-Customer', 'edit'], ['deliveryChallan-Customer', 'view'], ['return-by-customer', 'create'], ['return-by-customer', 'edit']))
   public async getChallanById(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -181,7 +185,7 @@ export class CustomerDeliveryChallanController {
     }
   }
 
-   @httpGet('/view/:id')
+   @httpGet('/view/:id', checkPermission('deliveryChallan-Customer', 'view'), guardDocumentView(ApprovalDocType.DC_TYPE_CUSTOMER, 'Customer DC'))
   public async getChallanByIdforView(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -227,7 +231,7 @@ export class CustomerDeliveryChallanController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('deliveryChallan-Customer', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -241,7 +245,7 @@ export class CustomerDeliveryChallanController {
     });
   }
 
-  @httpGet('/')
+  @httpGet('/', checkPermission('deliveryChallan-Customer', 'view'))
   public async getAllChallans(
     @request() req: Request,
     @response() res: Response,
@@ -298,7 +302,7 @@ export class CustomerDeliveryChallanController {
     }
   }
 
-  @httpPatch('/:id', captureUser, uploadAttachments)
+  @httpPatch('/:id', checkPermission('deliveryChallan-Customer', 'edit'), guardDocumentEdit(ApprovalDocType.DC_TYPE_CUSTOMER, 'Customer DC'), captureUser, uploadAttachments, protectBody)
   public async updateChallan(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -321,6 +325,8 @@ export class CustomerDeliveryChallanController {
           new AppError(404, 'Challan not found or could not be updated'),
         );
       }
+      // Edited before the second approval: the approval starts again
+      await restartApprovalAfterEditOf(ApprovalDocType.DC_TYPE_CUSTOMER, id, 'Customer DC edited: approval restarted');
 
       // 🔔 Send notification for customer delivery challan update
       try {
@@ -362,7 +368,7 @@ export class CustomerDeliveryChallanController {
     }
   }
 
-  @httpDelete('/')
+  @httpDelete('/', checkPermission('deliveryChallan-Customer', 'delete'), guardDocumentDelete(ApprovalDocType.DC_TYPE_CUSTOMER, 'Customer DC'))
   public async deleteChallan(
     @request() req: Request,
     @response() res: Response,
@@ -408,7 +414,7 @@ export class CustomerDeliveryChallanController {
     }
   }
    //TODO:Delete Multiple
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('deliveryChallan-Customer', 'delete'), guardDocumentDelete(ApprovalDocType.DC_TYPE_CUSTOMER, 'Customer DC'))
     public async deleteMultipleCustomerDC(
       @request() req: Request,
       @response() res: Response,
