@@ -43,12 +43,10 @@ export interface IGrnReportDownloadRequest {
   // Search filters (optional)
   billNo?: string;
   grnNo?: string;
-  requestingDepartment?: string;
+  batchNo?: string;
   purchaseInstructionsBy?: string;
   purchaseBy?: string;
-  vehicleNo?: string;
-  receivedThrough?: string;
-  deliveryReceivingPerson?: string;
+  receivingPerson?: string;
   securityPerson?: string;
   rmn?: string;
 }
@@ -85,12 +83,10 @@ export interface IGrnReportFilters {
   status?: string;
   billNo?: string;
   grnNo?: string;
-  requestingDepartment?: string;
+  batchNo?: string;
   purchaseInstructionsBy?: string;
   purchaseBy?: string;
-  vehicleNo?: string;
-  receivedThrough?: string;
-  deliveryReceivingPerson?: string;
+  receivingPerson?: string;
   securityPerson?: string;
   rmn?: string;
 }

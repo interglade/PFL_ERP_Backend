@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from 'inversify';
 import {
   controller,
@@ -22,8 +28,9 @@ import {
   requireUser,
 } from '../../middleware/deserializeUser';
 import { isAdminUser } from '../../utils/isAdminUser';
+import { isPaymentManager } from '../../utils/roles';
 import { createdMessage } from '../../utils/approvalMessage';
-import { Source, CompanyName } from '../../utils/status.enum';
+import { Source, CompanyName, GrnPaymentStatus } from '../../utils/status.enum';
 
 import logger from '../../utils/logger';
 import { http } from 'winston';
@@ -41,6 +48,7 @@ import { uploadSingle } from '../../middleware/uploadsingle.middleware';
 import { NotificationService } from '../../notification/service/notification.service';
 import { DocumentbService } from '../../approvalFlow/service/documentb.service';
 import { GrnService } from '../service/grn.service';
+import { GrnPaymentService } from '../service/grnPayment.service';
 import { GrnRepository } from '../repository/grn.repository';
 import { ActivityAction, ActivityModule } from '../../employeeActivity/entity/userActivityLog.entity';
 import { CreateGrnDto, UpdateGrnDto } from '../dto/grn.dto';
@@ -66,6 +74,8 @@ export class GrnController {
     private readonly activityLogService: UserActivityLogService,
     @inject(TYPES.DocumentExportService)
     private readonly documentExportService: DocumentExportService,
+    @inject(TYPES.GrnPaymentService)
+    private readonly grnPaymentService: GrnPaymentService,
 
   ) {
     this.s3Client = new S3Client({
@@ -117,7 +127,7 @@ export class GrnController {
   }
 
   //TODO: Create GRN
-  @httpPost('/', uploadSingle.single('billImage'))
+  @httpPost('/', checkPermission('grn', 'create'), uploadSingle.single('billImage'))
   public async createGrn(
     @request() req: Request<{}, {}, CreateGrnDto>,
     @response() res: Response,
@@ -143,11 +153,8 @@ console.log(req.body);
 
       const requestedBy = res.locals.user.id;
 
-      //const baseLocation = res.locals.user.relocationPlace;
       grnData.createdBy = requestedBy;
       grnData.requestedBy = requestedBy;
-      // grnData.baseLocation = baseLocation;
-      grnData.requestingDepartment = res.locals.user.selectDepartment;
       //if (grnData === '')
         if (grnData.source === Source.VENDOR && !grnData.selectedParty) {
           
@@ -269,7 +276,8 @@ console.log(req.body);
       res.status(201).json({
         status: 'success',
         message: createdMessage('GRN', 'GRNNo', newGrn.grnNo, sentTo),
-        //data: newGrn,
+        // id + number only: the post-save dialog opens the purchase dispatch form for this GRN.
+        data: { id: newGrn.id, grnNo: newGrn.grnNo },
       });
     } catch (error) {
       ControllerLogger.logError('GRN creation', error, req, res);
@@ -282,7 +290,7 @@ console.log(req.body);
   }
 
   //TODO: Get All Recycle Bin GRN
-  @httpGet('/recycle-bin')
+  @httpGet('/recycle-bin', requireRole(Role.SUPER_ADMIN))
   public async getAllRecycleBinGrns(
     @request() req: Request,
     @response() res: Response,
@@ -290,7 +298,7 @@ console.log(req.body);
   ) {
     try {
      
-      const { page, limit, search, sort, rfpaId, companyName, source, grnType, locationType } = req.query;
+      const { page, limit, search, sort, companyName, source, grnType, locationType } = req.query;
       const userId = res.locals.user.id;
       // const userRole = res.locals.user.role;
       // if (userRole !== "SuperAdmin")
@@ -352,7 +360,7 @@ console.log(req.body);
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('grn', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -362,12 +370,13 @@ console.log(req.body);
       entityName: 'GRN',
       definition: GRN_EXPORT,
       list: { documentType: FilterDocumentType.GRN, searchFields: ['grn.grnNo'], filterKeys: ['companyName', 'source', 'grnType', 'locationType'] },
-      fetchList: (queryOptions, userId) => this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res)),
+      fetchList: (queryOptions, userId) =>
+        this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res), isPaymentManager(res.locals.user)),
     });
   }
 
   //TODO: GRN get all
-  @httpGet('/')
+  @httpGet('/', checkPermission('grn', 'view'))
   public async getAllGrns(
     @request() req: Request,
     @response() res: Response,
@@ -375,7 +384,7 @@ console.log(req.body);
   ) {
     try {
 
-      const { page, limit, search, sort, rfpaId, companyName, source, grnType, locationType } = req.query;
+      const { page, limit, search, sort, companyName, source, grnType, locationType } = req.query;
       const userId = res.locals.user.id;
 
       //TODO: Shri
@@ -400,7 +409,7 @@ console.log(req.body);
       };
       // Same filters as the Excel export: validated, applied in SQL before pagination.
       applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.GRN);
-      const grns = await this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res));
+      const grns = await this.grnService.getAllGrns(queryOptions, userId, isAdminUser(res), isPaymentManager(res.locals.user));
       //console.log(grns)
       if (!grns) {
         
@@ -441,7 +450,7 @@ console.log(req.body);
   }
 
   //TODO: GRN get by id for view
-  @httpGet('/view/:docid')
+  @httpGet('/view/:docid', checkPermission('grn', 'view'), guardDocumentView(ApprovalDocType.GRN, 'GRN'))
   public async getGrnByIdForView(
     @requestParam('docid') docid: string,
     @request() req: Request,
@@ -474,7 +483,7 @@ console.log(req.body);
   }
 
   //TODO: GRN get by id for update
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkPermission('grn', 'edit'), guardDocumentEdit(ApprovalDocType.GRN, 'GRN'))
   public async getGrnByIdForupdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -534,10 +543,16 @@ console.log(req.body);
     const isTPVoucherCreated = req.query.isTPVoucherCreated === 'true' ? true : req.query.isTPVoucherCreated === 'false' ? false : undefined;
     const isPMPVoucherCreated = req.query.isPMPVoucherCreated === 'true' ? true : req.query.isPMPVoucherCreated === 'false' ? false : undefined;
     const isLPVoucherCreated = req.query.isLPVoucherCreated === 'true' ? true : req.query.isLPVoucherCreated === 'false' ? false : undefined;
+    const isVehicleDispatchCreated = req.query.isVehicleDispatchCreated === 'true' ? true : req.query.isVehicleDispatchCreated === 'false' ? false : undefined;
+
+    // Receiving picker params (see GrnService.getReceivableGrnNumbers)
+    const receivable = req.query.receivable === 'true' ? true : req.query.receivable === 'false' ? false : undefined;
+    const missing = typeof req.query.missing === 'string' && req.query.missing.trim() ? req.query.missing.trim() : undefined;
+    const locationId = typeof req.query.locationId === 'string' && req.query.locationId.trim() ? req.query.locationId.trim() : undefined;
 
     const userId = res.locals.user.id;
 
-      const grns = await this.grnService.getAllGrnNumbers({...req.query, isAQRCreated, isInwardCreated, isDumpCreated, isDCForCustomerCreated, isMCVoucherCreated, isTPVoucherCreated, isPMPVoucherCreated, isLPVoucherCreated}, userId); // Call the service method
+      const grns = await this.grnService.getAllGrnNumbers({...req.query, isAQRCreated, isInwardCreated, isDumpCreated, isDCForCustomerCreated, isMCVoucherCreated, isTPVoucherCreated, isPMPVoucherCreated, isLPVoucherCreated, isVehicleDispatchCreated, receivable, missing, locationId}, userId); // Call the service method
       if (!grns || grns.length === 0) {
         return next(new AppError(404, 'No GRNs found'));
       }
@@ -569,7 +584,7 @@ console.log(req.body);
   }
 
   //TODO: Update GRN by Image(Billing)
-  @httpPut('/:id', uploadSingle.single('billImage'), captureUser)
+  @httpPut('/:id', checkPermission('grn', 'edit'), guardDocumentEdit(ApprovalDocType.GRN, 'GRN'), uploadSingle.single('billImage'), captureUser, protectBody)
   public async updateGrn(
     @requestParam('id') id: string,
     @request() req: Request<{}, {}, UpdateGrnDto>,
@@ -646,7 +661,7 @@ console.log(req.body);
 
 
   //TODO: GRN delete by id
-  @httpDelete('/:id')
+  @httpDelete('/:id', checkPermission('grn', 'delete'), guardDocumentDelete(ApprovalDocType.GRN, 'GRN'))
   public async deleteGrn(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -701,7 +716,7 @@ console.log(req.body);
 
 
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('grn', 'delete'), guardDocumentDelete(ApprovalDocType.GRN, 'GRN'))
   public async deleteMultipleGrns(
     @request() req: Request<{}, {}, { ids: string[] }>,
     @response() res: Response,
@@ -764,7 +779,7 @@ console.log(req.body);
    *     oldRate, newRate, modifiedBy, modifiedAt }
    * ]
    */
-  @httpGet('/product-history/:id')
+  @httpGet('/product-history/:id', checkPermission('grn', 'view'))
   public async getGrnProductHistory(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -783,7 +798,10 @@ console.log(req.body);
     }
   }
 
-  // TODO: Update GRN amount status (paid / unpaid)
+  /**
+   * Legacy "Mark As Paid". The payment status now follows the recorded payments
+   * (POST /grns/:id/payments); this only confirms a GRN whose advance covers its whole total.
+   */
   @httpPut('/amount-status/:id')
   public async updateAmountStatus(
     @requestParam('id') id: string,
@@ -793,19 +811,18 @@ console.log(req.body);
   ) {
     try {
       const { ammountStatus: status } = req.body;
-console.log(req.body)
-      if (!status || !['paid', 'unpaid'].includes(status)) {
-        return next(new AppError(400, 'Invalid status. Must be "paid" or "unpaid"'));
+      if (status !== GrnPaymentStatus.PAID) {
+        return next(new AppError(409, 'The payment status follows the recorded payments; void a payment to undo it'));
       }
 
-      const result = await this.grnService.updateAmountStatus(id, status as any);
+      await this.grnPaymentService.confirmPaidByAdvance(id, res.locals.user);
 
       ControllerLogger.logSuccess('GRN amount status updated', id, req, res);
 
       // Recorded for the admin dashboard's recent activity; never blocks the response.
       const userName = `${res.locals.user.firstName || ''} ${res.locals.user.lastName || ''}`.trim() || res.locals.user.username || 'Unknown User';
       void this.logUserActivity(req, res, ActivityAction.UPDATE,
-        `${userName} marked GRN as ${status === 'paid' ? 'Paid' : 'Unpaid'}`,
+        `${userName} marked GRN as Paid (covered by its advance)`,
         { entityId: id, metadata: { event: 'amount-status', ammountStatus: status } });
 
       res.status(200).json({

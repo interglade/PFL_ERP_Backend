@@ -11,6 +11,8 @@
  * from the app can be edited and imported back without the headers drifting.
  */
 
+import type { FormatRule } from './formatRules';
+
 export type ExcelCellType =
   | 'string'
   | 'number'
@@ -57,6 +59,42 @@ export interface ExcelColumn<TRow = any> {
    */
   readOnly?: boolean;
 
+  /**
+   * Identifies an existing record - the Record ID on a small master, the Code
+   * on a registration.
+   *
+   * Unlike `readOnly` it is read back on import, so an exported file can be
+   * edited and imported again to update those records. Like `readOnly` it is
+   * left out of the blank template, since a new record has no identity yet.
+   */
+  key?: boolean;
+
+  /**
+   * Name of a list supplied when the workbook is built (see `WorkbookLists`),
+   * used for the dropdown instead of `enumValues`. This is how a "Vendor
+   * Category" column offers the categories currently in the database.
+   */
+  listFrom?: string;
+
+  /**
+   * Marks a column whose value is the name of a record in another master. The
+   * importer matches it through a `LookupIndex`; the Instructions sheet tells
+   * the user which master the name has to exist in.
+   */
+  link?: ExcelColumnLink;
+
+  /**
+   * Value rule the form applies (mobile, email, GSTIN, ...). The registration
+   * importers leave a cell that breaks it empty and report it.
+   */
+  format?: FormatRule;
+
+  /**
+   * A mobile or email no other record of the same registration may hold
+   * (docs/registration-import-plan.md D4). Needs `format` 'mobile' or 'email'.
+   */
+  uniqueContact?: boolean;
+
   width?: number;
 
   /** Extra guidance for the Instructions sheet. */
@@ -65,6 +103,22 @@ export interface ExcelColumn<TRow = any> {
   /** Export: pull the cell value out of the entity. */
   get?: (row: TRow) => unknown;
 }
+
+export interface ExcelColumnLink {
+  /** Human-readable name of the master the value must exist in, e.g. "Vendor Category". */
+  master: string;
+  /**
+   * Header of the column in the same row that holds the parent, when the name
+   * is only unique within that parent (a subcategory within its category).
+   */
+  scopeHeader?: string;
+}
+
+/**
+ * Dropdown values supplied when a workbook is built, keyed by `listFrom`.
+ * A missing or empty list simply means that column gets no dropdown.
+ */
+export type WorkbookLists = Record<string, readonly string[]>;
 
 /**
  * A repeating child block — variants on a product, crops on a farmer.

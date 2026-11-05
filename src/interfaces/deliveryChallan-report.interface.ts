@@ -18,12 +18,6 @@ export interface IDeliveryChallanReportDownloadRequest {
   challanNo?: string;
   grnNo?: string;
   approvalStatus?: string;
-  requestingDepartment?: string;
-  
-  // Driver and vehicle filters (optional)
-  driverName?: string;
-  vehicleNo?: string;
-  licenseNo?: string;
   rmn?: string;
   receiverName?: string;
 
@@ -56,10 +50,6 @@ export interface IDeliveryChallanReportFilters {
   challanNo?: string;
   grnNo?: string;
   approvalStatus?: string;
-  requestingDepartment?: string;
-  driverName?: string;
-  vehicleNo?: string;
-  licenseNo?: string;
   rmn?: string;
   receiverName?: string;
   totalProductAmount?: number;

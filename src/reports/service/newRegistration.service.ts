@@ -150,8 +150,8 @@ export class NewRegistrationService {
         const farmerQuery = `
           SELECT 
             COUNT(*) as total,
-            COUNT(CASE WHEN f.status = 'pending' THEN 1 END) as pending,
-            COUNT(CASE WHEN f.status = 'notapproved' THEN 1 END) as not_approved
+            COUNT(CASE WHEN f.status = 'Pending' THEN 1 END) as pending,
+            COUNT(CASE WHEN f.status = 'Rejected' THEN 1 END) as not_approved
           FROM farmer f
           LEFT JOIN addresses a ON f."residensialAddressId" = a.id
           WHERE f."createdAt" BETWEEN $1 AND $2
@@ -177,8 +177,8 @@ export class NewRegistrationService {
         const vendorQuery = `
           SELECT 
             COUNT(*) as total,
-            COUNT(CASE WHEN v.status = 'pending' THEN 1 END) as pending,
-            COUNT(CASE WHEN v.status = 'notapproved' THEN 1 END) as not_approved
+            COUNT(CASE WHEN v.status = 'Pending' THEN 1 END) as pending,
+            COUNT(CASE WHEN v.status = 'Rejected' THEN 1 END) as not_approved
           FROM vendor v
           LEFT JOIN addresses a ON v.office_address_id = a.id
           WHERE v."createdAt" BETWEEN $1 AND $2
@@ -204,8 +204,8 @@ export class NewRegistrationService {
         const customerQuery = `
           SELECT 
             COUNT(*) as total,
-            COUNT(CASE WHEN c.status = 'pending' THEN 1 END) as pending,
-            COUNT(CASE WHEN c.status = 'notapproved' THEN 1 END) as not_approved
+            COUNT(CASE WHEN c.status = 'Pending' THEN 1 END) as pending,
+            COUNT(CASE WHEN c.status = 'Rejected' THEN 1 END) as not_approved
           FROM customers c
           LEFT JOIN addresses a ON c."customerAddressId" = a.id
           WHERE c."createdAt" BETWEEN $1 AND $2
@@ -353,14 +353,14 @@ export class NewRegistrationService {
         SELECT 
           CONCAT(e."firstName", ' ', COALESCE(e."middleName", ''), ' ', e."lastName") as employee_name,
           COUNT(DISTINCT CASE WHEN f.id IS NOT NULL ${farmerLocationCondition} THEN f.id END) as farmer_registered,
-          COUNT(DISTINCT CASE WHEN f.id IS NOT NULL AND f.status = 'pending' ${farmerLocationCondition} THEN f.id END) as farmer_pending,
-          COUNT(DISTINCT CASE WHEN f.id IS NOT NULL AND f.status = 'notapproved' ${farmerLocationCondition} THEN f.id END) as farmer_not_approved,
+          COUNT(DISTINCT CASE WHEN f.id IS NOT NULL AND f.status = 'Pending' ${farmerLocationCondition} THEN f.id END) as farmer_pending,
+          COUNT(DISTINCT CASE WHEN f.id IS NOT NULL AND f.status = 'Rejected' ${farmerLocationCondition} THEN f.id END) as farmer_not_approved,
           COUNT(DISTINCT CASE WHEN v.id IS NOT NULL ${vendorLocationCondition} THEN v.id END) as vendor_registered,
-          COUNT(DISTINCT CASE WHEN v.id IS NOT NULL AND v.status = 'pending' ${vendorLocationCondition} THEN v.id END) as vendor_pending,
-          COUNT(DISTINCT CASE WHEN v.id IS NOT NULL AND v.status = 'notapproved' ${vendorLocationCondition} THEN v.id END) as vendor_not_approved,
+          COUNT(DISTINCT CASE WHEN v.id IS NOT NULL AND v.status = 'Pending' ${vendorLocationCondition} THEN v.id END) as vendor_pending,
+          COUNT(DISTINCT CASE WHEN v.id IS NOT NULL AND v.status = 'Rejected' ${vendorLocationCondition} THEN v.id END) as vendor_not_approved,
           COUNT(DISTINCT CASE WHEN c.id IS NOT NULL ${customerLocationCondition} THEN c.id END) as customer_registered,
-          COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND c.status = 'pending' ${customerLocationCondition} THEN c.id END) as customer_pending,
-          COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND c.status = 'notapproved' ${customerLocationCondition} THEN c.id END) as customer_not_approved
+          COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND c.status = 'Pending' ${customerLocationCondition} THEN c.id END) as customer_pending,
+          COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND c.status = 'Rejected' ${customerLocationCondition} THEN c.id END) as customer_not_approved
         FROM employees e
         LEFT JOIN farmer f ON e.id = f.created_by AND f."createdAt" BETWEEN $1 AND $2
         LEFT JOIN addresses fa ON f."residensialAddressId" = fa.id
@@ -443,7 +443,7 @@ export class NewRegistrationService {
         contactNo: row.contact_no || '',
         email: row.email || '',
         registeredBy: row.registered_by || '',
-        status: row.status === 'notapproved' ? 'Not Approved' : row.status === 'pending' ? 'Pending' : 'Approved',
+        status: row.status,
       }));
     } catch (error) {
       console.error('Error getting farmer data:', error);
@@ -500,7 +500,7 @@ export class NewRegistrationService {
         contactNo: row.contact_no || '',
         email: row.email || '',
         registeredBy: row.registered_by || '',
-        status: row.status === 'notapproved' ? 'Not Approved' : row.status === 'pending' ? 'Pending' : 'Approved',
+        status: row.status,
       }));
     } catch (error) {
       console.error('Error getting vendor data:', error);
@@ -554,7 +554,7 @@ export class NewRegistrationService {
         contactNumber: row.contact_number || '',
         email: row.email || '',
         registeredBy: row.registered_by || '',
-        status: row.status === 'notapproved' ? 'Not Approved' : row.status === 'pending' ? 'Pending' : 'Approved',
+        status: row.status,
       }));
     } catch (error) {
       console.error('Error getting customer data:', error);
@@ -773,7 +773,7 @@ export class NewRegistrationService {
       farmerRow2.getCell(1).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
       farmerRow2.getCell(2).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
 
-      const farmerRow3 = sheet.addRow(['Total Not Approved', summary.farmers.notApproved]);
+      const farmerRow3 = sheet.addRow(['Total Rejected', summary.farmers.notApproved]);
       farmerRow3.getCell(1).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
       farmerRow3.getCell(2).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
 
@@ -801,7 +801,7 @@ export class NewRegistrationService {
       vendorRow2.getCell(1).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
       vendorRow2.getCell(2).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
 
-      const vendorRow3 = sheet.addRow(['Total Not Approved', summary.vendors.notApproved]);
+      const vendorRow3 = sheet.addRow(['Total Rejected', summary.vendors.notApproved]);
       vendorRow3.getCell(1).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
       vendorRow3.getCell(2).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
 
@@ -829,7 +829,7 @@ export class NewRegistrationService {
       customerRow2.getCell(1).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
       customerRow2.getCell(2).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
 
-      const customerRow3 = sheet.addRow(['Total Not Approved', summary.customers.notApproved]);
+      const customerRow3 = sheet.addRow(['Total Rejected', summary.customers.notApproved]);
       customerRow3.getCell(1).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
       customerRow3.getCell(2).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
     }
@@ -857,19 +857,19 @@ export class NewRegistrationService {
 
     if (showFarmer) {
       row1Headers.push('Farmer', '', '');
-      row2Headers.push('Registered', 'Pending Approval', 'Not Approved');
+      row2Headers.push('Registered', 'Pending Approval', 'Rejected');
       columnWidths.push(12, 16, 14);
     }
 
     if (showVendor) {
       row1Headers.push('Vendor', '', '');
-      row2Headers.push('Registered', 'Pending Approval', 'Not Approved');
+      row2Headers.push('Registered', 'Pending Approval', 'Rejected');
       columnWidths.push(12, 16, 14);
     }
 
     if (showCustomer) {
       row1Headers.push('Customer', '', '');
-      row2Headers.push('Registered', 'Pending Approval', 'Not Approved');
+      row2Headers.push('Registered', 'Pending Approval', 'Rejected');
       columnWidths.push(12, 16, 14);
     }
 

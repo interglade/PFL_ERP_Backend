@@ -25,8 +25,11 @@ import { DocumentPermission } from "../../employee/entity/permission.entity";
     SECOND_SALE = 'second-sale',
     PACKAGING_MATERIAL_VOUCHER = 'packaging-material-voucher',
     VEHICLE_DISPATCH_REGISTER = 'vehicle-dispatch-register',
-    // REPORT = "REPORT",
-    // INVENTORY = "INVENTORY",
+    // Permission group for report keys (purchase-report, sales-report, ...); never an approval flow type
+    REPORT = 'Report',
+    // Permission groups for registration keys and business plan keys; never approval flow types
+    REGISTRATION = 'Registration',
+    PLAN = 'Plan',
   }
   
 @Entity("document_definitions")
@@ -43,6 +46,13 @@ export class DocumentDefinition extends Model {
     nullable: false,
   })
   documentType: DocumentTypeEnum;
+
+  /**
+   * Actions this key supports in the permission grid (create, view, edit, delete, download, export).
+   * Checkboxes for other actions are disabled; checkPermission refuses them.
+   */
+  @Column('text', { array: true, default: () => "'{}'" })
+  allowedActions: string[];
 
   @OneToMany(() => DocumentPermission, (permission) => permission.documentDefinition)
   permissions: DocumentPermission[];

@@ -15,9 +15,8 @@ import { parse, format } from 'date-fns';
 import Model from '../../global/model.entity';
 import { Company } from '../../company/entity/company.entity';
 import { User } from '../../employee/entity/user.entity';
-import { ammountStatus, Department, Source } from '../../utils/status.enum';
+import { GrnPaymentStatus, Source } from '../../utils/status.enum';
 import { DealSlip } from '../../dealSlip/entity/dealSlip.entity';
-import { RFPA } from '../../rfpa/entity/rfpa.entity';
 import { Branches } from '../../branch/entity/branches.entity';
 import { Vendor } from '../../vendor/createVendor/entity/vendor.entity';
 import { Farmer } from '../../farmer/entity/farmer.entity';
@@ -40,13 +39,38 @@ export enum GrnType {
   Purchase = 'purchase',
 }
 
+/**
+ * Where the goods physically go; it drives the workflow and the colour of the GRN print
+ * (`cc` red, `dc` and `direct-to-customer` green). `cc` and `dc` GRNs are received at that
+ * centre (AQR / Inward / Dump / RTV); `direct-to-customer` GRNs bypass the centres and never
+ * appear on the Arrivals worklist or in the receiving pickers.
+ */
+export enum GrnDeliveryMode {
+  CC = 'cc',
+  DC = 'dc',
+  DIRECT_TO_CUSTOMER = 'direct-to-customer',
+}
+
+/** Modes whose goods are received at a collection / distribution centre. */
+export const CENTRE_DELIVERY_MODES: readonly GrnDeliveryMode[] = [GrnDeliveryMode.CC, GrnDeliveryMode.DC];
+
 @Entity('grns')
 // Dashboard / report filters
 @Index(['createdAt'])
 @Index(['companyName'])
-@Index(['location'])
+@Index(['purchaseLocation'])
 @Index(['createdBy'])
+// Batch no lookups per company. Uniqueness (one live, non-rejected GRN per
+// company + batch no) is enforced by GrnService.assertBatchNoUnique: a rejected
+// GRN must release its batch no, which a partial index cannot express.
+@Index('IDX_grns_company_batch_no', ['companyName', 'batchNo'])
 export class GRN extends Model {
+  /** Transaction number of the deal this document belongs to (docs/transaction-tracking-plan.md §9). */
+  @Index('IDX_grns_txn_no')
+  // Written only by src/transactions (raw SQL); never from a request body through an entity save.
+  @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true, insert: false, update: false })
+  txnNo: string | null;
+
   @ManyToOne(() => Company, {
     cascade: true,
     nullable: true,
@@ -61,15 +85,20 @@ export class GRN extends Model {
   @JoinColumn({ name: 'purchaseInstructionsBy_id' })
   purchaseInstructionsBy: User;
 
-  @Column({
-    type: 'enum',
-    enum: Department,
-    nullable: true,
-  })
-  requestingDepartment: Department;
-
   @Column({ nullable: true })
   grnNo: string;
+
+  /** Typed by the user (alphanumeric); required on new GRNs; unique per company among live, non-rejected GRNs. */
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  batchNo: string | null;
+
+  /** Σ line gross weight (kg). Calculated by the backend on create / update. */
+  @Column('decimal', { precision: 12, scale: 3, nullable: true })
+  totalGrossWeight: number | null;
+
+  /** Σ line net weight (kg). Calculated by the backend on create / update. */
+  @Column('decimal', { precision: 12, scale: 3, nullable: true })
+  totalNetWeight: number | null;
 
   @Column({
     type: 'enum',
@@ -92,13 +121,17 @@ export class GRN extends Model {
   })
   purchaseType: PurchaseType;
 
+  @Column({
+    type: 'enum',
+    enum: GrnDeliveryMode,
+    default: GrnDeliveryMode.CC,
+    nullable: false,
+  })
+  deliveryMode: GrnDeliveryMode;
+
   @ManyToOne(() => DealSlip, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'deal_slip_id' })
   dealSlipId: DealSlip;
-
-  @ManyToOne(() => RFPA, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'rfpa_id' })
-  rfpa: RFPA;
 
   @Column({ nullable: true })
   securityPerson: string;
@@ -170,12 +203,6 @@ export class GRN extends Model {
   @Column({ nullable: true })
   approvalNote: string;
 
-  @Column({ nullable: true })
-  receivedThrough: string;
-
-  @Column({ nullable: true })
-  vehicleNo: string;
-
 @Column({
   type: 'timestamp',
   nullable: true,
@@ -244,11 +271,9 @@ timeIn: string | null;
   @Column('int', { nullable: true })
   cratesIn: number;
 
-  @Column('character varying', {
-    name: 'delivery_receiving_person',
-    nullable: true,
-  })
-  deliveryReceivingPerson: string;
+  /** Person who received the delivery. (Formerly `delivery_receiving_person`.) */
+  @Column({ type: 'varchar', nullable: true })
+  receivingPerson: string;
 
   @Column({ name: 'rmn', nullable: true })
   rmn: string;
@@ -260,13 +285,6 @@ timeIn: string | null;
   })
   @JoinColumn({ name: 'grnProduct_id' })
   grnProducts: GrnProduct[];
-
-  @Column({ nullable: true })
-  baseLocation: string;
-
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
-  @JoinColumn({ name: 'purchase_id' })
-  purchaseBy: User;
 
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'createdby_id' })
@@ -284,13 +302,6 @@ timeIn: string | null;
   @ManyToOne(() => Levels, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'current_level_id' })
   currentLevel: Levels;
-
-  @ManyToOne(() => Branches, (branch) => branch.grns, {
-    nullable: true,
-    onDelete: 'SET NULL',
-  })
-  @JoinColumn({ name: 'branch_id' })
-  location: Branches;
 
   @OneToOne(() => PaymentInfoForGRN, { onDelete: 'SET NULL', cascade: true })
   @JoinColumn({ name: 'payment_info_id' })
@@ -320,13 +331,27 @@ timeIn: string | null;
    @Column({ default: false })
     isLPVoucherCreated: boolean;
 
-    @Column( {
-         type: 'enum',
-         enum: ammountStatus,
-         default:ammountStatus.UNPAID,
-         nullable:true
-        })
-        ammountStatus:ammountStatus   
+  /**
+   * A live Purchase vehicle dispatch (not deleted, approval not rejected) exists for
+   * this GRN. Maintained by VehicleDispatchService / the approval engine through
+   * `syncGrnVehicleDispatchFlag`; the dispatch table stays the source of truth.
+   */
+  @Column({ default: false })
+  isVehicleDispatchCreated: boolean;
+
+  /** Unpaid / Partial / Paid, worked out from the GRN's payments (GrnPaymentService). */
+  @Column({
+    type: 'enum',
+    enum: GrnPaymentStatus,
+    enumName: 'grns_ammountstatus_enum',
+    default: GrnPaymentStatus.UNPAID,
+    nullable: true,
+  })
+  ammountStatus: GrnPaymentStatus;
+
+  /** Sum of the live (not voided) recorded payments; the advance is not included. */
+  @Column('decimal', { name: 'paid_amount', precision: 15, scale: 2, default: 0 })
+  paidAmt: number;
 }
 // @Column({
 //   type: "timestamp",

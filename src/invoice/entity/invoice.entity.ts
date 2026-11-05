@@ -17,7 +17,7 @@ import { DeliveryChallanPurchase } from '../../deliveryChallans/deliverychllan/e
 import { Customer } from '../../customer/addcustomer/entity/customer.entity';
 import { Branches } from '../../branch/entity/branches.entity';
 import { Address } from '../../address/entity/address.entity';
-import { ammountStatus } from '../../utils/status.enum';
+import { GrnPaymentStatus } from '../../utils/status.enum';
 import { User } from '../../employee/entity/user.entity';
 
 
@@ -29,6 +29,12 @@ import { User } from '../../employee/entity/user.entity';
 @Index(['createdBy'])
 @Index(['deliveryChallan'])
 export class Invoice extends Model {
+  /** Transaction number of the deal this document belongs to (docs/transaction-tracking-plan.md §9). */
+  @Index('IDX_invoices_txn_no')
+  // Written only by src/transactions (raw SQL); never from a request body through an entity save.
+  @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true, insert: false, update: false })
+  txnNo: string | null;
+
   @ManyToOne(() => Company, {
     cascade: true,
     nullable: true,
@@ -142,13 +148,19 @@ export class Invoice extends Model {
   @JoinColumn({ name: 'created_by' })
   createdBy: User;
 
+  /** Unpaid / Partial / Paid, worked out from the invoice's payments (InvoicePaymentService). */
   @Column({
     type: 'enum',
-    enum: ammountStatus,
-    default: ammountStatus.UNPAID,
+    enum: GrnPaymentStatus,
+    enumName: 'invoices_ammountstatus_enum',
+    default: GrnPaymentStatus.UNPAID,
     nullable: true
   })
-  ammountStatus: ammountStatus
+  ammountStatus: GrnPaymentStatus
+
+  /** Sum of the live (not voided) recorded payments. */
+  @Column('decimal', { name: 'paid_amount', precision: 15, scale: 2, default: 0 })
+  paidAmt: number;
 
 }
 

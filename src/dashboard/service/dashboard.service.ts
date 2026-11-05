@@ -341,7 +341,7 @@ async getProcurementSourceWise(userId: string, month?: number, year?: number): P
       "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
       {
         type: "grn",
-        status: "COMPLETE"
+        status: "Complete"
       }
     )
     .select("COALESCE(SUM(grn.totalAmt), 0)", "totalAmount")
@@ -360,7 +360,7 @@ async getProcurementSourceWise(userId: string, month?: number, year?: number): P
       "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
       {
         type: "grn",
-        status: "COMPLETE"
+        status: "Complete"
       }
     )
     .leftJoin("grn.grnProducts", "product")
@@ -1867,7 +1867,7 @@ public async getEmployeeCountByDept(query: any): Promise<any> {
         .map((r) => ({
           id:     r.empId,
           name:   r.fullName?.replace(/\s+/g, " ").trim() || "Unknown",
-          status: "active",
+          status: "Active",
         }));
 
       const inactiveMembers = rows
@@ -1875,7 +1875,7 @@ public async getEmployeeCountByDept(query: any): Promise<any> {
         .map((r) => ({
           id:     r.empId,
           name:   r.fullName?.replace(/\s+/g, " ").trim() || "Unknown",
-          status: "inactive",
+          status: "Inactive",
         }));
 
       return {
@@ -2249,7 +2249,7 @@ public async getEmployeeCountByDept(query: any): Promise<any> {
       .createQueryBuilder("grn")
       .innerJoin("documents", "doc",
         "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
-        { type: "grn", status: "COMPLETE" })
+        { type: "grn", status: "Complete" })
       .select("COALESCE(SUM(grn.totalAmt), 0)", "totalAmount")
       .where("grn.createdby_id::text = :id", { id: memberId })
       .andWhere("EXTRACT(MONTH FROM grn.createdAt) = :month", { month: resolvedMonth })
@@ -2263,7 +2263,7 @@ public async getEmployeeCountByDept(query: any): Promise<any> {
       .createQueryBuilder("grn")
       .innerJoin("documents", "doc",
         "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
-        { type: "grn", status: "COMPLETE" })
+        { type: "grn", status: "Complete" })
       .leftJoin("grn.grnProducts", "product")
       .select("COALESCE(SUM(product.netWeight), 0)", "totalQty")
       .where("grn.createdby_id::text = :id", { id: memberId })
@@ -2287,7 +2287,7 @@ public async getEmployeeCountByDept(query: any): Promise<any> {
       .createQueryBuilder("grn")
       .innerJoin("documents", "doc",
         "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
-        { type: "grn", status: "COMPLETE" })
+        { type: "grn", status: "Complete" })
       .leftJoin("grn.grnProducts", "product")
       .select("COALESCE(SUM(product.netWeight), 0)", "achievedQty")
       .where("grn.createdby_id::text = :id", { id: memberId })
@@ -2304,7 +2304,7 @@ public async getEmployeeCountByDept(query: any): Promise<any> {
       .createQueryBuilder("grn")
       .innerJoin("documents", "doc",
         "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
-        { type: "grn", status: "COMPLETE" })
+        { type: "grn", status: "Complete" })
       .select("COUNT(grn.id)", "grnCount")
       .where("grn.createdby_id::text = :id", { id: memberId })
       .andWhere("EXTRACT(MONTH FROM grn.createdAt) = :month", { month: resolvedMonth })
@@ -2544,7 +2544,7 @@ async getSaleTeamMembersPerformance(
       .createQueryBuilder("invoice")
       .innerJoin("documents", "doc",
         "doc.document_type_id = invoice.id::text AND doc.type = :type AND doc.status = :status",
-        { type: "final-invoice", status: "COMPLETE" })
+        { type: "final-invoice", status: "Complete" })
       .select("COALESCE(SUM(invoice.netProductWeight), 0)", "achievedQty")
       .addSelect("COALESCE(SUM(invoice.totalAmount), 0)", "totalAmount")
       .where("invoice.created_by::text = :ids", { ids: memberId })
@@ -2560,7 +2560,7 @@ async getSaleTeamMembersPerformance(
       .createQueryBuilder("invoice")
       .innerJoin("documents", "doc",
         "doc.document_type_id = invoice.id::text AND doc.type = :type AND doc.status = :status",
-        { type: "final-invoice", status: "COMPLETE" })
+        { type: "final-invoice", status: "Complete" })
       .leftJoin("invoice.invoiceProducts", "invoiceProduct")
       .select("COALESCE(SUM(invoiceProduct.grossWeight), 0)", "totalQty")
       .where("invoice.created_by::text = :ids", { ids: memberId })
@@ -2580,7 +2580,7 @@ async getSaleTeamMembersPerformance(
       .createQueryBuilder("invoice")
       .innerJoin("documents", "doc",
         "doc.document_type_id = invoice.id::text AND doc.type = :type AND doc.status = :status",
-        { type: "final-invoice", status: "COMPLETE" })
+        { type: "final-invoice", status: "Complete" })
       .select("COUNT(invoice.id)", "invoiceCount")
       .where("invoice.created_by::text = :ids", { ids: memberId })
       .andWhere("EXTRACT(MONTH FROM invoice.createdAt) = :month", { month: resolvedMonth })
@@ -2765,6 +2765,10 @@ const memberIds = [
 ];
 console.log("Team Member IDs in DashboardService:", memberIds);
 const totalTeamMembers = memberIds.length;
+// No team under this user: every figure is 0 (an empty IN () list is invalid SQL)
+if (memberIds.length === 0) {
+  return { totalProcurementAmount: 0, totalProcurementQty: 0, asignedTargetQty: 0, achievedQty: 0, achievementRate: 0, variance: 0, totalRegisteredFarmers: 0, totalRegisteredVendors: 0 };
+}
 
 // const currentMonth = new Date().getMonth();
 // const currentYear = new Date().getFullYear();
@@ -2804,7 +2808,7 @@ const activeMembers = await this.procurementTargetRepo
       "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
       {
         type: "grn",
-        status: "COMPLETE"
+        status: "Complete"
       }
     )
     .select("COALESCE(SUM(grn.totalAmt), 0)", "totalAmount")
@@ -2821,7 +2825,7 @@ const activeMembers = await this.procurementTargetRepo
       "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
       {
         type: "grn",
-        status: "COMPLETE"
+        status: "Complete"
       }
     )
     .leftJoin("grn.grnProducts", "product")
@@ -2853,7 +2857,7 @@ const newCurrentMnth=new Date().getMonth()+1;
     "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "grn",
-      status: "COMPLETE"
+      status: "Complete"
     }
   )
   .leftJoin("grn.grnProducts", "product")
@@ -2880,7 +2884,7 @@ const newCurrentMnth=new Date().getMonth()+1;
   )
   .andWhere(
     "farmer.status = :status",
-    { status: "approved" }
+    { status: "Approved" }
   )
   .andWhere(
     "EXTRACT(MONTH FROM farmer.createdAt)=:month",
@@ -2902,7 +2906,7 @@ const totalRegisteredVendors = await this.vendorRepo
   )
   .andWhere(
     "vendor.status = :status",
-    { status: "approved" }
+    { status: "Approved" }
   )
   .andWhere(
     "EXTRACT(MONTH FROM vendor.createdAt)=:month",
@@ -2949,6 +2953,10 @@ const memberIds = [
 ];
 //const memberIds = teamMembers.map(t => t.descendant.id);
 const totalTeamMembers = memberIds.length;
+// No team under this user: every figure is 0 (an empty IN () list is invalid SQL)
+if (memberIds.length === 0) {
+  return { totalSaleAmount: 0, totalSaleQty: 0, asignedTargetQty: 0, achievedQty: 0, achievementRate: 0, variance: 0, totalRegisteredCutomers: 0 };
+}
 
 const currentMonth = new Date().getMonth();
 const currentYear = new Date().getFullYear();
@@ -2981,7 +2989,7 @@ const activeMembers = await this.saleTargetRepo
     "doc.document_type_id = invoice.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "final-invoice",
-      status: "COMPLETE"
+      status: "Complete"
     }
   )
   .select("SUM(invoice.totalAmount)", "totalAmount")
@@ -3011,7 +3019,7 @@ const targets = await this.saleTargetRepo
     "doc.document_type_id = invoice.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "final-invoice",
-      status: "COMPLETE"
+      status: "Complete"
     }
   )
   .select("SUM(invoice.netProductWeight)", "totalQty")
@@ -3037,7 +3045,7 @@ const targets = await this.saleTargetRepo
   )
   .andWhere(
     "customer.status = :status",
-    { status: "approved" }
+    { status: "Approved" }
   )
   .andWhere(
     "EXTRACT(MONTH FROM customer.createdAt)=:month",
@@ -3074,7 +3082,7 @@ async getProcurementOverview(): Promise<any> {
       "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
       {
         type: "grn",
-        status: "COMPLETE"
+        status: "Complete"
       }
     )
     .select("COALESCE(SUM(grn.totalAmt), 0)", "totalAmount")
@@ -3090,7 +3098,7 @@ async getProcurementOverview(): Promise<any> {
       "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
       {
         type: "grn",
-        status: "COMPLETE"
+        status: "Complete"
       }
     )
     .leftJoin("grn.grnProducts", "product")
@@ -3119,7 +3127,7 @@ async getSaleOverview(): Promise<any> {
     "doc.document_type_id = invoice.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "final-invoice",
-      status: "COMPLETE"
+      status: "Complete"
     }
   )
   .select("SUM(invoice.totalAmount)", "totalAmount")
@@ -3155,7 +3163,7 @@ const pendingGrnCountResult = await this.grnRepo
     { type: "grn" }
   )
   .select("COUNT(grn.id)", "grnCount")
-  .where("doc.status != :status", { status: "COMPLETE" })
+  .where("doc.status != :status", { status: "Complete" })
   .andWhere("grn.createdAt <= :today", { today: new Date() })
   .getRawOne();
 
@@ -3186,7 +3194,7 @@ const result2 = await this.finalInvoiceRepo
     }
   )
   .select("COUNT(invoice.id)", "invoiceCount")
-  .where("doc.status != :status", { status: "COMPLETE" })
+  .where("doc.status != :status", { status: "Complete" })
   .andWhere("invoice.createdAt <= :today", { today: new Date() })
   .getRawOne();
 
@@ -3206,7 +3214,7 @@ async getCustomerTypeWiseSaleOverview(): Promise<any> {
     "doc.document_type_id = invoice.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "final-invoice",
-      status: "COMPLETE"
+      status: "Complete"
     }
   )
   .innerJoin("invoice.customerName", "customer")
@@ -3240,7 +3248,7 @@ async getCustomerCategoryWiseSaleOverview(): Promise<any> {
     "doc.document_type_id = invoice.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "final-invoice",
-      status: "COMPLETE"
+      status: "Complete"
     }
   )
   .innerJoin("invoice.customerName", "customer")
@@ -3274,7 +3282,7 @@ async getVendorCategoryWiseProcurementOverview(): Promise<any> {
     "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "grn",
-      status: "COMPLETE",
+      status: "Complete",
     }
   )
   .innerJoin("grn.selectedVendor", "vendor") // ✅ only vendor GRNs
@@ -3334,7 +3342,7 @@ async getVendorSubcategoryWiseProcurementOverview(): Promise<any> {
     "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "grn",
-      status: "COMPLETE",
+      status: "Complete",
     }
   )
   .innerJoin("grn.selectedVendor", "vendor") // ✅ only vendor GRNs
@@ -3398,7 +3406,7 @@ async getLocationWiseSaleOverview(): Promise<any> {
     "doc.document_type_id = inv.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "final-invoice",
-      status: "COMPLETE",
+      status: "Complete",
     }
   )
   .leftJoin("inv.deliveryChallan", "dc")
@@ -3460,7 +3468,7 @@ async getLocationWiseProcurementOverview(): Promise<any> {
     "doc.document_type_id = grn.id::text AND doc.type = :type AND doc.status = :status",
     {
       type: "grn",
-      status: "COMPLETE",
+      status: "Complete",
     }
   )
   .leftJoin("grn.purchaseLocation", "location")

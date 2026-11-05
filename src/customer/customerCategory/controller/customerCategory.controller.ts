@@ -1,3 +1,5 @@
+import { Role } from '../../../employee/entity/user.entity';
+import { requireRole } from '../../../middleware/requireRole';
 import { Request, Response, NextFunction } from "express";
 import {
   controller,
@@ -134,7 +136,7 @@ export class CustomerCategoryController {
     }
   }
 
-  @httpPost("/")
+  @httpPost("/", requireRole(Role.ADMIN))
   public async create(
     @requestBody() categoryData: CreateCustomerCategoryDto,
     @request() req: Request,
@@ -199,7 +201,7 @@ export class CustomerCategoryController {
     }
   }
 
-  @httpPatch("/:id",captureUser)
+  @httpPatch("/:id", requireRole(Role.ADMIN),captureUser)
   public async update(
     @requestParam("id") id: string,
     @requestBody() categoryData:CreateCustomerCategoryDto,
@@ -269,7 +271,7 @@ export class CustomerCategoryController {
     }
   }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", requireRole(Role.SUPER_ADMIN))
   public async delete(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -318,7 +320,7 @@ export class CustomerCategoryController {
       next(err);
     }
   }
-  @httpDelete("/delete/multiple")
+  @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
 public async softDeleteMultipleCustomerCategory(
   @request() req: Request,
   @response() res: Response,

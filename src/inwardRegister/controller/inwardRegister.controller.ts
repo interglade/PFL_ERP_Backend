@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from 'inversify';
 import {
   controller,
@@ -47,7 +53,7 @@ export class InwardRegisterController {
     
   ) {}
 
-  @httpPost('/')
+  @httpPost('/', checkPermission('inward-register', 'create'))
   public async createInwardRegister(
     @request() req: Request<{}, {}, any>,
     @response() res: Response,
@@ -123,7 +129,7 @@ export class InwardRegisterController {
   }
 
   //TODO: get All Inward Register in Recycle Bin.....By Vaishali
-  @httpGet('/recyclebin')
+  @httpGet('/recyclebin', requireRole(Role.SUPER_ADMIN))
   public async getAllRecycleBinInwardRegisters(
     @request() req: Request,
     @response() res: Response,
@@ -198,7 +204,7 @@ export class InwardRegisterController {
   }
 
 
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', checkPermission('inward-register', 'edit'), guardDocumentEdit(ApprovalDocType.INWARD_REGISTER, 'Inward Register'))
   public async getInwardRegisterForUpdate(
     @requestParam('id') id: string,
     @response() res: Response,
@@ -226,7 +232,7 @@ export class InwardRegisterController {
     }
   }
 
-  @httpPatch('/:id')
+  @httpPatch('/:id', checkPermission('inward-register', 'edit'), guardDocumentEdit(ApprovalDocType.INWARD_REGISTER, 'Inward Register'), protectBody)
   public async updateInwardRegister(
     @requestParam('id') id: string,
     @request() req: Request<{}, {}, UpdateInwardRegisterDto>,
@@ -298,7 +304,7 @@ export class InwardRegisterController {
     }
   }
 
-  @httpDelete('/:id')
+  @httpDelete('/:id', checkPermission('inward-register', 'delete'), guardDocumentDelete(ApprovalDocType.INWARD_REGISTER, 'Inward Register'))
   public async deleteInwardRegister(
     @requestParam('id') id: string,
     @request() req:Request,
@@ -349,7 +355,7 @@ export class InwardRegisterController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('inward-register', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -364,7 +370,7 @@ export class InwardRegisterController {
   }
 
 //TODO: get All Inward Register.....By Vaishali
-  @httpGet('/')
+  @httpGet('/', checkPermission('inward-register', 'view'))
   public async getAllInwardRegisters(
     @request() req: Request,
     @response() res: Response,
@@ -439,7 +445,7 @@ export class InwardRegisterController {
   }
 
   //TODO: Inward Register get by id for view...BY Vaishali
-  @httpGet('/view/:docid')
+  @httpGet('/view/:docid', checkPermission('inward-register', 'view'), guardDocumentView(ApprovalDocType.INWARD_REGISTER, 'Inward Register'))
   public async getInwardregisterByIdForView(
     @requestParam('docid') docid: string,
     @request() req: Request,
@@ -476,7 +482,7 @@ export class InwardRegisterController {
     }
   }
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('inward-register', 'delete'), guardDocumentDelete(ApprovalDocType.INWARD_REGISTER, 'Inward Register'))
     public async deleteMultipleInwardRegister(
       @request() req: Request,
       @response() res: Response,

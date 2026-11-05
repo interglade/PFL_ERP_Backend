@@ -1,5 +1,8 @@
 
-import { Role } from "./employee/entity/user.entity";
+import bcrypt from "bcryptjs";
+import { EmployeeStatus, Role, User } from "./employee/entity/user.entity";
+import { normalizeRoles } from "./utils/roles";
+import { AppDataSource } from "./utils/data-source";
 import { CreateUserDto } from "./employee/dto/user.dto";
 import { container } from "./inversify.config";
 import { UserService } from "./employee/service/user.service";
@@ -30,10 +33,12 @@ export async function seedAdmin() {
         lastName: "Admin",
         username: "Admin",
         workEmail: adminEmail,
+        primaryEmail: adminEmail,
         password: adminPassword,
-        status: "ACTIVE",
+        status: EmployeeStatus.ACTIVE,
         primaryMobNo: adminPhone,
-        roles: [Role.EMPLOYEE, Role.ADMIN],
+        // The seeded account is the first Super Admin (normalizeRoles adds ADMIN)
+        roles: [Role.EMPLOYEE, Role.SUPER_ADMIN, Role.ADMIN],
         department: ["admin"],
         joiningDate: new Date("2022-01-12"),
         employeeId: employeeId,
@@ -49,10 +54,23 @@ export async function seedAdmin() {
 
       try {
         const admin = await userService.createUser(adminData);
+        // createUser always starts employees as DRAFT with a random password:
+        // activate the Super Admin and give it SEED_ADMIN_PASSWORD (not kept in plain text)
+        await AppDataSource.getRepository(User).update(admin.id, {
+          status: EmployeeStatus.ACTIVE,
+          password: await bcrypt.hash(adminPassword, 12),
+          tempPlainPassword: null as any,
+        });
         console.log("Admin user created:", admin.id);
       } catch (validationError) {
         console.error("Validation failed:", validationError);
       }
+    } else if (!existingAdmin.roles?.includes(Role.SUPER_ADMIN) || existingAdmin.status !== EmployeeStatus.ACTIVE) {
+      // Older databases: the seeded admin becomes the first Super Admin and is active
+      existingAdmin.roles = normalizeRoles([...(existingAdmin.roles ?? []), Role.SUPER_ADMIN]);
+      existingAdmin.status = EmployeeStatus.ACTIVE;
+      await AppDataSource.getRepository(User).save(existingAdmin);
+      console.log("Seeded admin upgraded to an active Super Admin.");
     } else {
       console.log("Admin user already exists.");
     }

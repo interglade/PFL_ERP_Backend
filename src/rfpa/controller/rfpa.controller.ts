@@ -1,3 +1,8 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from 'inversify';
 import {
   controller,
@@ -49,7 +54,7 @@ export class RfpaController {
 
 
 
-  @httpGet('/recyclebin')
+  @httpGet('/recyclebin', requireRole(Role.SUPER_ADMIN))
   public async getRecycleBinRfpa(
     @request() req: Request,
     @response() res: Response,
@@ -65,7 +70,6 @@ export class RfpaController {
         selectedVendor,
         source,
         companyName,
-        requestingDepartment,
         rfpaId,
       } = req.query;
 
@@ -74,7 +78,6 @@ export class RfpaController {
       const filters: any = {};
       // if (selectedVendor) filters.selectedVendor = selectedVendor;
       // if (source) filters.source = source;
-      // if (requestingDepartment) filters.requestingDepartment = requestingDepartment;
       // if (companyName) filters.companyName = companyName;
       // if (rfpaId) filters.rfpaId = rfpaId;
 
@@ -143,8 +146,6 @@ export class RfpaController {
       }
 
       rfpaData.createdBy = requestedBy;
-
-      rfpaData.requestingDepartment = res.locals.user.selectDepartment;
 
       if (rfpaData.source === Source.VENDOR) {
         if (!rfpaData.selectedParty) {
@@ -263,7 +264,7 @@ export class RfpaController {
     }
   }
 
-  @httpPatch('/:id', checkPermission('rfpa', 'edit'))
+  @httpPatch('/:id', checkPermission('rfpa', 'edit'), guardDocumentEdit(ApprovalDocType.RFPA, 'RFPA'), protectBody)
   public async updateRfpa(
     @requestParam('id') rfpaId: string,
     @requestBody() rfpaData: UpdateRfpaDto & Record<string, any>,
@@ -334,64 +335,6 @@ export class RfpaController {
     }
   }
 
-  @httpPatch('/approve/:rfpaId')
-  public async approveRFPAHandler(
-    @requestParam('rfpaId') rfpaId: string,
-    @request() req: Request,
-    @response() res: Response,
-    @next() next: NextFunction,
-  ): Promise<void> {
-    try {
-      logger.info(`Approving RFPA with ID`);
-      const userId = res.locals.user.id;
-      const { approvalStatus, note } = req.body;
-      const result = 10;
-      // await this.rfpaService.approveRFPA(
-      //   rfpaId,
-      //   userId,
-      //   req.body,
-      // );
-
-      if (!result) {
-        logger.warn(`RFPA with ID: ${rfpaId} not found or cannot be approved`);
-        return next(new AppError(404, 'RFPA not found or cannot be approved'));
-      }
-      logger.info(`Successfully approved RFPA with ID: ${rfpaId}`);
-      res.status(200).json({
-        status: 'success',
-        data: result,
-      });
-    } catch (error) {
-      logger.error(`Error approving RFPA with ID ${rfpaId}:`, error);
-      next(error);
-    }
-  }
-
-  @httpGet('/rfpas/approved')
-  public async getAllApprovedRfpas(
-    @request() req: Request,
-    @response() res: Response,
-    @next() next: NextFunction,
-  ): Promise<void> {
-    try {
-      logger.info(`Fetching All approved RFPA`);
-      const rfpas = 10;
-      //await this.rfpaService.findAllApprovedRfpas();
-
-      if (!rfpas || (Array.isArray(rfpas) && rfpas.length === 0)) {
-        logger.warn('No approved RFPAs found');
-        return next(new AppError(400, 'No RFPAs found'));
-      }
-      //logger.info(`Found ${rfpas.length} approved RFPAs`);
-      res.status(200).json({
-        status: 'success',
-        data: rfpas,
-      });
-    } catch (error) {
-      logger.error('Error fetching approved RFPAs:', error);
-      next(error);
-    }
-  }
   @httpGet('/rfpanumbers/getAllRfpaNo')
   public async getAllRFPANumbers(
     @request() req: Request,
@@ -437,7 +380,7 @@ export class RfpaController {
     }
   }
 
-  @httpGet('/:id/update')
+  @httpGet('/:id/update', checkPermission('rfpa', 'edit'), guardDocumentEdit(ApprovalDocType.RFPA, 'RFPA'))
 public async getRfpaByIdByUpdate(
   @requestParam('id') rfpaId: string,
   @request() req: Request,
@@ -472,7 +415,7 @@ public async getRfpaByIdByUpdate(
   }
 }
 
-  @httpDelete('/:id', checkPermission('rfpa', 'delete'))
+  @httpDelete('/:id', checkPermission('rfpa', 'delete'), guardDocumentDelete(ApprovalDocType.RFPA, 'RFPA'))
   public async deleteRfpas(
     @request() req: Request,
     @response() res: Response,
@@ -723,7 +666,7 @@ public async getRfpaByIdByUpdate(
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('rfpa', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -739,7 +682,7 @@ public async getRfpaByIdByUpdate(
 
   //TODO:By Vaishali
   //TODO: get All RFPA
-  @httpGet('/')
+  @httpGet('/', checkPermission('rfpa', 'view'))
   public async getAllRfpa(
     @request() req: Request,
     @response() res: Response,
@@ -755,7 +698,6 @@ public async getRfpaByIdByUpdate(
         selectedVendor,
         source,
         companyName,
-        requestingDepartment,
         rfpaId,
       } = req.query;
 
@@ -764,7 +706,6 @@ public async getRfpaByIdByUpdate(
       const filters: any = {};
       // if (selectedVendor) filters.selectedVendor = selectedVendor;
       // if (source) filters.source = source;
-      // if (requestingDepartment) filters.requestingDepartment = requestingDepartment;
       // if (companyName) filters.companyName = companyName;
       // if (rfpaId) filters.rfpaId = rfpaId;
 
@@ -816,7 +757,7 @@ public async getRfpaByIdByUpdate(
 
   //TODO:By Vaishali
   //TODO: RPFA get by id for view
-  @httpGet('/view/:docid')
+  @httpGet('/view/:docid', checkPermission('rfpa', 'view'), guardDocumentView(ApprovalDocType.RFPA, 'RFPA'))
   public async getRfpaByIdForView(
     @requestParam('docid') docid: string,
     @request() req: Request,
@@ -861,7 +802,7 @@ public async getRfpaByIdByUpdate(
 
 
   //pest in rfpa controller
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('rfpa', 'delete'), guardDocumentDelete(ApprovalDocType.RFPA, 'RFPA'))
   public async deleteMultipleRfpas(
     @request() req: Request,
     @response() res: Response,

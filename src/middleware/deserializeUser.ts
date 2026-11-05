@@ -6,7 +6,7 @@ import { verifyJwt } from '../utils/jwt';
 import { AppDataSource } from '../utils/data-source';
 
 import logger from '../utils/logger';
-import { User } from '../employee/entity/user.entity';
+import { EmployeeStatus, User } from '../employee/entity/user.entity';
 import { BlacklistedToken } from '../auth/entity/blacklistedToken.entity';
 
 
@@ -61,6 +61,13 @@ export const deserializeUser = async (
     if (!user) {
       return next(
         new AppError(401, `You need to re-authenticate. Please log in.`),
+      );
+    }
+
+    // Deactivation takes effect on the next request, not when the token expires
+    if (user.status !== EmployeeStatus.ACTIVE) {
+      return next(
+        new AppError(401, 'Your account is not active. Please contact administrator.'),
       );
     }
 

@@ -169,6 +169,7 @@
 import { TYPES } from '../types';
 import { AppDataSource } from './data-source';
 import type { DocumentFilterInput } from '../global/filters/documentFilter.types';
+import type { MasterFilterCriteria } from '../global/filters/masterDataFilter';
 
 export interface PaginationOptions {
   page?: number;
@@ -179,6 +180,8 @@ export interface PaginationOptions {
   search?: string; // Search query
   /** Validated document filters, applied in SQL by the shared document queries. */
   documentFilters?: DocumentFilterInput;
+  /** Validated master-data filters (Customer, Vendor, Farmer), applied in SQL by the module's service. */
+  masterFilters?: MasterFilterCriteria;
 }
 
 /**

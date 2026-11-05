@@ -70,6 +70,8 @@ export interface RBCListItemDto {
   remark: string | null;
   companyName: string | null;
   deliveryChallanNo: string | null;
+  /** Transaction number (the Customer DC's Sale), null before go-live. */
+  txnNo: string | null;
   returnedProducts: RBCListProductDto[];
 }
 
@@ -110,6 +112,7 @@ export interface RBCDetailDto {
   createdDate: string | null;
   createdTime: string | null;
   deliveryChallanNo: string | null;
+  txnNo?: string | null;
   remark: string | null;
   returnedProducts: RBCDetailProductDto[];
 }
@@ -157,6 +160,7 @@ export interface RBCViewDto {
   location: string | null;
   date: string | null;
   deliveryChallanNo: string | null;
+  txnNo: string | null;
   remark: string | null;
   returnedProducts: RBCViewProductDto[];
 }
@@ -208,6 +212,7 @@ export interface RBCUpdateFormDto {
   location: string | null;
   /** DeliveryChallan entity ID */
   deliveryChallanNo: string | null;
+  txnNo: string | null;
   remark: string | null;
   returnedProducts: RBCUpdateProductDto[];
 }

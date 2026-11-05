@@ -1,4 +1,4 @@
-import { Column, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany } from "typeorm";
+import { Column, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, Index } from "typeorm";
 
 import { format } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
@@ -16,6 +16,12 @@ import { Vendor } from "../../vendor/createVendor/entity/vendor.entity";
 
 @Entity('return_to_vendor')
 export class ReturnToVendor extends Model {
+  /** Transaction number of the deal this document belongs to (docs/transaction-tracking-plan.md §9). */
+  @Index('IDX_return_to_vendor_txn_no')
+  // Written only by src/transactions (raw SQL); never from a request body through an entity save.
+  @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true, insert: false, update: false })
+  txnNo: string | null;
+
 
     @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
     @JoinColumn({ name: 'createdBy_id' })
@@ -85,6 +91,10 @@ export class ReturnToVendor extends Model {
 
       @Column({ type: 'varchar', length: 255, nullable: true })
       rtvNo: string | null;
+
+      /** Batch number of the source GRN, set by the server. */
+      @Column({ type: 'varchar', length: 100, nullable: true })
+      batchNo: string | null;
 
       @Column({ type: 'varchar', length: 255, nullable: true })
       remark: string | null;

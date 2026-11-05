@@ -1,3 +1,4 @@
+import { assertEngineAccepts, assertNotCreator } from '../approvalGuards';
 import { inject, injectable } from "inversify";
 import { DocumentStatus, DocumentTypeEnum } from "../entity/docuemnt.entity";
 import { TYPES } from "../../types";
@@ -18,6 +19,10 @@ import logger from "../../utils/logger";
 import { DocumentbRepository } from "../repository/documentb.repository";
 import { NotificationService } from "../../notification/service/notification.service";
 import { InventoryMovementService } from "../../inventoryStock/service/inventoryMovement.service";
+import { DealSlipAutoCreateService } from "../../dealSlip/service/dealSlipAutoCreate.service";
+import { syncGrnVehicleDispatchFlagForDispatch } from "../../vehicleDispatch/service/dispatchSource";
+import { prepareDispatchApproval } from "../../vehicleDispatch/service/dispatchRules";
+import { refreshTransactionOf } from "../../transactions/transaction.core";
 
 
 @injectable()
@@ -38,6 +43,8 @@ export class DocSingalApproverService {
     private cacheService: CacheService,
     @inject(TYPES.InventoryMovementService)
     private inventoryMovementService: InventoryMovementService,
+    @inject(TYPES.DealSlipAutoCreateService)
+    private dealSlipAutoCreateService: DealSlipAutoCreateService,
   ){}
 
   // Convert document type to readable format — moved to src/utils/documentTypeLabel.ts
@@ -163,6 +170,12 @@ export class DocSingalApproverService {
     const { approvalFlow, approvalInfo, type } = document;
 
    
+    if (document.status === DocumentStatus.DRAFT) {
+      throw new Error('This document is still a draft and has not been sent for approval');
+    }
+    assertEngineAccepts('single', type);
+    assertNotCreator(document, userId);
+
     //TODO  : 1) Single approval documents
     if (this.isSingleApprovalBasedDocument(type)) {
       logger.info("Inside isSingleApprovalBasedDocument block");
@@ -195,8 +208,13 @@ export class DocSingalApproverService {
         // (e.g. the goods are no longer available) we must fail here, while the
         // action is still fully retryable — once the stage record is saved the
         // "already acted" guard would block a second attempt.
-        if (action === 'approved') {
+        if (action === ApproverStatus.APPROVED) {
           await this.inventoryMovementService.assertMovementIsApplicable(document);
+          // A vehicle dispatch is approved only after its source document is COMPLETE;
+          // its product lines are re-copied from the final source here.
+          if (document.type === DocumentTypeEnum.VEHICLE_DISPATCH_REGISTER && document.document_type_id) {
+            await prepareDispatchApproval(this.documentbRepository.manager, document.document_type_id);
+          }
         }
 
         // Create and save stage info
@@ -217,11 +235,18 @@ export class DocSingalApproverService {
           const readableType = getReadableDocumentType(document.type);
           const docLabel = docNo ? `${readableType} #${docNo}` : readableType;
 
-          if (action === 'reject') {
+          if (action === ApproverStatus.REJECTED) {
           const remark = `${document.type} Document Rejected By Approvers`;
           document.status = DocumentStatus.REJECT;
           document.remarks = remark;
           await this.documentbRepository.save(document);
+          // A rejected purchase dispatch frees its GRN again.
+          if (document.type === DocumentTypeEnum.VEHICLE_DISPATCH_REGISTER && document.document_type_id) {
+            await syncGrnVehicleDispatchFlagForDispatch(this.documentbRepository.manager, document.document_type_id);
+            await this.cacheService.invalidatePattern('grn:numbers:*');
+          }
+          // Transaction step / status (never throws).
+          await refreshTransactionOf(this.documentbRepository.manager, document.type, document.document_type_id);
           await this.invalidateRelatedCache(document.type, documentId, document.document_type_id ?? undefined);
           // 🔔 Creator
           if (document.lastActionBy?.id) {
@@ -238,7 +263,7 @@ export class DocSingalApproverService {
               rejectPeerIds
             );
           }
-        } else if (action === 'approved') {
+        } else if (action === ApproverStatus.APPROVED) {
           const remark = `${document.type} Document Approved By Approvers`;
           document.status = DocumentStatus.COMPLETE;
           document.remarks = remark;
@@ -246,6 +271,14 @@ export class DocSingalApproverService {
           // single transaction, guarded by documents.inventoryProcessed so a
           // repeated or concurrent approval cannot move stock twice.
           await this.inventoryMovementService.completeDocumentWithInventory(document);
+
+          // A completed RFPA auto-creates its Deal Slip as a Draft (sent for approval when its creator submits it). Never throws.
+          if (document.type === DocumentTypeEnum.RFPA && document.document_type_id) {
+            await this.dealSlipAutoCreateService.createForCompletedRfpa(document.document_type_id);
+          }
+          // Transaction step / status (never throws).
+          await refreshTransactionOf(this.documentbRepository.manager, document.type, document.document_type_id);
+
           await this.invalidateRelatedCache(document.type, documentId, document.document_type_id ?? undefined);
 
           // 🔔 Actor
@@ -307,6 +340,13 @@ export class DocSingalApproverService {
         queryBuilder.andWhere(
           new Brackets((qb) => {
             qb.where('firstApproverUser.id = :userId', { userId })
+              .orWhere('lastActionBy.id = :userId', { userId });
+          }),
+        );
+        // A draft has not been sent to approvers yet: only its creator sees it (admins see all).
+        queryBuilder.andWhere(
+          new Brackets((qb) => {
+            qb.where('document.status != :draftStatus', { draftStatus: DocumentStatus.DRAFT })
               .orWhere('lastActionBy.id = :userId', { userId });
           }),
         );
@@ -379,6 +419,11 @@ async getSingleApprovalDocumentById(documentId: string, userId: string, isAdmin:
     const isFirstApprover = firstLevelUsers.some((u: any) => u.id === userId);
 
     if (!isAdmin && !isCreator && !isFirstApprover) {
+      return null;
+    }
+
+    // Approvers cannot open a draft; only its creator (and admins) can.
+    if (document.status === DocumentStatus.DRAFT && !isAdmin && !isCreator) {
       return null;
     }
 

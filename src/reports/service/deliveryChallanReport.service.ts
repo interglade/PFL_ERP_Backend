@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import { requireStatus } from '../../utils/status.enum';
 import * as ExcelJS from 'exceljs';
 import { In } from 'typeorm';
 import { TYPES } from '../../types';
@@ -10,7 +11,7 @@ import { ProductRepository } from '../../product/createproduct/repository/produc
 import { CustomerRepository } from '../../customer/addcustomer/repository/customer.repository';
 import { BranchessRepository } from '../../branch/repository/branches.repository';
 import { CompanyRepository } from '../../company/repository/company.repository';
-import { Documentb } from '../../approvalFlow/entity/docuemnt.entity';
+import { Documentb, DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 
 @injectable()
 export class DeliveryChallanReportService {
@@ -243,32 +244,6 @@ Total Amount Filter using Operator
       });
     }
 
-    // have multiple Driver Name
-    if (filter.driverName) {
-      const diverName = normalizeArray(filter.driverName);
-      qb.andWhere(`LOWER(dc.driverName) IN (:...driver)`, {
-        driver: diverName.map((d) => d.trim().toLowerCase()),
-      });
-    }
-
-    
-
-    if (filter.driverLicenseNumber) {
-      const values = normalizeArray(filter.driverLicenseNumber);
-
-      qb.andWhere(`LOWER(dc.licenseNo) IN (:...lic)`, {
-        lic: values,
-      });
-    }
-
-    
-    if (filter.vehicleNumber) {
-      const values = normalizeArray(filter.vehicleNumber);
-
-      qb.andWhere(`LOWER(dc.vehicleNo) IN (:...veh)`, {
-        veh: values,
-      });
-    }
 
 
     if (filter.receiverName) {
@@ -289,9 +264,8 @@ Total Amount Filter using Operator
 
     //have multiple Status
     if (filter.status) {
-      const statuses = Array.isArray(filter.status)
-        ? filter.status
-        : String(filter.status).split(',');
+      const statuses = (Array.isArray(filter.status) ? filter.status : String(filter.status).split(','))
+        .map((s) => requireStatus(DocumentStatus, s, 'status'));
       qb.andWhere('doc.status IN (:...status)', { status: statuses });
     }
 
@@ -494,12 +468,6 @@ FILTER VALUES
           : 'All',
       ],
 
-      ['Driver Name', formatFilterValue(filter.driverName) || 'All'],
-      [
-        "Driver's License Number",
-        formatFilterValue(filter.driverLicenseNumber) || 'All',
-      ],
-      ['Vehicle Number', formatFilterValue(filter.vehicleNumber) || 'All'],
       ['Receiver Name', formatFilterValue(filter.receiverName) || 'All'],
       ['RM Name', formatFilterValue(filter.rmName) || 'All'],
       ['Approved By', approvedByNames || 'All'],
@@ -593,10 +561,6 @@ SUMMARY VALUES
       { header: 'Total Packing Amount', key: 'totalPackingAmount', width: 20 },
       { header: 'Total Net Product', key: 'totalNetProduct', width: 18 },
       { header: 'Total Product', key: 'totalProduct', width: 18 },
-      { header: 'Driver Name', key: 'driverName', width: 18 },
-      { header: 'License No', key: 'licenseNo', width: 18 },
-      { header: 'Contact No', key: 'contactNo', width: 18 },
-      { header: 'Vehicle No', key: 'vehicleNo', width: 15 },
       { header: 'Receiver Name', key: 'receiverName', width: 18 },
       { header: 'RM Name', key: 'rmName', width: 18 },
       { header: 'Approved By', key: 'approvedBy', width: 18 },
@@ -637,12 +601,13 @@ STATUS MAPPING (VALUE → LABEL + COLOR)
 */
 
     const STATUS_MAP: Record<string, { label: string; color: string }> = {
-      hold: { label: 'Hold', color: 'FFFF5700' },
-      VERIFIED: { label: 'Verified', color: 'FF6A00FF' },
-      approved: { label: 'Approved', color: 'FF40BF40' },
-      FINALIZING: { label: 'Finalized', color: 'FF0063B1' },
-      COMPLETE: { label: 'Complete', color: 'FF006600' },
-      REJECT: { label: 'Reject', color: 'E74C3C' },
+      [DocumentStatus.DRAFT]: { label: DocumentStatus.DRAFT, color: 'FF757575' },
+      [DocumentStatus.HOLD]: { label: DocumentStatus.HOLD, color: 'FFFF5700' },
+      [DocumentStatus.VERIFIED]: { label: DocumentStatus.VERIFIED, color: 'FF6A00FF' },
+      [DocumentStatus.APPROVED]: { label: DocumentStatus.APPROVED, color: 'FF40BF40' },
+      [DocumentStatus.FINALIZING]: { label: DocumentStatus.FINALIZING, color: 'FF0063B1' },
+      [DocumentStatus.COMPLETE]: { label: DocumentStatus.COMPLETE, color: 'FF006600' },
+      [DocumentStatus.REJECT]: { label: DocumentStatus.REJECT, color: 'FFAF0606' },
     };
 
     /*
@@ -717,14 +682,6 @@ totalPackingAmount: to2Decimal(dc.totalPackagingMaterialAmount),
 totalNetProduct: to2Decimal(dc.netProductWeight),
 totalProduct: to2Decimal(dc.totalProductAmount),
 
-          driverName: dc.driverName,
-         // licenseNo: dc.licenseNo,
-
-          licenseNo: dc.licenseNo ? dc.licenseNo.toUpperCase() : '',
-          contactNo: dc.contactNo,
-          vehicleNo: dc.vehicleNo ? dc.vehicleNo.toUpperCase() : '',
-
-        //  vehicleNo: dc.vehicleNo,
           receiverName: dc.receiverName,
           rmName: dc.rmn,
           approvedBy: approvedBy,
@@ -833,9 +790,6 @@ export interface DeliveryChallanReportFilter {
   totalQuantityOperator?: '>' | '<' | '=' | '>=' | '<=' | '!=';
   totalAmount?: number;
   totalAmountOperator?: '>' | '<' | '=' | '>=' | '<=' | '!=';
-  driverName?: string;
-  driverLicenseNumber?: string ;
-  vehicleNumber?: string ;
   receiverName?: string ;
   status?: string ;
   rmName?: string[];

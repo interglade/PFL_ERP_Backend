@@ -190,7 +190,7 @@ describe('export value helpers', () => {
     expect(personName({ firstName: 'Asha', middleName: null, lastName: 'Patil' })).toBe('Asha Patil');
     expect(personName(null)).toBeNull();
     expect(addressText({ address1: 'Plot 4', city: 'Pune', pincode: '411001' })).toBe('Plot 4, Pune, 411001');
-    expect(exportFileName('Final Invoice', new Date('2026-09-15T20:00:00Z'))).toBe('Final_Invoice_2026-09-16.xlsx');
+    expect(exportFileName('Final Invoice', new Date('2026-09-15T20:00:00Z'))).toBe('Final_Invoice_2026-09-16_01-30-00.xlsx');
   });
 
   it('makes sheet names Excel-safe and unique', () => {

@@ -135,7 +135,7 @@ const MODULES: ModuleDoc[] = [
       ],
     },
     exportDef: RFPA_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', status: 'COMPLETE', vendorId: '9b2d4c1e-5f6a-4b7c-8d9e-0a1b2c3d4e5f', productName: 'Tomato' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', status: 'Complete', vendorId: '9b2d4c1e-5f6a-4b7c-8d9e-0a1b2c3d4e5f', productName: 'Tomato' },
   },
   {
     section: 'Deal Slip',
@@ -156,7 +156,7 @@ const MODULES: ModuleDoc[] = [
       ['remark', 'string \\| null', 'Remark'],
     ],
     exportDef: DEAL_SLIP_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', approvalStatus: 'approved', rfpaNo: 'RFPA2026', vendorId: '9b2d4c1e-5f6a-4b7c-8d9e-0a1b2c3d4e5f' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', approvalStatus: 'Approved', rfpaNo: 'RFPA2026', vendorId: '9b2d4c1e-5f6a-4b7c-8d9e-0a1b2c3d4e5f' },
   },
   {
     section: 'GRN',
@@ -206,7 +206,7 @@ const MODULES: ModuleDoc[] = [
       ],
     },
     exportDef: GRN_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', status: 'COMPLETE', vendorId: '9b2d4c1e-5f6a-4b7c-8d9e-0a1b2c3d4e5f', warehouseId: '4c7e1a2b-3d4e-4f5a-8b6c-7d8e9f0a1b2c', productId: '1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', status: 'Complete', vendorId: '9b2d4c1e-5f6a-4b7c-8d9e-0a1b2c3d4e5f', warehouseId: '4c7e1a2b-3d4e-4f5a-8b6c-7d8e9f0a1b2c', productId: '1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b' },
   },
   {
     section: 'Inward Register',
@@ -335,11 +335,6 @@ const MODULES: ModuleDoc[] = [
       ['netPackagingMaterialWeight', 'string \\| null', dec('Net packaging material weight')],
       ['totalPackagingMaterialAmount', 'string \\| null', dec('Total packaging material amount')],
       ['totalAmtInWords', 'string \\| null', 'Total amount in words'],
-      ['driverName', 'string \\| null', 'Driver name'],
-      ['licenseNo', 'string \\| null', 'Driver license number'],
-      ['contactNo', 'string \\| null', 'Contact number'],
-      ['altContactNo', 'string \\| null', 'Alternate contact number'],
-      ['vehicleNo', 'string \\| null', 'Vehicle number'],
       ['receiverName', 'string \\| null', 'Receiver name'],
       ['rmn', 'string \\| null', 'RMN'],
       ['remark', 'string \\| null', 'Remark'],
@@ -361,7 +356,7 @@ const MODULES: ModuleDoc[] = [
       ],
     },
     exportDef: CUSTOMER_DELIVERY_CHALLAN_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', customerId: '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d', vehicleNo: 'MH12', productName: 'Tomato' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', customerId: '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d', productName: 'Tomato' },
   },
   {
     section: 'Delivery Challan – Stock Transfer',
@@ -377,7 +372,6 @@ const MODULES: ModuleDoc[] = [
       ['challanNo', 'string', 'Challan number'],
       ['stockTransferType', 'string', 'Stock transfer type'],
       ['approvalStatus', 'string \\| null', 'Challan approval status'],
-      ['requestingDepartment', 'string \\| null', 'Requesting department'],
       ['companyName', 'string \\| null', 'Company name'],
       ['fromLocation', 'string \\| null', 'Source location name'],
       ['toLocation', 'string \\| null', 'Destination location name'],
@@ -387,11 +381,6 @@ const MODULES: ModuleDoc[] = [
       ['netPackagingMaterialWeight', 'string \\| null', dec('Net packaging material weight')],
       ['totalPackagingMaterialAmount', 'string \\| null', dec('Total packaging material amount')],
       ['totalAmtInWords', 'string \\| null', 'Total amount in words'],
-      ['driverName', 'string \\| null', 'Driver name'],
-      ['licenseNo', 'string \\| null', 'Driver license number'],
-      ['contactNo', 'string \\| null', 'Contact number'],
-      ['altContactNo', 'string \\| null', 'Alternate contact number'],
-      ['vehicleNo', 'string \\| null', 'Vehicle number'],
       ['receiverName', 'string \\| null', 'Receiver name'],
       ['rmn', 'string \\| null', 'RMN'],
       ['remark', 'string \\| null', 'Remark'],
@@ -413,7 +402,6 @@ const MODULES: ModuleDoc[] = [
       ...COMMON_ROW,
       ['challanNo', 'string', 'Challan number'],
       ['approvalStatus', 'string \\| null', 'Challan approval status'],
-      ['requestingDepartment', 'string \\| null', 'Requesting department'],
       ['companyName', 'string \\| null', 'Company name'],
       ['office', 'string \\| null', 'Office name'],
       ['grnNo', 'string \\| null', 'Linked GRN number'],
@@ -428,18 +416,13 @@ const MODULES: ModuleDoc[] = [
       ['netPackagingMaterialWeight', 'string \\| null', dec('Net packaging material weight')],
       ['totalPackagingMaterialAmount', 'string \\| null', dec('Total packaging material amount')],
       ['totalAmtInWords', 'string \\| null', 'Total amount in words'],
-      ['driverName', 'string \\| null', 'Driver name'],
-      ['licenseNo', 'string \\| null', 'Driver license number'],
-      ['contactNo', 'string \\| null', 'Contact number'],
-      ['altContactNo', 'string \\| null', 'Alternate contact number'],
-      ['vehicleNo', 'string \\| null', 'Vehicle number'],
       ['receiverName', 'string \\| null', 'Receiver name'],
       ['rmn', 'string \\| null', 'RMN'],
       ['remark', 'string \\| null', 'Remark'],
       ['anyAttachment', 'string[] \\| null', 'Attachment URLs'],
     ],
     exportDef: OTHER_DELIVERY_CHALLAN_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', customerName: 'Traders', vehicleNo: 'MH12' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', customerName: 'Traders' },
   },
   {
     section: 'Final Invoice',
@@ -470,7 +453,7 @@ const MODULES: ModuleDoc[] = [
       ['totalAmount', 'string \\| null', dec('Grand total')],
     ],
     exportDef: FINAL_INVOICE_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', paymentStatus: 'unpaid', customerId: '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d', minAmount: '5000' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', paymentStatus: 'Unpaid', customerId: '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d', minAmount: '5000' },
   },
   {
     section: 'Return by Customer',
@@ -499,7 +482,7 @@ const MODULES: ModuleDoc[] = [
       ],
     },
     exportDef: RETURN_BY_CUSTOMER_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', customerId: '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d', deliveryChallanNo: 'CN2026' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', customerId: '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d', deliveryChallanNo: 'DC-2026' },
   },
   {
     section: 'Return to Vendor',
@@ -612,7 +595,7 @@ const MODULES: ModuleDoc[] = [
       ['totalAmt', 'string \\| null', dec('Total amount')],
     ],
     exportDef: MULTI_CASH_VOUCHER_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', approvalStatus: 'pending', paymentMode: 'cash' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', approvalStatus: 'Pending', paymentMode: 'cash' },
   },
   {
     section: 'Labour Payment Voucher',
@@ -643,7 +626,7 @@ const MODULES: ModuleDoc[] = [
       ['deletedAt', 'string \\| null', 'Soft-delete timestamp'],
     ],
     exportDef: LABOUR_PAYMENT_VOUCHER_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', status: 'hold', grnNo: 'GRN2026' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', status: 'Hold', grnNo: 'GRN2026' },
   },
   {
     section: 'Transport Payment Voucher',
@@ -692,7 +675,7 @@ const MODULES: ModuleDoc[] = [
     ],
     nested: { address: ADDRESS_FIELDS.filter(([n]) => n !== 'id') },
     exportDef: PACKING_MATERIAL_VOUCHER_EXPORT,
-    example: { startDate: '2026-09-01', endDate: '2026-09-15', sellerName: 'Packaging', approvalStatus: 'approved' },
+    example: { startDate: '2026-09-01', endDate: '2026-09-15', sellerName: 'Packaging', approvalStatus: 'Approved' },
   },
 ];
 
@@ -769,7 +752,7 @@ function exampleFor(param: string, field?: FieldFilter): string {
     page: '1', limit: '20', vendorName: 'Agro Traders', vendorCode: 'VEN001', farmerName: 'Suresh Patil', farmerCode: 'FAR001', customerName: 'ABC Foods',
     customerCode: 'CUST001', company: 'Prime Fresh', location: 'Pune', warehouse: 'Pune', vehicleNo: 'MH12AB1234', driverName: 'Ramesh', productName: 'Tomato',
     productCode: 'PRD001', variant: 'Hybrid', category: 'Vegetables', minAmount: '1000', maxAmount: '50000', minQuantity: '10', maxQuantity: '500',
-    batchNo: 'BATCH01', grnNo: 'GRN2026', dealSlipNo: 'DS2026', rfpaNo: 'RFPA2026', deliveryChallanNo: 'CN2026', rbcNo: 'RBC2026', poNumber: 'PO-778',
+    batchNo: 'BATCH01', grnNo: 'GRN2026', dealSlipNo: 'DS2026', rfpaNo: 'RFPA2026', deliveryChallanNo: 'DC-2026', rbcNo: 'RBC2026', poNumber: 'PO-778',
     returnReason: 'damaged', paymentMode: 'cash', companyName: 'Prime Fresh', supplierName: 'Agro', arrivalDate: '2026-09-10', billNo: 'B-101',
   };
   if (byName[param]) return byName[param];
@@ -856,7 +839,7 @@ function exampleValue(type: string, name: string): unknown {
   if (/uuid/.test(type)) return '3f6c1e2a-7b8d-4c9e-a1f2-3b4c5d6e7f80';
   if (name === 'createdDate') return '2026-09-15';
   if (name === 'createdTime') return '10:30 AM';
-  if (name === 'overAllStatus') return 'hold';
+  if (name === 'overAllStatus') return 'Hold';
   if (type.startsWith('object[]')) return [];
   if (type.startsWith('string[]')) return [];
   if (type.startsWith('object')) return {};
@@ -1083,7 +1066,7 @@ export function buildFilterApiDocs(): string {
     'Inside a single filter, OR applies only where the parameter itself says so:',
     '',
     '- a comma-separated list (`status=COMPLETE,hold`, `vendorId=<id1>,<id2>`) matches any of the values;',
-    '- `locationId` / `location` match any of the module’s location fields (e.g. GRN `location`, `purchaseLocation`, `purchaseForSalesLocation`);',
+    '- `locationId` / `location` match any of the module’s location fields (e.g. GRN `purchaseLocation`, `purchaseForSalesLocation`);',
     '- product filters match when **at least one** line item matches — the parent document is returned once, however many lines match.',
     '',
     '### 4.4 Value formats',
@@ -1345,7 +1328,7 @@ export function buildFilterApiDocs(): string {
       unionParams.set(f.param, entry);
     }
   }
-  const voucherQuery = curlQuery({ startDate: '2026-09-01', endDate: '2026-09-15', voucherType: 'multi-cash-voucher,transport-payment-voucher', status: 'hold' });
+  const voucherQuery = curlQuery({ startDate: '2026-09-01', endDate: '2026-09-15', voucherType: 'multi-cash-voucher,transport-payment-voucher', status: 'Hold' });
   push(
     `### 8.${MODULES.length + 1} All Vouchers`,
     '',

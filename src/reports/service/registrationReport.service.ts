@@ -3,6 +3,7 @@ import { injectable } from 'inversify';
 import * as ExcelJS from 'exceljs';
 import logger from '../../utils/logger';
 import { AppDataSource } from '../../utils/data-source';
+import { requireStatus, Status } from '../../utils/status.enum';
 
 
 /**
@@ -27,7 +28,7 @@ export interface RegistrationReportFilters {
   month?: number; // For month_year period (1-12)
   year?: number; // For month_year and quarterly periods
   quarter?: 1 | 2 | 3 | 4; // For quarterly period
-  status?: 'pending' | 'approved' | 'rejected' | 'all'; // Filter by approval status (frontend sends 'rejected', we convert to 'notapproved')
+  status?: string; // 'all' or a registration status (Draft, Pending, Approved, Rejected)
   companyIds?: string[]; // Optional: filter by specific companies
   createdByIds?: string[]; // Optional: filter by who registered them
   cities?: string[]; // Optional: filter by city
@@ -129,16 +130,15 @@ export class RegistrationReportService {
           throw new Error(`Unsupported report type: ${filters.reportType}`);
       }
 
-      // Convert 'rejected' to 'notapproved' for database query
-      const dbStatus = filters.status === 'rejected' ? 'notapproved' : filters.status;
+      const dbStatus = !filters.status || filters.status === 'all' ? 'all' : requireStatus(Status, filters.status, 'status');
 
       // Build query for summary counts
       let query = `
         SELECT 
           COUNT(*) as total_count,
-          COUNT(CASE WHEN ${statusColumn} = 'pending' THEN 1 END) as pending_count,
-          COUNT(CASE WHEN ${statusColumn} = 'approved' THEN 1 END) as approved_count,
-          COUNT(CASE WHEN ${statusColumn} = 'notapproved' THEN 1 END) as rejected_count
+          COUNT(CASE WHEN ${statusColumn} = 'Pending' THEN 1 END) as pending_count,
+          COUNT(CASE WHEN ${statusColumn} = 'Approved' THEN 1 END) as approved_count,
+          COUNT(CASE WHEN ${statusColumn} = 'Rejected' THEN 1 END) as rejected_count
         FROM ${tableName}
         WHERE "createdAt" BETWEEN $1 AND $2
       `;
@@ -210,9 +210,9 @@ export class RegistrationReportService {
       params.push(dateRange.startDate, dateRange.endDate);
       paramIndex += 2;
 
-      // Add status filter (convert 'rejected' to 'notapproved')
+      // Add status filter
       if (filters.status && filters.status !== 'all') {
-        const dbStatus = filters.status === 'rejected' ? 'notapproved' : filters.status;
+        const dbStatus = requireStatus(Status, filters.status, 'status');
         query += ` AND v.status = $${paramIndex}`;
         params.push(dbStatus);
         paramIndex++;
@@ -257,7 +257,7 @@ export class RegistrationReportService {
         contactNumber: row.contact_number || 'N/A',
         email: row.email || 'N/A',
         address: row.address || 'N/A',
-        status: row.status === 'notapproved' ? 'rejected' : row.status || 'pending',
+        status: row.status || Status.PENDING,
         createdBy: row.created_by || 'N/A',
         createdAt: row.created_at
           ? new Date(row.created_at).toLocaleDateString('en-GB')
@@ -318,9 +318,9 @@ export class RegistrationReportService {
       params.push(dateRange.startDate, dateRange.endDate);
       paramIndex += 2;
 
-      // Add status filter (convert 'rejected' to 'notapproved')
+      // Add status filter
       if (filters.status && filters.status !== 'all') {
-        const dbStatus = filters.status === 'rejected' ? 'notapproved' : filters.status;
+        const dbStatus = requireStatus(Status, filters.status, 'status');
         query += ` AND f.status = $${paramIndex}`;
         params.push(dbStatus);
         paramIndex++;
@@ -365,7 +365,7 @@ export class RegistrationReportService {
         contactNumber: row.contact_number || 'N/A',
         email: row.email || 'N/A',
         address: row.address || 'N/A',
-        status: row.status === 'notapproved' ? 'rejected' : row.status || 'pending',
+        status: row.status || Status.PENDING,
         createdBy: row.created_by || 'N/A',
         createdAt: row.created_at
           ? new Date(row.created_at).toLocaleDateString('en-GB')
@@ -422,9 +422,9 @@ export class RegistrationReportService {
       params.push(dateRange.startDate, dateRange.endDate);
       paramIndex += 2;
 
-      // Add status filter (convert 'rejected' to 'notapproved')
+      // Add status filter
       if (filters.status && filters.status !== 'all') {
-        const dbStatus = filters.status === 'rejected' ? 'notapproved' : filters.status;
+        const dbStatus = requireStatus(Status, filters.status, 'status');
         query += ` AND c.status = $${paramIndex}`;
         params.push(dbStatus);
         paramIndex++;
@@ -469,7 +469,7 @@ export class RegistrationReportService {
         contactNumber: row.contact_number || 'N/A',
         email: row.email || 'N/A',
         address: row.address || 'N/A',
-        status: row.status === 'notapproved' ? 'rejected' : row.status || 'pending',
+        status: row.status || Status.PENDING,
         createdBy: row.created_by || 'N/A',
         createdAt: row.created_at
           ? new Date(row.created_at).toLocaleDateString('en-GB')
@@ -759,7 +759,7 @@ export class RegistrationReportService {
           item.contactNumber,
           item.email,
           item.address,
-          item.status.toUpperCase(),
+          item.status,
           item.createdBy,
           item.createdAt,
         ]);
@@ -788,22 +788,21 @@ export class RegistrationReportService {
           // Color code status
           if (colNumber === 7) {
             // Status column
-            const displayStatus = item.status.toUpperCase();
-            cell.value = displayStatus;
+            cell.value = item.status;
             
-            if (item.status === 'approved') {
+            if (item.status === Status.APPROVED) {
               cell.fill = {
                 type: 'pattern',
                 pattern: 'solid',
                 fgColor: { argb: 'C6EFCE' }, // Light green
               };
-            } else if (item.status === 'rejected') {
+            } else if (item.status === Status.REJECTED) {
               cell.fill = {
                 type: 'pattern',
                 pattern: 'solid',
                 fgColor: { argb: 'FFC7CE' }, // Light red
               };
-            } else if (item.status === 'pending') {
+            } else if (item.status === Status.PENDING) {
               cell.fill = {
                 type: 'pattern',
                 pattern: 'solid',

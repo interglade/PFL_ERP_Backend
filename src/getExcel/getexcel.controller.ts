@@ -11,7 +11,7 @@ import { PdfGeneratorService } from '../utils/pdfGenerator';
 import { TYPES } from '../types';
 import { NextFunction, Request, Response } from 'express';
 
-@controller('/excel')
+@controller('/excel', deserializeUser, requireUser)
 export class ExcelController {
   constructor(
     @inject(TYPES.PdfGeneratorService)

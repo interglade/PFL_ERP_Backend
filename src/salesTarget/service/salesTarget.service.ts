@@ -17,6 +17,21 @@ import { WorkflowHierarchyRepository } from "../../workFlow/repository/WorkflowH
 import { DepartmentEnum } from "../../workFlow/entity/workflowClosure.entity";
 import { SalesTarget, Status } from "../entity/salesTarget.entity";
 import { User } from "../../employee/entity/user.entity";
+import { EntityManager } from "typeorm";
+import { AppDataSource } from "../../utils/data-source";
+import AppError from "../../utils/appError";
+import { SalesTargetProduct } from "../entity/salesTargetProduct.entity";
+import { SalesTargetWeek } from "../entity/salesTargetWeek.entity";
+import { Customer } from "../../customer/addcustomer/entity/customer.entity";
+import { Product } from "../../product/createproduct/entity/product.entity";
+import {
+    assertCanDecidePlan,
+    directReportIds,
+    planActions,
+    planStatusOnSave,
+    PLAN_STATUS,
+    selfAndTeamIds,
+} from "../../workFlow/planAccess";
 
 @injectable()
 export class SalesTargetService {
@@ -39,113 +54,150 @@ export class SalesTargetService {
         private workflowHierarchyRepo: WorkflowHierarchyRepository
     ) {}
 
-    // Create sales target
-    async create(payload: any) {
-        try {
-            const { employeeId, month, year, status, plan } = payload;
+    /** Approval fields for a plan just saved with `decision` (see planStatusOnSave). */
+    private decisionFields(decision: { status: string; approvedById: string | null }) {
+        const approved = decision.status === PLAN_STATUS.APPROVED;
+        return {
+            status: decision.status as Status,
+            approvedBy: approved ? ({ id: decision.approvedById } as User) : null,
+            approvedAt: approved ? new Date() : null,
+            approvalRemark: approved ? 'Approved automatically' : null,
+        };
+    }
 
-            // Validate user
-            const user = await this.userRepository.findOne({
-                where: { id: employeeId }
-            });
-
-            if (!user) throw new Error("User not found");
-
-            console.log("Creating sales target with month/year:", { month, year });
-
-            // Employee ने स्वतःसाठी create केला → PENDING (वरचा manager approve करेल)
-            // Manager ने subordinate साठी create केला → directly APPROVED (implicit approval)
-            const resolvedStatus = (payload.createdBy && payload.createdBy !== employeeId)
-                ? Status.APPROVED
-                : Status.PENDING;
-
-            // Create monthly plan
-            const monthlyPlan = this.salesTargetRepository.create({
-                employee: user,
-                createdBy: payload.createdBy ? { id: payload.createdBy } as User : user,
-                month: month,
-                year: year,
-                status: resolvedStatus,
-                totalMonthlySale: 0
-            });
-
-            await this.salesTargetRepository.save(monthlyPlan);
-
-            let monthlyTotal = 0;
-
-            // Loop through customers
-            for (const customerPlan of plan) {
-                const customerId = customerPlan.customerId ?? customerPlan.customer;
-                console.log(`Processing customer: ${customerId}, products: ${customerPlan.salesTarget?.length}`);
-                const customer = await this.customerRepository.findOne({
-                    where: { id: customerId }
-                });
-
-                if (!customer) throw new Error(`Customer not found: ${customerId}`);
-
-                // Loop through products per customer
-                for (const productPlan of customerPlan.salesTarget) {
-                    const productId = productPlan.productId ?? productPlan.product;
-                    const product = await this.productRepository.findOne({
-                        where: { id: productId }
-                    });
-
-                    if (!product) throw new Error(`Product not found: ${productId}`);
-
-                    // Calculate total from weekly targets
-                    const calculatedTotal = productPlan.weeklyTargets.reduce(
-                        (sum: number, w: any) => sum + Number(w.amount || 0), 0
-                    );
-
-                    const salesPlanItem = this.salesTargetProduct.create({
-                        target: monthlyPlan,
-                        customer,
-                        product,
-                        totalProductSale: calculatedTotal
-                    });
-
-                    await this.salesTargetProduct.save(salesPlanItem);
-
-                    // Weekly sales
-                    for (const week of productPlan.weeklyTargets) {
-                        const normalizedWeekStartDate = new Date(week.startDate);
-                        normalizedWeekStartDate.setHours(0, 0, 0, 0);
-
-                        const normalizedWeekEndDate = new Date(week.endDate);
-                        normalizedWeekEndDate.setHours(23, 59, 59, 999);
-
-                        const weeklySale = this.weeklySalesRepo.create({
-                            productTarget: salesPlanItem,
-                            weekNo: Number(week.weekNo),
-                            weekStartDate: normalizedWeekStartDate,
-                            weekEndDate: normalizedWeekEndDate,
-                            saleAmount: Number(week.amount || 0)
-                        });
-
-                        await this.weeklySalesRepo.save(weeklySale);
-                    }
-
-                    monthlyTotal += calculatedTotal;
-                }
-            }
-
-            // Update monthly total
-            monthlyPlan.totalMonthlySale = monthlyTotal;
-            await this.salesTargetRepository.save(monthlyPlan);
-            return monthlyPlan;
-
-        } catch (error) {
-            throw error;
+    private async assertNoOtherPlan(manager: EntityManager, employeeId: string, month: number, year: number, exceptId?: string) {
+        const qb = manager.getRepository(SalesTarget)
+            .createQueryBuilder('t')
+            .where('t.employee_id = :employeeId AND t.month = :month AND t.year = :year', { employeeId, month, year });
+        if (exceptId) qb.andWhere('t.id <> :exceptId', { exceptId });
+        if (await qb.getCount()) {
+            throw new AppError(409, 'This employee already has a sales plan for that month. Edit the existing plan instead.');
         }
     }
 
+    /** Writes the customer -> product -> week lines of `plan`; returns the month total. */
+    private async writeLines(manager: EntityManager, target: SalesTarget, plan: any[]): Promise<number> {
+        if (!Array.isArray(plan) || plan.length === 0) {
+            throw new AppError(400, 'Add at least one customer to the plan');
+        }
+        let monthlyTotal = 0;
+        for (const customerPlan of plan) {
+            const customerId = customerPlan.customerId ?? customerPlan.customer;
+            const customer = await manager.findOne(Customer, { where: { id: customerId } });
+            if (!customer) throw new AppError(400, `Customer not found: ${customerId}`);
 
+            for (const productPlan of customerPlan.salesTarget ?? []) {
+                const productId = productPlan.productId ?? productPlan.product;
+                const product = await manager.findOne(Product, { where: { id: productId } });
+                if (!product) throw new AppError(400, `Product not found: ${productId}`);
 
+                // Calculate total from weekly targets
+                const calculatedTotal = productPlan.weeklyTargets.reduce(
+                    (sum: number, w: any) => sum + Number(w.amount || 0), 0
+                );
+                const salesPlanItem = await manager.save(manager.create(SalesTargetProduct, {
+                    target,
+                    customer,
+                    product,
+                    totalProductSale: calculatedTotal,
+                }));
 
+                for (const week of productPlan.weeklyTargets) {
+                    const normalizedWeekStartDate = new Date(week.startDate);
+                    normalizedWeekStartDate.setHours(0, 0, 0, 0);
+                    const normalizedWeekEndDate = new Date(week.endDate);
+                    normalizedWeekEndDate.setHours(23, 59, 59, 999);
+
+                    await manager.save(manager.create(SalesTargetWeek, {
+                        productTarget: salesPlanItem,
+                        weekNo: Number(week.weekNo),
+                        weekStartDate: normalizedWeekStartDate,
+                        weekEndDate: normalizedWeekEndDate,
+                        saleAmount: Number(week.amount || 0),
+                    }));
+                }
+                monthlyTotal += calculatedTotal;
+            }
+        }
+        return monthlyTotal;
+    }
+
+    /**
+     * Create sales target. Status from the reporting tree (planStatusOnSave): Pending for the
+     * employee's own plan, Approved when their direct manager creates it or nobody is above them.
+     */
+    async create(payload: any) {
+        const { employeeId, month, year, plan } = payload;
+        return AppDataSource.transaction(async (manager) => {
+            const user = await manager.findOne(User, { where: { id: employeeId } });
+            if (!user) throw new AppError(404, "User not found");
+
+            const decision = await planStatusOnSave(payload.createdBy, employeeId, DepartmentEnum.SALE, manager);
+            await this.assertNoOtherPlan(manager, employeeId, month, year);
+
+            const monthlyPlan = await manager.save(manager.create(SalesTarget, {
+                employee: user,
+                createdBy: { id: payload.createdBy } as User,
+                month,
+                year,
+                totalMonthlySale: 0,
+                ...this.decisionFields(decision),
+            }));
+            monthlyPlan.totalMonthlySale = await this.writeLines(manager, monthlyPlan, plan);
+            return manager.save(monthlyPlan);
+        });
+    }
+
+    /**
+     * The employee or their direct manager edits the plan. The lines are replaced and the
+     * status is worked out again as on create, so an edit by the employee goes back to Pending.
+     */
+    async update(targetId: string, payload: any, actorId: string) {
+        return AppDataSource.transaction(async (manager) => {
+            const target = await manager.findOne(SalesTarget, { where: { id: targetId }, relations: ['employee'] });
+            if (!target) throw new AppError(404, 'Sales plan not found');
+            const employeeId = target.employee?.id;
+            if (payload.employee && payload.employee !== employeeId) {
+                throw new AppError(400, 'The employee of a plan cannot be changed');
+            }
+            const decision = await planStatusOnSave(actorId, employeeId, DepartmentEnum.SALE, manager);
+            const month = payload.month ?? target.month;
+            const year = payload.year ?? target.year;
+            await this.assertNoOtherPlan(manager, employeeId, month, year, targetId);
+
+            // weeks go with their product line (ON DELETE CASCADE)
+            await manager.createQueryBuilder()
+                .delete()
+                .from(SalesTargetProduct)
+                .where('monthly_sales_plan_id = :targetId', { targetId })
+                .execute();
+
+            Object.assign(target, { month, year, ...this.decisionFields(decision) });
+            target.totalMonthlySale = await this.writeLines(manager, target, payload.plan);
+            return manager.save(target);
+        });
+    }
+
+    /** Status, decision and what the viewer may do: the approval block of the plan screens. */
+    private async approvalInfo(target: SalesTarget, viewerId?: string) {
+        const actions = viewerId
+            ? await planActions(viewerId, { employeeId: target.employee?.id ?? null, status: target.status }, DepartmentEnum.SALE)
+            : { canEdit: false, canApprove: false };
+        const by = target.approvedBy;
+        return {
+            employeeId: target.employee?.id ?? null,
+            status: target.status,
+            approvedBy: by ? `${by.firstName ?? ''} ${by.lastName ?? ''}`.trim() : null,
+            approvedAt: target.approvedAt ?? null,
+            approvalRemark: target.approvalRemark ?? null,
+            ...actions,
+        };
+    }
 
     // Get all targets with pagination
     async getalltargets(
     employeeId: string,
+    isAdmin: boolean,
     page?: number,
     limit?: number,
     filters: {
@@ -171,22 +223,17 @@ export class SalesTargetService {
             const isPaginated = page !== undefined && limit !== undefined;
             const skip = isPaginated ? (page! - 1) * limit! : 0;
 
-            // Get all subordinates including self (depth >= 0)
-            const subordinates = await this.workflowHierarchyRepo
-                .createQueryBuilder('wh')
-                .select('wh.descendant_id')
-                .where('wh.ancestor_id = :employeeId', { employeeId })
-                .andWhere('wh.depth >= 0')
-                .getRawMany();
-
-            let employeeIds = subordinates.map(s => s.descendant_id);
+            // Admins see every plan; others their own and their sales team's
+            let employeeIds: string[] | null = isAdmin
+                ? null
+                : await selfAndTeamIds(employeeId, DepartmentEnum.SALE);
 
             // Filter by specific employeeId if provided
             if (filters.employeeId) {
-                employeeIds = employeeIds.filter(id => id === filters.employeeId);
+                employeeIds = employeeIds ? employeeIds.filter(id => id === filters.employeeId) : [filters.employeeId];
             }
 
-            if (employeeIds.length === 0) {
+            if (employeeIds && employeeIds.length === 0) {
                 return {
                     targets: [],
                     totalItems: 0,
@@ -198,8 +245,12 @@ export class SalesTargetService {
             const qb = this.salesTargetRepository
                 .createQueryBuilder('target')
                 .leftJoinAndSelect('target.employee', 'employee')
-                .where('target.employee.id IN (:...employeeIds)', { employeeIds })
+                .leftJoinAndSelect('target.approvedBy', 'approvedBy')
                 .orderBy('target.createdAt', 'DESC');
+            if (employeeIds) {
+                qb.where('target.employee.id IN (:...employeeIds)', { employeeIds });
+            }
+            const team = new Set(await directReportIds(employeeId, DepartmentEnum.SALE));
 
             // Legacy single month/year filter
             if (filters.month !== undefined) {
@@ -305,7 +356,15 @@ export class SalesTargetService {
                     week4Total: weeklyTotals.week4,
                     week5Total: weeklyTotals.week5,
                     totalTarget: target.totalMonthlySale || 0,
-                    //status: target.status
+                    status: target.status,
+                    employeeId: target.employee?.id ?? null,
+                    approvedBy: target.approvedBy
+                        ? `${target.approvedBy.firstName ?? ''} ${target.approvedBy.lastName ?? ''}`.trim()
+                        : null,
+                    approvedAt: target.approvedAt ?? null,
+                    approvalRemark: target.approvalRemark ?? null,
+                    canEdit: target.employee?.id === employeeId || team.has(target.employee?.id),
+                    canApprove: team.has(target.employee?.id) && target.status === Status.PENDING,
                 };
             }));
 
@@ -321,13 +380,14 @@ export class SalesTargetService {
     }
 
     // Get monthly plan view structured
-    async getMonthlyPlanViewStructured(targetId: string) {
+    async getMonthlyPlanViewStructured(targetId: string, viewerId?: string) {
         try {
             console.log("getMonthlyPlanViewStructured params:", { targetId });
 
             const salesTarget = await this.salesTargetRepository
                 .createQueryBuilder("target")
                 .leftJoinAndSelect("target.employee", "employee")
+                .leftJoinAndSelect("target.approvedBy", "approvedBy")
                 .where("target.id = :targetId", { targetId })
                 .getOne();
 
@@ -400,7 +460,8 @@ export class SalesTargetService {
                 month: salesTarget.month,
                 year: salesTarget.year,
                 monthlyTotalQty: Number(monthlyTotalQty.toFixed(2)),
-                plan
+                plan,
+                approval: await this.approvalInfo(salesTarget, viewerId),
             };
         } catch (error) {
             throw error;
@@ -408,19 +469,21 @@ export class SalesTargetService {
     }
 
     // Get monthly plan update structured (with summary)
-    async getMonthlyPlanUpdateStructured(targetId: string): Promise<{
+    async getMonthlyPlanUpdateStructured(targetId: string, viewerId?: string): Promise<{
         employee: string | null;
         month: number | null;
         year: number | null;
         monthlyTotalQty: number;
         plan: any[];
         summary: any;
+        approval?: unknown;
     }> {
         console.log("getMonthlyPlanUpdateStructured params:", { targetId });
 
         const salesTarget = await this.salesTargetRepository
             .createQueryBuilder("target")
             .leftJoinAndSelect("target.employee", "employee")
+            .leftJoinAndSelect("target.approvedBy", "approvedBy")
             .where("target.id = :targetId", { targetId })
             .getOne();
 
@@ -514,7 +577,8 @@ export class SalesTargetService {
             year: salesTarget.year,
             monthlyTotalQty: Number(monthlyTotalQty.toFixed(2)),
             plan,
-            summary
+            summary,
+            approval: await this.approvalInfo(salesTarget, viewerId),
         };
     }
 
@@ -1137,58 +1201,31 @@ export class SalesTargetService {
 
     /**
      * PATCH /sales-target/:id/approve
-     * Body: { action: 'approved' | 'rejected', remark?: string }
-     *
-     * Rules:
-     *  - PENDING (employee = createdBy, self-created) → workflow hierarchy नुसार
-     *    direct manager (depth=1 ancestor, department=sale) approve करेल
-     *  - Manager ने subordinate साठी create केले → directly APPROVED होते (approval ची गरज नाही)
+     * Body: { action: 'Approved' | 'Rejected', remark?: string }; a remark is required to reject.
+     * Only the employee's direct manager in the sales tree decides, only while Pending.
      */
     async approveTarget(
         targetId: string,
         managerId: string,
-        action: 'approved' | 'rejected',
+        action: 'Approved' | 'Rejected',
+        remark?: string,
     ): Promise<SalesTarget> {
         const target = await this.salesTargetRepository.findOne({
             where: { id: targetId },
-            relations: ['employee', 'createdBy'],
+            relations: ['employee'],
         });
+        if (!target) throw new AppError(404, 'Sales plan not found');
 
-        if (!target) {
-            throw new Error(`Sales target with ID ${targetId} not found`);
+        const reason = typeof remark === 'string' ? remark.trim() : '';
+        if (action === 'Rejected' && !reason) {
+            throw new AppError(400, 'Give a reason for rejecting the plan');
         }
+        await assertCanDecidePlan(managerId, target.employee?.id, DepartmentEnum.SALE, target.status);
 
-        if (target.status === Status.APPROVED) {
-            throw new Error('Target is already approved');
-        }
-        if (target.status === Status.REJECTED) {
-            throw new Error('Target is already rejected');
-        }
-
-        const employeeId = target.employee?.id;
-        const createdById = target.createdBy?.id;
-
-        if (target.status === Status.PENDING) {
-            // Employee ने स्वतःसाठी create केला →
-            // managerId हा employeeId चा depth=1 ancestor असायला हवा (sale department)
-            const rows: { ancestor_id: string }[] = await this.workflowHierarchyRepo.query(
-                `SELECT ancestor_id
-                 FROM workflow_hierarchy
-                 WHERE descendant_id = $1
-                   AND ancestor_id   = $2
-                   AND department    = $3
-                   AND depth         = 1`,
-                [employeeId, managerId, DepartmentEnum.SALE],
-            );
-
-            if (rows.length === 0) {
-                throw new Error('You are not the direct manager of this employee in the sales workflow');
-            }
-        } else {
-            throw new Error(`Target cannot be approved in its current status: ${target.status}`);
-        }
-
-        target.status = action === 'approved' ? Status.APPROVED : Status.REJECTED;
+        target.status = action === 'Approved' ? Status.APPROVED : Status.REJECTED;
+        target.approvedBy = { id: managerId } as User;
+        target.approvedAt = new Date();
+        target.approvalRemark = reason || null;
         return this.salesTargetRepository.save(target);
     }
 
@@ -1218,7 +1255,6 @@ export class SalesTargetService {
                 .leftJoinAndSelect('st.employee', 'employee')
                 .leftJoinAndSelect('st.createdBy', 'createdBy')
                 .where('st.employee_id IN (:...subordinateIds)', { subordinateIds })
-                .andWhere('st.created_by_id = st.employee_id')
                 .andWhere('st.status = :pendingStatus', { pendingStatus: Status.PENDING })
                 .orderBy('st.createdAt', 'DESC')
                 .getMany();

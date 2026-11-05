@@ -1,3 +1,10 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
+import { dispatchKeyFromRecord, dispatchKeyFromRequest } from '../dispatchPermissionKey';
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from "inversify";
 import {
   controller,
@@ -45,7 +52,7 @@ export class VehicleDispatchController {
     
   ) {}
 
-  @httpPost("/")
+  @httpPost("/", checkPermission(dispatchKeyFromRequest, 'create'))
   public async createVehicleDispatch(
     @request() req: Request<{}, {}, CreateVehicleDispatchDto>,
     @response() res: Response,
@@ -54,7 +61,6 @@ export class VehicleDispatchController {
     try {
       const dispatchData: CreateVehicleDispatchDto = {
         ...req.body,
-        dcNo: req.body.dcNo || null,
         requestedBy: res.locals.user.id,
       };
 
@@ -108,6 +114,8 @@ export class VehicleDispatchController {
         error: err,
       });
       ControllerLogger.logError('Vehicle Dispatch creation', err, req, res);
+      // Keep the status of deliberate errors (409 duplicate dispatch, 404 source, ...).
+      if (err instanceof AppError) return next(err);
       if (err instanceof Error) {
                return next(new AppError(400, err.message)); // ← sends 400 with real message
              }
@@ -115,7 +123,7 @@ export class VehicleDispatchController {
     }
   }
  //TODO: get All Recycle Bin Vehical Dispatch.....By Vaishali
-    @httpGet('/recyclebin')
+    @httpGet('/recyclebin', requireRole(Role.SUPER_ADMIN))
     public async getAllRecycleBinVehicalDispatch(
       @request() req: Request,
       @response() res: Response,
@@ -148,7 +156,7 @@ export class VehicleDispatchController {
           search: (search as string) || '',
         };
     
-        const vehicalDispatch = await this.vehicleDispatchService.getAllRecycleBinVehicalDispatch(queryOptions, userId);
+        const vehicalDispatch = await this.vehicleDispatchService.getAllRecycleBinVehicalDispatch(queryOptions, userId, req.query.dispatchType);
     
         if (!vehicalDispatch || vehicalDispatch.data.length === 0) {
           logger.warn('No Vehical Dispatch found for this user.');
@@ -179,7 +187,7 @@ export class VehicleDispatchController {
 
 
   
-  @httpPatch("/:id")
+  @httpPatch("/:id", checkPermission(dispatchKeyFromRecord, 'edit'), guardDocumentEdit(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'), protectBody)
   public async updateVehicleDispatch(
     @requestParam("id") id: string,
     @request() req: Request<{}, {}, UpdateVehicleDispatchDto>,
@@ -241,7 +249,7 @@ export class VehicleDispatchController {
       res.status(200).json({
         status: "success",
         message: "Vehicle Dispatch updated successfully",
-        data: updatedDispatch,
+        data: { id: updatedDispatch.id },
       });
     } catch (err) {
       logger.error("Error occurred while updating vehicle dispatch", {
@@ -252,7 +260,7 @@ export class VehicleDispatchController {
     }
   }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", checkPermission(dispatchKeyFromRecord, 'delete'), guardDocumentDelete(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'))
   public async deleteVehicleDispatch(
     @requestParam("id") id: string,
     @response() res: Response,
@@ -317,7 +325,7 @@ export class VehicleDispatchController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission(dispatchKeyFromRequest, 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -327,12 +335,13 @@ export class VehicleDispatchController {
       entityName: 'Vehicle Dispatch',
       definition: VEHICLE_DISPATCH_EXPORT,
       list: { documentType: FilterDocumentType.VEHICLE_DISPATCH_REGISTER, searchFields: ['vehicleType vehicleNo'], filterKeys: ['vehicleType', 'vehicleNo'] },
-      fetchList: (queryOptions, userId) => this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res)),
+      fetchList: (queryOptions, userId) =>
+        this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res), req.query.dispatchType),
     });
   }
 
   //TODO: get All Vehical Dispatch.....By Vaishali
-    @httpGet('/')
+    @httpGet('/', checkPermission(dispatchKeyFromRequest, 'view'))
     public async getAllvehicalDispatch(
       @request() req: Request,
       @response() res: Response,
@@ -367,7 +376,7 @@ export class VehicleDispatchController {
     
         // Same filters as the Excel export: validated, applied in SQL before pagination.
         applyDocumentListFilters(queryOptions, req.query, FilterDocumentType.VEHICLE_DISPATCH_REGISTER);
-        const vehicalDispatch = await this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res));
+        const vehicalDispatch = await this.vehicleDispatchService.getAllvehicalDispatch(queryOptions, userId, isAdminUser(res), req.query.dispatchType);
     
         if (!vehicalDispatch || vehicalDispatch.data.length === 0) {
           logger.warn('No Vehical Dispatch found for this user.');
@@ -406,7 +415,7 @@ export class VehicleDispatchController {
 
 
      //TODO: Vehical Dispatch get by id for view...BY Vaishali
-      @httpGet('/view/:docid')
+      @httpGet('/view/:docid', checkPermission(dispatchKeyFromRecord, 'view'), guardDocumentView(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'))
       public async getVehicalDispatchByIdForView(
         @requestParam('docid') docid: string,
         @response() res: Response,
@@ -420,7 +429,7 @@ export class VehicleDispatchController {
           if (!vehicalDispatch) {
             return res.status(403).json({
             status: 'fail',
-            message: 'You do not have permission to view this Inward Register',
+            message: 'You do not have permission to view this Vehicle Dispatch',
           });
             //return next(new AppError(404, 'dealSlip not found'));
           }
@@ -438,7 +447,107 @@ export class VehicleDispatchController {
           next(error);
         }
       }
-@httpDelete('/delete/multiple')
+  /** Dispatch status of many sources of one register: `{ dispatchType, sourceIds }` → map of sourceId → status. */
+  @httpPost('/statuses')
+  public async getSourceStatuses(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const data = await this.vehicleDispatchService.getSourceStatuses(req.body?.dispatchType, req.body?.sourceIds);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch statuses', err, req, res);
+      next(err);
+    }
+  }
+
+  /** Per register: sources created since go-live that still have no dispatch. */
+  @httpGet('/pending-count')
+  public async getPendingCounts(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    try {
+      const data = await this.vehicleDispatchService.getPendingCounts();
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch pending count', err, req, res);
+      next(err);
+    }
+  }
+
+  /** GRNs / DCs of the register that are not rejected and do not have a live dispatch yet. */
+  @httpGet('/sources/:dispatchType')
+  public async getDispatchableSources(
+    @requestParam('dispatchType') dispatchType: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      const data = await this.vehicleDispatchService.getDispatchableSources(dispatchType, search);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch sources', err, req, res);
+      next(err);
+    }
+  }
+
+  /** The source (GRN / DC) as the form shows it, with its product lines and any dispatch already raised. */
+  @httpGet('/source/:dispatchType/:sourceId')
+  public async getSource(
+    @requestParam('dispatchType') dispatchType: string,
+    @requestParam('sourceId') sourceId: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const data = await this.vehicleDispatchService.getSource(dispatchType, sourceId);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch source', err, req, res);
+      next(err);
+    }
+  }
+
+  /** The live dispatch of a GRN / DC (Dispatch tab), or `data: null`. */
+  @httpGet('/by-source/:dispatchType/:sourceId')
+  public async getBySource(
+    @requestParam('dispatchType') dispatchType: string,
+    @requestParam('sourceId') sourceId: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const data = await this.vehicleDispatchService.getBySource(dispatchType, sourceId);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch by source', err, req, res);
+      next(err);
+    }
+  }
+
+  /** Current values for the edit form. */
+  @httpGet('/update/:id', checkPermission(dispatchKeyFromRecord, 'edit'), guardDocumentEdit(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'))
+  public async getForUpdate(
+    @requestParam('id') id: string,
+    @request() req: Request,
+    @response() res: Response,
+    @next() next: NextFunction,
+  ) {
+    try {
+      const data = await this.vehicleDispatchService.getForUpdate(id);
+      if (!data) return next(new AppError(404, 'Vehicle Dispatch not found'));
+      ControllerLogger.logView('Vehicle Dispatch (for update)', id, req, res);
+      res.status(200).json({ status: 'success', data });
+    } catch (err) {
+      ControllerLogger.logError('Vehicle Dispatch for update', err, req, res);
+      next(err);
+    }
+  }
+
+  // The vehicle's arrival is recorded by POST /receiving/receive (the Arrivals
+  // Receive button, docs/arrivals-status-plan.md D7), not here.
+
+@httpDelete('/delete/multiple', requireRole(Role.SUPER_ADMIN), guardDocumentDelete(ApprovalDocType.VEHICLE_DISPATCH_REGISTER, 'Vehicle Dispatch'))
     public async deleteMultipleVehicleDispatch(
       @request() req: Request,
       @response() res: Response,

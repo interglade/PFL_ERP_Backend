@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import {
   controller,
@@ -29,7 +30,7 @@ export class CrystalReportController {
   /**
    * Generate detailed procurement report
    */
-  @httpPost('/procurement/detailed')
+  @httpPost('/procurement/detailed', checkPermission('purchase-report', 'view'))
   public async generateDetailedProcurementReport(
     @request() req: Request,
     @response() res: Response,
@@ -68,7 +69,7 @@ export class CrystalReportController {
   /**
    * Generate procurement summary report
    */
-  @httpPost('/procurement/summary')
+  @httpPost('/procurement/summary', checkPermission('purchase-report', 'view'))
   public async generateProcurementSummary(
     @request() req: Request,
     @response() res: Response,
@@ -105,7 +106,7 @@ export class CrystalReportController {
   /**
    * Generate vendor-wise procurement report
    */
-  @httpPost('/procurement/vendor-wise')
+  @httpPost('/procurement/vendor-wise', checkPermission('purchase-report', 'view'))
   public async generateVendorWiseProcurementReport(
     @request() req: Request,
     @response() res: Response,
@@ -143,7 +144,7 @@ export class CrystalReportController {
   /**
    * Generate product-wise procurement report
    */
-  @httpPost('/procurement/product-wise')
+  @httpPost('/procurement/product-wise', checkPermission('purchase-report', 'view'))
   public async generateProductWiseProcurementReport(
     @request() req: Request,
     @response() res: Response,
@@ -181,7 +182,7 @@ export class CrystalReportController {
   /**
    * Export detailed procurement report to Excel
    */
-  @httpPost('/procurement/export/excel')
+  @httpPost('/procurement/export/excel', checkPermission('purchase-report', 'export'))
   public async exportProcurementReportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -206,10 +207,10 @@ export class CrystalReportController {
       // Add headers
       const headers = [
         'GRN No', 'GRN Date', 'GRN Type', 'Purchase Type', 'Vendor Name', 
-        'Farmer Name', 'Company', 'Branch', 'Purchase Location', 'Bill No', 
-        'Vehicle No', 'Total Amount', 'Sub Total', 'Freight', 'Other Charges',
+        'Farmer Name', 'Company', 'Branch', 'Purchase Location', 'Bill No',
+        'Batch No', 'Total Gross Weight', 'Total Net Weight', 'Total Amount', 'Sub Total', 'Freight', 'Other Charges',
         'Purchased By', 'Created By', 'Source', 'Product Name', 'Variant',
-        'Quantity', 'Revised Quantity', 'Unit Price', 'Revised Rate', 'Amount',
+        'Quantity', 'Unit Price', 'Amount',
         'UOM', 'Gross Weight', 'Net Weight', 'Packing Material Weight',
         'Purchase Date', 'Delivery Date', 'Delivery Location'
       ];
@@ -232,11 +233,11 @@ export class CrystalReportController {
             worksheet.addRow([
               grn.grnNo, grn.grnDate, grn.grnType, grn.purchaseType,
               grn.vendorName, grn.farmerName, grn.companyName, grn.branchName,
-              grn.purchaseLocation, grn.billNo, grn.vehicleNo, grn.totalAmount,
+              grn.purchaseLocation, grn.billNo, grn.batchNo, grn.totalGrossWeight, grn.totalNetWeight, grn.totalAmount,
               grn.subTotalAmount, grn.freight, grn.otherCharges, grn.purchasedBy,
               grn.createdBy, grn.source, product.productName, product.variantName,
-              product.quantity, product.revisedQuantity, product.unitPrice,
-              product.revisedRate, product.amount, product.uom, product.grossWeight,
+              product.quantity, product.unitPrice,
+              product.amount, product.uom, product.grossWeight,
               product.netWeight, product.packingMaterialWeight, product.purchaseDate,
               product.deliveryDate
             ]);
@@ -245,9 +246,9 @@ export class CrystalReportController {
           worksheet.addRow([
             grn.grnNo, grn.grnDate, grn.grnType, grn.purchaseType,
             grn.vendorName, grn.farmerName, grn.companyName, grn.branchName,
-            grn.purchaseLocation, grn.billNo, grn.vehicleNo, grn.totalAmount,
+            grn.purchaseLocation, grn.billNo, grn.batchNo, grn.totalGrossWeight, grn.totalNetWeight, grn.totalAmount,
             grn.subTotalAmount, grn.freight, grn.otherCharges, grn.purchasedBy,
-            grn.createdBy, grn.source, '', '', '', '', '', '', '', '', '', '', '', '', '', ''
+            grn.createdBy, grn.source, '', '', '', '', '', '', '', '', '', '', ''
           ]);
         }
       });
@@ -277,7 +278,7 @@ export class CrystalReportController {
   /**
    * Get procurement report filters/options
    */
-  @httpGet('/procurement/filters')
+  @httpGet('/procurement/filters', checkPermission('purchase-report', 'view'))
   public async getProcurementReportFilters(
     @request() req: Request,
     @response() res: Response,

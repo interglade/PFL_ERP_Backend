@@ -1,6 +1,8 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import {
     controller,
+    httpDelete,
     httpGet,
     httpPost,
     request,
@@ -16,11 +18,15 @@ import { format } from 'date-fns';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TYPES } from '../../types';
+import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { SalesCrystalReportService, SalesReportFilters } from '../service/salesCrystalReport.service';
 import logger from '../../utils/logger';
 import AppError from '../../utils/appError';
+import { DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 
-@controller('/sales-reports')
+@controller('/sales-reports', deserializeUser, requireUser)
 export class SalesCrystalReportController {
     private reportsDir: string;
 
@@ -63,7 +69,7 @@ export class SalesCrystalReportController {
      * Get detailed sales report with pagination
      * GET /sales-reports/detailed
      */
-    @httpGet('/detailed')
+    @httpGet('/detailed', checkPermission('sales-report', 'view'))
     public async getDetailedSalesReport(
         @request() req: Request,
         @response() res: Response,
@@ -81,8 +87,6 @@ export class SalesCrystalReportController {
                 companyId: req.query.companyId as string,
                 fromLocationId: req.query.fromLocationId as string,
                 toLocationId: req.query.toLocationId as string,
-                driverName: req.query.driverName as string,
-                vehicleNo: req.query.vehicleNo as string,
                 approvalStatus: req.query.approvalStatus as string,
                 challanNo: req.query.challanNo as string,
                 grnNo: req.query.grnNo as string,
@@ -141,7 +145,7 @@ export class SalesCrystalReportController {
      * Get sales summary report
      * GET /sales-reports/summary
      */
-    @httpGet('/summary')
+    @httpGet('/summary', checkPermission('sales-report', 'view'))
     public async getSalesSummary(
         @request() req: Request,
         @response() res: Response,
@@ -178,7 +182,7 @@ export class SalesCrystalReportController {
      * Get customer drill-down report
      * GET /sales-reports/customer/:customerId
      */
-    @httpGet('/customer/:customerId')
+    @httpGet('/customer/:customerId', checkPermission('sales-report', 'view'))
     public async getCustomerDrillDown(
         @request() req: Request,
         @response() res: Response,
@@ -221,7 +225,7 @@ export class SalesCrystalReportController {
      * Get product drill-down report
      * GET /sales-reports/product/:productId
      */
-    @httpGet('/product/:productId')
+    @httpGet('/product/:productId', checkPermission('sales-report', 'view'))
     public async getProductDrillDown(
         @request() req: Request,
         @response() res: Response,
@@ -264,7 +268,7 @@ export class SalesCrystalReportController {
      * Export detailed sales report to Excel
      * GET /sales-reports/export/excel
      */
-    @httpGet('/export/excel')
+    @httpGet('/export/excel', checkPermission('sales-report', 'export'))
     public async exportToExcel(
         @request() req: Request,
         @response() res: Response,
@@ -338,8 +342,6 @@ export class SalesCrystalReportController {
                 'Amount',
                 'UOM',
                 'From Location',
-                'Driver Name',
-                'Vehicle No',
                 'Approval Status',
             ];
 
@@ -376,8 +378,6 @@ export class SalesCrystalReportController {
                             product.amount,
                             product.uom,
                             dc.fromLocation,
-                            dc.driverName,
-                            dc.vehicleNo,
                             dc.approvalStatus,
                         ]);
 
@@ -462,7 +462,7 @@ export class SalesCrystalReportController {
      * Export sales summary to Excel
      * GET /sales-reports/export/summary-excel
      */
-    @httpGet('/export/summary-excel')
+    @httpGet('/export/summary-excel', checkPermission('sales-report', 'export'))
     public async exportSummaryToExcel(
         @request() req: Request,
         @response() res: Response,
@@ -666,65 +666,6 @@ export class SalesCrystalReportController {
             });
 
            
-
-            // Driver Performance Sheet with enhanced styling
-            const driversSheet = workbook.addWorksheet('Driver Performance');
-
-            // Header row
-            const driverHeaderRow = driversSheet.addRow(['Driver Name', 'Total Deliveries', 'Total Amount', 'Total Net Weight', 'Avg Delivery Value']);
-            driverHeaderRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-            driverHeaderRow.fill = {
-                type: 'pattern',
-                pattern: 'solid',
-                fgColor: { argb: 'FF6F42C1' }
-            };
-            driverHeaderRow.height = 25;
-            driverHeaderRow.alignment = { horizontal: 'center', vertical: 'middle' };
-
-            // Data rows
-            summaryData.driverPerformance.forEach((driver, index) => {
-                const row = driversSheet.addRow([
-                    driver.driverName,
-                    driver.totalDeliveries,
-                    driver.totalAmount,
-                    driver.totalNetWeight,
-                    driver.averageDeliveryValue,
-                ]);
-
-                // Apply alternating row colors only to cells with data (columns 1-5)
-                if (index % 2 === 0) {
-                    for (let col = 1; col <= 5; col++) {
-                        row.getCell(col).fill = {
-                            type: 'pattern',
-                            pattern: 'solid',
-                            fgColor: { argb: 'FFF3E5F5' }
-                        };
-                    }
-                }
-
-                // Format numbers
-                row.getCell(3).numFmt = '₹#,##0.00';
-                row.getCell(4).numFmt = '#,##0.00 "KG"';
-                row.getCell(5).numFmt = '₹#,##0.00';
-
-                // Highlight top 3 drivers with medals
-                if (index < 3) {
-                    row.getCell(1).font = { bold: true };
-                    const medalColor = index === 0 ? 'FFFFD700' : index === 1 ? 'FFC0C0C0' : 'FFCD7F32';
-                    row.getCell(1).fill = {
-                        type: 'pattern',
-                        pattern: 'solid',
-                        fgColor: { argb: medalColor }
-                    };
-                }
-            });
-
-            // Auto-fit columns
-            driversSheet.columns.forEach((column, index) => {
-                if (column) {
-                    column.width = index === 0 ? 25 : 20;
-                }
-            });
 
             // Visual Dashboard removed - users can create native Excel charts from the data sheets
             // All visual chart data is available in separate sheets: Daily Trends, Monthly Trends, Yearly Trends, Custom Trends
@@ -952,7 +893,7 @@ export class SalesCrystalReportController {
      * Get customer returns report
      * GET /sales-reports/returns/detailed
      */
-    @httpGet('/returns/detailed')
+    @httpGet('/returns/detailed', checkPermission('sales-report', 'view'))
     public async getCustomerReturnsReport(
         @request() req: Request,
         @response() res: Response,
@@ -1002,7 +943,7 @@ export class SalesCrystalReportController {
      * Get customer returns summary
      * GET /sales-reports/returns/summary
      */
-    @httpGet('/returns/summary')
+    @httpGet('/returns/summary', checkPermission('sales-report', 'view'))
     public async getCustomerReturnsSummary(
         @request() req: Request,
         @response() res: Response,
@@ -1038,7 +979,7 @@ export class SalesCrystalReportController {
      * Export customer returns to Excel
      * GET /sales-reports/returns/export/excel
      */
-    @httpGet('/returns/export/excel')
+    @httpGet('/returns/export/excel', checkPermission('sales-report', 'export'))
     public async exportReturnsToExcel(
         @request() req: Request,
         @response() res: Response,
@@ -1226,7 +1167,7 @@ export class SalesCrystalReportController {
      * Get list of saved reports
      * GET /sales-reports/saved
      */
-    @httpGet('/saved')
+    @httpGet('/saved', checkPermission('sales-report', 'view'))
     public async getSavedReports(
         @request() req: Request,
         @response() res: Response,
@@ -1267,7 +1208,7 @@ export class SalesCrystalReportController {
      * Download a saved report
      * GET /sales-reports/saved/:fileName
      */
-    @httpGet('/saved/:fileName')
+    @httpGet('/saved/:fileName', checkPermission('sales-report', 'export'))
     public async downloadSavedReport(
         @request() req: Request,
         @response() res: Response,
@@ -1306,7 +1247,7 @@ export class SalesCrystalReportController {
      * Delete a saved report
      * DELETE /sales-reports/saved/:fileName
      */
-    @httpGet('/saved/delete/:fileName')
+    @httpDelete('/saved/:fileName', requireRole(Role.ADMIN))
     public async deleteSavedReport(
         @request() req: Request,
         @response() res: Response,
@@ -1343,7 +1284,7 @@ export class SalesCrystalReportController {
      * Get available filter options
      * GET /sales-reports/filters
      */
-    @httpGet('/filters')
+    @httpGet('/filters', checkPermission('sales-report', 'view'))
     public async getFilterOptions(
         @request() req: Request,
         @response() res: Response,
@@ -1351,7 +1292,7 @@ export class SalesCrystalReportController {
     ) {
         try {
             const filterOptions = {
-                approvalStatuses: ['pending', 'approved', 'rejected'],
+                approvalStatuses: Object.values(DocumentStatus),
                 note: 'Use customerId, productId, categoryId, etc. for filtering',
             };
 

@@ -98,8 +98,9 @@ describe('parseDocumentFilters', () => {
     expectAppError(() => parseDocumentFilters({ approvalStartDate: '2026-09-15', approvalEndDate: '2026-09-01' }, 'grn'), /approvalStartDate/);
   });
 
-  it('validates statuses against the existing enum, case-insensitively, as a comma-separated list', () => {
-    expect(parseDocumentFilters({ status: 'complete, HOLD' }, 'grn').criteria.status).toEqual(['COMPLETE', 'hold']);
+  it('validates statuses against the existing enum, exactly, as a comma-separated list', () => {
+    expect(parseDocumentFilters({ status: 'Complete, Hold' }, 'grn').criteria.status).toEqual(['Complete', 'Hold']);
+    expectAppError(() => parseDocumentFilters({ status: 'complete' }, 'grn'), /Invalid status 'complete'/);
     expectAppError(() => parseDocumentFilters({ status: 'done' }, 'grn'), /Invalid status 'done'/);
   });
 
@@ -150,7 +151,7 @@ describe('every module definition produces valid SQL for every filter it offers'
     const query: Record<string, string> = {
       startDate: '2026-09-01',
       endDate: '2026-09-15',
-      status: 'COMPLETE',
+      status: 'Complete',
       search: 'abc',
       documentNo: '001',
       createdById: UUID_A,
@@ -204,7 +205,7 @@ describe('filter SQL semantics', () => {
 
   it('combines filters with AND and resolves relation names through joins', () => {
     const qb = documentQuery('grn');
-    applyDocumentFilters(qb, parseDocumentFilters({ status: 'COMPLETE', vendorName: 'Agro', locationId: UUID_B }, 'grn'), { documentAlias: 'document' });
+    applyDocumentFilters(qb, parseDocumentFilters({ status: 'Complete', vendorName: 'Agro', locationId: UUID_B }, 'grn'), { documentAlias: 'document' });
     const sql = qb.getQuery();
     expect(sql).toMatch(/CAST\("document"\."status" AS TEXT\) IN \(:\.\.\.flt_p\d+\) AND \(CAST\("flt_vendor"\."company_name" AS TEXT\) ILIKE/);
     expect(sql).toContain('LEFT JOIN "vendor" "flt_vendor"');
@@ -229,15 +230,58 @@ describe('filter SQL semantics', () => {
     expect(sql.match(/EXISTS \(SELECT 1 FROM "grn_products"/g)).toHaveLength(1);
   });
 
-  it('filters Deal Slip products through the linked RFPA lines', () => {
+  it('finds a GRN by RFPA number through its deal slip (grns has no RFPA column)', () => {
+    const qb = documentQuery('grn');
+    applyDocumentFilters(qb, parseDocumentFilters({ rfpaNo: 'RFPA2026' }, 'grn'), { documentAlias: 'document' });
+    const sql = qb.getQuery();
+    expect(sql).toMatch(/LEFT JOIN "deal_slips" "flt_dealSlip" ON .*"flt_rec"\."deal_slip_id"/);
+    expect(sql).toMatch(/LEFT JOIN "rfpa" "flt_rfpa" ON .*"flt_dealSlip"\."rfpa_id"/);
+    expect(sql).toMatch(/"flt_rfpa"\."rfpaId" AS TEXT\) ILIKE/);
+    expect(sql).not.toContain('"flt_rec"."rfpa_id"');
+  });
+
+  it("filters Deal Slip company, party, locations and source on the deal slip's own copy, never the RFPA's", () => {
     const qb = documentQuery('deal-slip');
-    applyDocumentFilters(qb, parseDocumentFilters({ productName: 'tomato' }, 'deal-slip'), { documentAlias: 'document' });
-    expect(qb.getQuery()).toMatch(/EXISTS \(SELECT 1 FROM "rfpa_product" .* = "flt_rfpa"\."id"/);
+    applyDocumentFilters(
+      qb,
+      parseDocumentFilters(
+        { company: 'Prime', vendorName: 'Agro', farmerName: 'Asha', location: 'Pune', source: 'vendor' },
+        'deal-slip',
+      ),
+      { documentAlias: 'document' },
+    );
+    const sql = qb.getQuery();
+    expect(sql).toMatch(/LEFT JOIN "company" "flt_company" ON .*"flt_rec"\."company_id"/);
+    expect(sql).toMatch(/LEFT JOIN "vendor" "flt_vendor" ON .*"flt_rec"\."vendor_id"/);
+    expect(sql).toMatch(/LEFT JOIN "farmer" "flt_farmer" ON .*"flt_rec"\."farmer_id"/);
+    expect(sql).toMatch(/LEFT JOIN "branches" "flt_purchaseLocation" ON .*"flt_rec"\."purchaselocation_id"/);
+    expect(sql).toMatch(/LEFT JOIN "branches" "flt_purchaseForSalesLocation" ON .*"flt_rec"\."purchaseforwhich_id"/);
+    expect(sql).toMatch(/"flt_rec"\."otherPurchaseLoc"/);
+    expect(sql).toMatch(/"flt_rec"\."source"/);
+    // The RFPA is not joined at all for these filters.
+    expect(sql).not.toContain('"rfpa"');
+  });
+
+  it('finds a Deal Slip by its linked RFPA number', () => {
+    const qb = documentQuery('deal-slip');
+    applyDocumentFilters(qb, parseDocumentFilters({ rfpaNo: 'RFPA2026' }, 'deal-slip'), { documentAlias: 'document' });
+    expect(qb.getQuery()).toMatch(/LEFT JOIN "rfpa" "flt_rfpa" ON .*"flt_rec"\."rfpa_id"/);
+  });
+
+  it("filters Deal Slip products and variants on the deal slip's own lines, never the RFPA's", () => {
+    for (const filters of [{ productName: 'tomato' }, { productCode: 'TOM' }, { productId: UUID_A }, { variantId: UUID_B }, { variant: 'grade a' }, { category: 'veg' }]) {
+      const qb = documentQuery('deal-slip');
+      applyDocumentFilters(qb, parseDocumentFilters(filters, 'deal-slip'), { documentAlias: 'document' });
+      const sql = qb.getQuery();
+      expect(sql).toMatch(/EXISTS \(SELECT 1 FROM "deal_slip_product" "flt_line"/);
+      expect(sql).toMatch(/"flt_line_parent"\."id" = "flt_rec"\."id"/);
+      expect(sql).not.toContain('"rfpa_product"');
+    }
   });
 
   it('filters the Final Invoice query on its own root alias without re-joining the invoice', () => {
     const qb = dataSource.getRepository(Invoice).createQueryBuilder('invoice').innerJoin(Documentb, 'doc', 'doc.document_type_id = invoice.id::text');
-    applyDocumentFilters(qb, parseDocumentFilters({ paymentStatus: 'paid', customerId: UUID_A, startDate: '2026-09-01' }, 'final-invoice'), {
+    applyDocumentFilters(qb, parseDocumentFilters({ paymentStatus: 'Paid', customerId: UUID_A, startDate: '2026-09-01' }, 'final-invoice'), {
       documentAlias: 'doc',
       recordAlias: 'invoice',
     });
@@ -279,10 +323,10 @@ describe('applyDocumentListFilters', () => {
   });
 
   it('removes legacy in-memory filters the database now applies', () => {
-    const options: PaginationOptions = { filters: { approvalStatus: 'approved', dealSlipNo: 'DS1', somethingElse: 'x' } };
-    applyDocumentListFilters(options, { approvalStatus: 'approved', dealSlipNo: 'DS1' }, 'deal-slip');
+    const options: PaginationOptions = { filters: { approvalStatus: 'Approved', dealSlipNo: 'DS1', somethingElse: 'x' } };
+    applyDocumentListFilters(options, { approvalStatus: 'Approved', dealSlipNo: 'DS1' }, 'deal-slip');
     expect(options.filters).toEqual({ somethingElse: 'x' });
-    expect(options.documentFilters?.criteria).toEqual({ approvalStatus: ['approved'], dealSlipNo: 'DS1' });
+    expect(options.documentFilters?.criteria).toEqual({ approvalStatus: ['Approved'], dealSlipNo: 'DS1' });
   });
 
   it('lists every parameter a module supports', () => {

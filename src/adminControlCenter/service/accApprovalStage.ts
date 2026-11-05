@@ -1,5 +1,6 @@
 import { DataSource } from 'typeorm';
 import { tsText } from './accShared.util';
+import { DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 
 /**
  * Works out where an in-flight document sits in its approval flow and whose
@@ -65,30 +66,13 @@ const SINGLE_APPROVER_TYPES = new Set([
   'vehicle-dispatch-register',
 ]);
 
-export const FINISHED_STATUSES = ['COMPLETE', 'REJECT', 'disapproved'];
+export const FINISHED_STATUSES: string[] = [DocumentStatus.COMPLETE, DocumentStatus.REJECT];
+/** Not sent to approvers yet (an auto-created Deal Slip), so not in approval either. */
+export const NOT_IN_APPROVAL_STATUSES: string[] = [...FINISHED_STATUSES, DocumentStatus.DRAFT];
 
-/** The document's own overallStatus, as the admin reads it. */
+/** The document's own overallStatus, as the admin reads it (the stored value is already the label). */
 export function statusLabel(status: string): string {
-  switch (status) {
-    case 'hold':
-      return 'Hold';
-    case 'VERIFIED':
-      return 'Verified';
-    case 'approved':
-      return 'Approved';
-    case 'FINALIZING':
-    case 'FINALIZED':
-      return 'Finalized';
-    case 'query':
-      return 'Query';
-    case 'COMPLETE':
-      return 'Complete';
-    case 'REJECT':
-    case 'disapproved':
-      return 'Rejected';
-    default:
-      return status;
-  }
+  return status;
 }
 
 // ─── Stage derivation (pure) ─────────────────────────────────────────────────
@@ -145,10 +129,10 @@ export function deriveStage(doc: DocState, flow: FlowDef | null): StageResult {
   const blockUsers = (i: number) => flow?.blocks[i]?.users ?? [];
 
   if (VERIFIER_TYPES.has(doc.type)) {
-    if (doc.status === 'approved') {
+    if (doc.status === DocumentStatus.APPROVED) {
       return { stage: 'Finalization 1', waitingOn: flow?.firstFinalizers ?? [] };
     }
-    if (doc.status === 'FINALIZING' || doc.status === 'FINALIZED') {
+    if (doc.status === DocumentStatus.FINALIZING) {
       return { stage: 'Finalization 2', waitingOn: flow?.secondFinalizers ?? [] };
     }
     if (!doc.verified) {
@@ -167,7 +151,7 @@ export function deriveStage(doc: DocState, flow: FlowDef | null): StageResult {
     return { stage: 'Approval L1', waitingOn: blockUsers(0) };
   }
 
-  // Double-approver documents: L1 and L2 may act in either order.
+  // Double-approver documents: L1 first, then L2 (the same order as every document type).
   if (!doc.a1) return { stage: 'Approval L1', waitingOn: blockUsers(0) };
   return { stage: 'Approval L2', waitingOn: blockUsers(1) };
 }
@@ -190,9 +174,9 @@ export async function loadInFlightDocuments(ds: DataSource): Promise<InFlightDoc
             ${tsText('d."createdAt"')} AS "createdAt",
             FLOOR(EXTRACT(EPOCH FROM (LOCALTIMESTAMP - d."createdAt")) / 86400)::int AS "pendingDays",
             (w.verified_id IS NOT NULL) AS verified,
-            (a1.status::text = 'approved') AS a1,
-            (a2.status::text = 'approved') AS a2,
-            (a3.status::text = 'approved') AS a3
+            (a1.status::text = 'Approved') AS a1,
+            (a2.status::text = 'Approved') AS a2,
+            (a3.status::text = 'Approved') AS a3
        FROM documents d
        LEFT JOIN documents_approve_by_whom w ON w.id = d.approval_info_id
        LEFT JOIN approval_stage_info a1 ON a1.id = w.first_approved_id
@@ -200,7 +184,7 @@ export async function loadInFlightDocuments(ds: DataSource): Promise<InFlightDoc
        LEFT JOIN approval_stage_info a3 ON a3.id = w.third_approved_id
       WHERE d."isDeleted" = false
         AND d.status::text <> ALL($1)`,
-    [FINISHED_STATUSES],
+    [NOT_IN_APPROVAL_STATUSES],
   );
 
   const flows = await loadFlows(ds, rows.map((r) => r.flowId).filter(Boolean));

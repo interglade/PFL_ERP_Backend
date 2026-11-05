@@ -29,6 +29,7 @@ export const headerMapping = {
   "Can Create": "permissions.canCreate",
   "Can View": "permissions.canView",
   "Can Download": "permissions.canDownload",
+  "Can Export": "permissions.canExport",
   "Can Edit": "permissions.canEdit",
   "Can Delete": "permissions.canDelete"
 };

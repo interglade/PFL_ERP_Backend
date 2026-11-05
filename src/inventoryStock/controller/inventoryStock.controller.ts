@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { controller, httpGet, next, queryParam, request, requestParam, response } from "inversify-express-utils";
 import { inject } from "inversify"
 import { NextFunction,Request,Response } from "express";
@@ -39,7 +40,7 @@ export class InventoryStockController {
 
 
 
-     @httpGet("/stock/filter/report")
+     @httpGet("/stock/filter/report", checkPermission('product-stock', 'view'))
   public async getStockReport(
     @queryParam("companyName") companyName: string,
     @queryParam("locationId") locationId: string,
@@ -66,7 +67,7 @@ export class InventoryStockController {
     }
   }
 
-  @httpGet("/endoftheday/eod-report")
+  @httpGet("/endoftheday/eod-report", checkPermission('operation-report', 'view'))
   public async getEndOfDayReport(
     @queryParam("companyId") companyId: string,
     @queryParam("locationId") locationId: string,
@@ -96,7 +97,7 @@ export class InventoryStockController {
     }
   }
 
-  @httpGet('/stock/locationwise-companywise')
+  @httpGet('/stock/locationwise-companywise', checkPermission('product-stock', 'view'))
   public async getlocationcompanywisestock(
     @request() req : Request,
     @response() res: Response,
@@ -135,7 +136,7 @@ export class InventoryStockController {
       next(error);
     }
   }
-  @httpGet('/stock/locationwise-companywise-productwise')
+  @httpGet('/stock/locationwise-companywise-productwise', checkPermission('product-stock', 'view'))
   public async getlocationcompanyproductwisestock(
     @request() req : Request,
     @response() res: Response,

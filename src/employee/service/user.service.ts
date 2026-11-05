@@ -7,10 +7,10 @@ import { merge } from 'lodash';
 dotenv.config();
 import config from 'config';
 
-import { Role, User } from '../entity/user.entity';
+import { EmployeeStatus, Role, User } from '../entity/user.entity';
 import { signJwt } from '../../utils/jwt';
 
-import { DataSource, In } from 'typeorm';
+import { DataSource, ILike, In } from 'typeorm';
 
 
 
@@ -25,7 +25,6 @@ import { buildQuery, PaginationOptions } from '../../utils/pagination';
 import { formatDateTime } from '../../utils/dateUtils';
 import { CompanyRepository } from '../../company/repository/company.repository';
 import { Department } from '../../utils/status.enum';
-import { parseExcelDate } from '../../utils/excelParser';
 
 import { WorkflowHierarchyRepository } from '../../workFlow/repository/WorkflowHierarchy.repository';
 
@@ -37,7 +36,6 @@ import {
   UserViewResponseDto,
   UserUpdateFormDto,
   UserPartialResponseDto,
-  UserExcelRowDto,
 } from '../dto/user.dto';
 import { AddressRepository } from '../../address/repository/address.repository';
 import { AuditLogService } from '../../employeeActivity/service/auditLog.service';
@@ -49,6 +47,10 @@ import { Company } from '../../company/entity/company.entity';
 import { Branches } from '../../branch/entity/branches.entity';
 import { DocumentDefinition, DocumentTypeEnum } from '../../documentDef/entity/documentdef.entity';
 import { DocumentPermission } from '../entity/permission.entity';
+import { normalizeRoles } from '../../utils/roles';
+import { nextEmployeeIds } from '../employeeIds';
+import { CONTACT_FIELDS, CONTACT_LABELS, ContactField, ContactOwner, findContactClashes } from '../employeeContacts';
+import { PERMISSION_TICKED_SQL } from '../employeePermissions';
 
 const CACHE_PREFIX = 'user';
 const CACHE_TTL = 300; // 5 minutes
@@ -132,17 +134,8 @@ export class UserService {
         id: In(input.companyName),
       });
     }
-// Handle roles
-let roles: Role[] = [Role.EMPLOYEE]; // always assign default EMPLOYEE role
-
-if (input.roles && input.roles.length > 0) {
-  const validRoles = input.roles.filter((r: string) =>
-    Object.values(Role).includes(r as Role)
-  ) as Role[];
-
-  // merge with default role, remove duplicates
-  roles = Array.from(new Set([...roles, ...validRoles]));
-}
+// Handle roles: EMPLOYEE always, SUPER_ADMIN implies ADMIN
+const roles: Role[] = normalizeRoles(input.roles);
 
     // Handle departments — accepts both 'departments' (array) and 'department' (array or string)
     // Normalises to lowercase so 'HR', 'hr', 'Hr' all match
@@ -161,8 +154,8 @@ if (input.roles && input.roles.length > 0) {
         .filter((d: string) => Object.values(Department).includes(d as Department)) as Department[];
     }
 
-    // Employee status: always starts as DRAFT — admin activates/deactivates later
-    const resolvedStatus: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'DRAFT' = 'DRAFT';
+    // Employee status: always starts as Draft — admin activates/deactivates later
+    const resolvedStatus = EmployeeStatus.DRAFT;
 
     const user = this.userRepository.create({
       ...input,
@@ -188,8 +181,8 @@ if (input.roles && input.roles.length > 0) {
     });
     if (!user) throw new AppError(404, 'Employee not found');
 
-    // Set status to INACTIVE (submitted for admin review — equivalent to "pending")
-    user.status = 'INACTIVE';
+    // Set status to Inactive (submitted for admin review — equivalent to "pending")
+    user.status = EmployeeStatus.INACTIVE;
 
     // Scalar fields allowed to be updated on submit
     const scalarFields = [
@@ -229,7 +222,7 @@ if (input.roles && input.roles.length > 0) {
     return saved;
   }
 
-  async updateStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED') {
+  async updateStatus(id: string, status: EmployeeStatus) {
     const user = await this.userRepository.findOne({ where: { id } });
     if (!user) {
       throw new Error('User not found');
@@ -239,8 +232,13 @@ if (input.roles && input.roles.length > 0) {
     await this.invalidateCache(id);
     return saved;
   }
-  async getAllUsers(queryOptions: PaginationOptions, userId?: string): Promise<UserListResponseDto> {
-    const key = `${CACHE_PREFIX}:list:${userId ?? 'all'}:${JSON.stringify(queryOptions)}`;
+  /** `permissions: 'notSet'` lists only the users without any permission tick (after an import). */
+  async getAllUsers(
+    queryOptions: PaginationOptions,
+    userId?: string,
+    filter: { permissions?: 'set' | 'notSet' } = {},
+  ): Promise<UserListResponseDto> {
+    const key = `${CACHE_PREFIX}:list:${userId ?? 'all'}:${JSON.stringify(queryOptions)}:${filter.permissions ?? ''}`;
     const cached = await this.cacheService.get<any>(key);
     if (cached) return cached;
 
@@ -271,7 +269,26 @@ if (input.roles && input.roles.length > 0) {
       ])
       .orderBy('user.createdAt', 'DESC');
 
+    if (filter.permissions) {
+      const ticked =
+        `EXISTS (SELECT 1 FROM document_permissions dp WHERE dp."employeeId" = "user"."id" ` +
+        `AND dp."deletedAt" IS NULL AND ${PERMISSION_TICKED_SQL('dp')})`;
+      queryBuilder.andWhere(filter.permissions === 'set' ? ticked : `NOT ${ticked}`);
+    }
+
     const { meta, data } = await buildQuery(queryBuilder, queryOptions, 'user');
+
+    const withPermissions = new Set<string>();
+    if (data.length) {
+      const rows: { id: string }[] = await this.dataSource
+        .getRepository(DocumentPermission)
+        .createQueryBuilder('p')
+        .select('DISTINCT p."employeeId"', 'id')
+        .where('p."employeeId" IN (:...ids)', { ids: data.map((user) => user.id) })
+        .andWhere(PERMISSION_TICKED_SQL('p'))
+        .getRawMany();
+      rows.forEach((row) => withPermissions.add(row.id));
+    }
 
     const mapAddress = (address: any): any =>
       address
@@ -302,6 +319,7 @@ if (input.roles && input.roles.length > 0) {
       employeeId: user.employeeId,
       status: user.status,
       password: user.tempPlainPassword,
+      permissionsSet: withPermissions.has(user.id),
       accessLocation: user.accessLocation.map((location: any) => location.name),
       permanentAddress: mapAddress(user.permanentAddress),
       residentialAddress: mapAddress(user.residentialAddress),
@@ -449,6 +467,7 @@ isAddressSame: user.isAddressSame,
         canEdit: perm.canEdit,
         canDelete: perm.canDelete,
         canDownload: perm.canDownload,
+        canExport: perm.canExport,
       })),
     };
   }
@@ -549,6 +568,7 @@ isAddressSame:user.isAddressSame,
         canEdit: perm.canEdit,
         canDelete: perm.canDelete,
         canDownload: perm.canDownload,
+        canExport: perm.canExport,
         documentDefinition: perm.documentDefinition?.id,
         // documentDefinition: {
         //   id: perm.documentDefinition?.id,
@@ -662,18 +682,8 @@ isAddressSame:user.isAddressSame,
 
     // Handle roles
     if (userData.roles) {
-      let roles: Role[] = [Role.EMPLOYEE]; // always assign default EMPLOYEE role
-
-      if (Array.isArray(userData.roles) && userData.roles.length > 0) {
-        const validRoles = userData.roles.filter((r: string) =>
-          Object.values(Role).includes(r as Role)
-        ) as Role[];
-
-        // merge with default role, remove duplicates
-        roles = Array.from(new Set([...roles, ...validRoles]));
-      }
-
-      user.roles = roles;
+      // EMPLOYEE always, SUPER_ADMIN implies ADMIN
+      user.roles = normalizeRoles(userData.roles);
       // Remove from userData to prevent overwriting
       delete userData.roles;
     }
@@ -712,8 +722,17 @@ isAddressSame:user.isAddressSame,
 
 
 
-  async filterUser(options: PaginationOptions): Promise<UserPartialResponseDto> {
-    const key = `${CACHE_PREFIX}:filter:${JSON.stringify(options)}`;
+  /**
+   * Employee dropdown list.
+   * - `role`: only employees holding that role
+   * - `ids`: only these employees (resolves saved selections to names; an empty list returns nobody)
+   * - `activeOnly`: only Active employees (the others cannot log in)
+   */
+  async filterUser(
+    options: PaginationOptions,
+    criteria: { role?: Role; ids?: string[]; activeOnly?: boolean } = {},
+  ): Promise<UserPartialResponseDto> {
+    const key = `${CACHE_PREFIX}:filter:${JSON.stringify({ options, criteria })}`;
     const cached = await this.cacheService.get<any>(key);
     if (cached) return cached;
 
@@ -729,7 +748,32 @@ isAddressSame:user.isAddressSame,
       ])
       .orderBy('user.firstName', 'ASC');
 
-    const result = await buildQuery(queryBuilder, options, 'user');
+    if (criteria.role) {
+      queryBuilder.andWhere(':role = ANY(user.roles)', { role: criteria.role });
+    }
+    if (criteria.ids) {
+      if (criteria.ids.length === 0) {
+        return { data: [], meta: { total: 0, page: options.page, pages: 0 } };
+      }
+      queryBuilder.andWhere('user.id IN (:...ids)', { ids: criteria.ids });
+    }
+    if (criteria.activeOnly) {
+      queryBuilder.andWhere('user.status = :active', { active: EmployeeStatus.ACTIVE });
+    }
+
+    // Search the whole name ("first middle last" or "first last") and the employee id in SQL,
+    // so a search with a space in it matches
+    const search = options.search?.trim();
+    if (search) {
+      queryBuilder.andWhere(
+        `(CONCAT_WS(' ', user.firstName, user.middleName, user.lastName) ILIKE :search
+          OR CONCAT_WS(' ', user.firstName, user.lastName) ILIKE :search
+          OR user.employeeId ILIKE :search)`,
+        { search: `%${search}%` },
+      );
+    }
+
+    const result = await buildQuery(queryBuilder, { ...options, search: '' }, 'user');
 
     const formattedUsers = result.data.map((user) => ({
       id: user.id,
@@ -808,21 +852,59 @@ isAddressSame:user.isAddressSame,
     return count;
   }
 
+  /** Highest Employee ID given out so far (deleted users included) + 1; see `nextEmployeeIds`. */
   async generateEmployeeId(): Promise<string> {
-    try {
-      const companyCode = '00';
+    const taken = await this.userRepository
+      .createQueryBuilder('user')
+      .withDeleted()
+      .select('user.employeeId', 'employeeId')
+      .getRawMany<{ employeeId: string | null }>();
+    return nextEmployeeIds(taken.map((row) => row.employeeId), 1)[0];
+  }
 
-      const count = await this.getTotalNumberOfUsers();
+  /**
+   * Username, mobiles and emails no other user may hold (docs/user-import-plan.md D7).
+   * Only the fields being set - or changed, for an existing user - are checked, so an
+   * old clash already in the database does not block unrelated edits. 409 on a clash.
+   */
+  async assertContactsUnique(values: Partial<Record<ContactField, unknown>>, userId?: string): Promise<void> {
+    const others = await this.userRepository.find({
+      select: ['id', 'employeeId', 'firstName', 'lastName', 'isDeleted', ...CONTACT_FIELDS],
+    });
+    const current = userId ? others.find((user) => user.id === userId) : undefined;
 
-      const serialNumber = count + 1;
-      const formattedSerialNumber = serialNumber.toString().padStart(4, '0');
+    const own: ContactOwner['values'] = {};
+    const checked: ContactField[] = [];
+    for (const field of CONTACT_FIELDS) {
+      const raw = values[field];
+      const given = raw === undefined ? undefined : raw === null ? null : String(raw).trim() || null;
+      own[field] = given !== undefined ? given : current?.[field];
+      if (given && String(given).toLowerCase() !== String(current?.[field] ?? '').trim().toLowerCase()) {
+        checked.push(field);
+      }
+    }
+    if (!checked.length) return;
 
-      return `PF${companyCode}${formattedSerialNumber}`;
-    } catch (error) {
-      logger.error('Error generating employee ID:', error);
-      throw error;
+    const owners: ContactOwner[] = others
+      .filter((user) => user.id !== userId && !user.isDeleted)
+      .map((user) => ({
+        key: user.id,
+        label: `${user.employeeId ?? ''} ${[user.firstName, user.lastName].filter(Boolean).join(' ')}`.trim(),
+        row: null,
+        values: user,
+        checked: [],
+      }));
+    owners.push({ key: userId ?? 'new', label: 'this user', row: 0, values: own, checked });
+
+    const clashes = findContactClashes(owners);
+    if (clashes.length) {
+      throw new AppError(
+        409,
+        clashes.map((clash) => `${CONTACT_LABELS[clash.property]} "${clash.value}" is already used by ${clash.by}`).join('; '),
+      );
     }
   }
+
   //TODO:New By Vaishali
 
   resetPasswordLink = async (
@@ -849,164 +931,7 @@ isAddressSame:user.isAddressSame,
 
  
 
-  async createUsersWithRelations(usersData: any[]) {
-    const userRepo = this.dataSource.getRepository(User);
-    const companyRepo = this.dataSource.getRepository(Company);
-    const addressRepo = this.dataSource.getRepository(Address);
-    const branchRepo = this.dataSource.getRepository(Branches);
-    const documentDefRepo = this.dataSource.getRepository(DocumentDefinition);
-    const permissionRepo = this.dataSource.getRepository(DocumentPermission);
-    let employeeId = await this.generateEmployeeId();
-    const results: any[] = [];
-    for (const row of usersData) {
-      await this.dataSource.transaction(async transactionalEntityManager => {
-        // Process Company
-        let company = null;
-        if (row.companyName && row.companyName.name) {
-          company = await companyRepo.findOne({ where: { name: row.companyName.name } });
-          if (!company) {
-            company = companyRepo.create(row.companyName);
-            company = await transactionalEntityManager.save(company);
-          }
-        }
-
-        // Process Residential Address
-        let residentialAddress = null;
-        if (row.residentialAddress && row.residentialAddress.address1) {
-          residentialAddress = addressRepo.create(row.residentialAddress);
-          residentialAddress = await transactionalEntityManager.save(residentialAddress);
-        }
-
-        // Process Permanent Address
-        let permanentAddress = null;
-        if (row.permanentAddress && row.permanentAddress.address1) {
-          permanentAddress = addressRepo.create(row.permanentAddress);
-          permanentAddress = await transactionalEntityManager.save(permanentAddress);
-        }
-
-        // Process Joining Location
-        let joiningLocation = null;
-        if (row.joiningLocation && row.joiningLocation.name) {
-          joiningLocation = await branchRepo.findOne({ where: { name: row.joiningLocation.name } });
-          if (!joiningLocation) {
-            joiningLocation = branchRepo.create({ name: row.joiningLocation.name });
-            joiningLocation = await transactionalEntityManager.save(joiningLocation);
-          }
-        }
-
-        // Process Current Work Location
-        let currentWorkLocation = null;
-        if (row.currentWorkLocation && row.currentWorkLocation.name) {
-          currentWorkLocation = await branchRepo.findOne({ where: { name: row.currentWorkLocation.name } });
-          if (!currentWorkLocation) {
-            currentWorkLocation = branchRepo.create({ name: row.currentWorkLocation.name });
-            currentWorkLocation = await transactionalEntityManager.save(currentWorkLocation);
-          }
-        }
-
-        // Process Access Location (assuming comma-separated values)
-        let accessLocation = [];
-        if (row.accessLocation) {
-          const names = row.accessLocation.split(',').map((n: string) => n.trim());
-          for (const name of names) {
-            let location = await branchRepo.findOne({ where: { name } });
-            if (!location) {
-              location = branchRepo.create({ name });
-              location = await transactionalEntityManager.save(location);
-            }
-            accessLocation.push(location);
-          }
-        }
-
-        const joiningDate = parseExcelDate(row.joiningDate);
-        
-
-        // Create User
-        const user = userRepo.create({
-          firstName: row.firstName,
-          lastName: row.lastName,
-          username: row.username,
-          primaryMobNo: row.primaryMobNo,
-          primaryEmail: row.primaryEmail,
-          joiningDate: joiningDate,//row.joiningDate /*? new Date(row.joiningDate) : null*/,
-          workEmail: row.workEmail,
-          department: row.department,
-          companyName: company ? [company] : [],
-          residentialAddress,
-          permanentAddress,
-          joiningLocation,
-          currentWorkLocation,
-          accessLocation,
-          employeeId: employeeId,
-          tempPlainPassword: this.generateRandomPassword(),
-        } as any);
-
-        const savedUser = await transactionalEntityManager.save(user);
-
-        // Process Document Permissions (Multiple permissions support)
-        if (row.permissions && Array.isArray(row.permissions)) {
-          for (const permissionData of row.permissions) {
-            if (permissionData.documentDefinition) {
-              let docDef = await documentDefRepo.findOne({ 
-                where: { name: permissionData.documentDefinition.name } 
-              });
-              
-              if (!docDef) {
-                docDef = documentDefRepo.create({
-                  name: permissionData.documentDefinition.name,
-                  uniqueKey: permissionData.documentDefinition.name.toLowerCase().replace(/\s/g, '_'),
-                  documentType: permissionData.documentDefinition.documentType as DocumentTypeEnum
-                });
-                docDef = await transactionalEntityManager.save(docDef);
-              }
-
-              const permission = permissionRepo.create({
-                employee: savedUser,
-                documentDefinition: docDef,
-                canCreate: !!permissionData.canCreate,
-                canView: !!permissionData.canView,
-                canEdit: !!permissionData.canEdit,
-                canDelete: !!permissionData.canDelete,
-                canDownload: !!permissionData.canDownload
-              } as any);
-
-              await transactionalEntityManager.save(permission);
-            }
-          }
-        }
-        // Backward compatibility: Handle single permission format
-        else if (row.permissions && row.permissions.documentDefinition) {
-          let docDef = await documentDefRepo.findOne({ where: { name: row.permissions.documentDefinition.name } });
-          if (!docDef) {
-            docDef = documentDefRepo.create({
-              name: row.permissions.documentDefinition.name,
-              uniqueKey: row.permissions.documentDefinition.name.toLowerCase().replace(/\s/g, '_'),
-              documentType: row.permissions.documentDefinition.documentType as DocumentTypeEnum
-            });
-            docDef = await transactionalEntityManager.save(docDef);
-          }
-
-          const permission = permissionRepo.create({
-            employee: savedUser,
-            documentDefinition: docDef,
-            canCreate: !!row.permissions.canCreate,
-            canView: !!row.permissions.canView,
-            canEdit: !!row.permissions.canEdit,
-            canDelete: !!row.permissions.canDelete,
-            canDownload: !!row.permissions.canDownload
-          } as any);
-
-          await transactionalEntityManager.save(permission);
-        }
-
-        results.push(savedUser);
-      });
-    }
-
-    return results;
-  }
-
-  async getWorkflowHierarchy(employeeId: string, options?: PaginationOptions & { department?: string }): Promise<any> {
+  async getWorkflowHierarchy(employeeId: string, options?: PaginationOptions & { department?: string; maxDepth?: number }): Promise<any> {
     // Query to get all workflow hierarchy relationships for the given employee
     // depth = 0 is self-reference, depth > 0 are subordinates
     const qb = this.workflowHierarchyRepository
@@ -1016,6 +941,11 @@ isAddressSame:user.isAddressSame,
       .andWhere('wh.depth >= 0') // Include self (depth = 0) + all subordinates
       .orderBy('wh.depth', 'ASC')
       .addOrderBy('descendant.firstName', 'ASC');
+
+    // maxDepth=1: the employee and their direct team only (whom they may create plans for)
+    if (options?.maxDepth !== undefined) {
+      qb.andWhere('wh.depth <= :maxDepth', { maxDepth: options.maxDepth });
+    }
 
     // Apply department filter at DB level if provided
     if (options?.department) {

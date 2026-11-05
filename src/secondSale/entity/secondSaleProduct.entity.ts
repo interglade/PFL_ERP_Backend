@@ -26,6 +26,10 @@ export class SecondSaleProduct extends Model {
   @Column('decimal', { nullable: true })
   unitPrice: number;
 
+  /** 'per_unit' (quantity × unit price) or 'per_kg' (net kg × unit price). */
+  @Column({ type: 'varchar', length: 10, default: 'per_unit' })
+  pricingBasis: 'per_unit' | 'per_kg';
+
   @Column('decimal', { nullable: true })
   amount: number;
   @Column({ nullable: true, type: 'decimal', precision: 10, scale: 3 })

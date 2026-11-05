@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { Request, Response, NextFunction } from 'express';
 import { inject } from 'inversify';
 import { controller, httpGet } from 'inversify-express-utils';
@@ -7,7 +9,7 @@ import { AuditLogService } from '../service/auditLog.service';
 import { AuditLogRepository } from '../repository/AuditLog.repository';
 
 
-@controller('/audit-logs', deserializeUser, requireUser)
+@controller('/audit-logs', deserializeUser, requireUser, requireRole(Role.ADMIN))
 export class AuditLogController {
   constructor(
     @inject(TYPES.AuditLogService) private auditLogService: AuditLogService,

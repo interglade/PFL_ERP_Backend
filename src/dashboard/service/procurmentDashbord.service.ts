@@ -288,7 +288,6 @@ public async getFilteredGRNs(filters: any): Promise<any[]> {
     .leftJoinAndSelect('grnProducts.productName', 'productName')
     .leftJoinAndSelect("grnProducts.uom", "uom")
     .leftJoinAndSelect("grn.requestedBy", "requestedBy")
-    .leftJoinAndSelect("grn.purchaseBy", "purchaseBy")
     .orderBy("grn.createdAt", "DESC");
 
   // Apply Filters
@@ -378,6 +377,9 @@ public async getFilteredGRNs(filters: any): Promise<any[]> {
       purchaseInstructionsBy: grn.purchaseInstructionsBy,
       source: grn.source,
       billNo: grn.billNo,
+      batchNo: grn.batchNo ?? null,
+      totalGrossWeight: grn.totalGrossWeight ?? null,
+      totalNetWeight: grn.totalNetWeight ?? null,
       grnType: grn.grnType,
       locationType: grn.locationType,
       purchaseType: grn.purchaseType,
@@ -387,12 +389,9 @@ public async getFilteredGRNs(filters: any): Promise<any[]> {
       totalAmt: grn.totalAmt,
       amtWords: grn.amtWords,
       purchasedBy: grn.purchasedBy,
-      receivedThrough: grn.receivedThrough,
-      vehicleNo: grn.vehicleNo,
       timeIn: grn.timeIn,
       cratesIn: grn.cratesIn,
-      deliveryReceivingPerson: grn.deliveryReceivingPerson,
-      baseLocation: grn.baseLocation,
+      receivingPerson: grn.receivingPerson,
       approvalStatus: (grn as any).approvalStatus,
       approvalNote: grn.approvalNote,
       specialReq: grn.specialReq,
@@ -403,10 +402,6 @@ public async getFilteredGRNs(filters: any): Promise<any[]> {
       requestedBy: {
         firstName: (grn as any).requestedBy?.firstName || "",
         lastName: (grn as any).requestedBy?.lastName || "",
-      },
-      purchaseBy: {
-        firstName: grn.purchaseBy?.firstName || "",
-        lastName: grn.purchaseBy?.lastName || "",
       },
       selectedParty: selectedParty,
       grnProducts: grn.grnProducts.map((product) => ({

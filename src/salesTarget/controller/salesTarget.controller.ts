@@ -1,3 +1,7 @@
+import { guardEmployeeScopeIn, guardPlanRecord } from '../../workFlow/planAccess';
+import { Role } from '../../employee/entity/user.entity';
+import { DepartmentEnum } from '../../workFlow/entity/workflowClosure.entity';
+import { checkPermission } from '../../middleware/checkPermission';
 import { controller, httpGet, httpPatch, httpPost, httpPut, next, request, requestParam, response } from "inversify-express-utils";
 import { Request,Response,NextFunction } from "express";
 
@@ -6,6 +10,7 @@ import { deserializeUser, requireUser } from "../../middleware/deserializeUser";
 import { TYPES } from "../../types";
 import { SalesTargetService } from "../service/salesTarget.service";
 import logger from "../../utils/logger";
+import { parseStatus, TARGET_DECISIONS } from "../../utils/status.enum";
 
 
 @controller('/sales-target',deserializeUser,requireUser)
@@ -18,7 +23,7 @@ export class SalesTargetController {
         
     }
 
-@httpPost('/create/monthly-plan')
+@httpPost('/create/monthly-plan', checkPermission('sales-business-plan', 'create'))
 async createMonthlySalesPlan (@request() req: Request, @response() res: Response,@next() next:NextFunction)  {
   try {
    const loggedInUserId = res.locals.user.id;
@@ -26,6 +31,7 @@ async createMonthlySalesPlan (@request() req: Request, @response() res: Response
 
     // resolve employeeId — frontend पाठवेल नाहीतर loggedIn user
     const employeeId = payload.employee ?? loggedInUserId;
+    // who may create it and its status come from the reporting tree (planStatusOnSave)
    
     const result = await this.salesTargetService.create({
       ...payload,
@@ -43,7 +49,7 @@ async createMonthlySalesPlan (@request() req: Request, @response() res: Response
   }
 };
 
-@httpGet('/monthly-plan-view/:id')
+@httpGet('/monthly-plan-view/:id', guardPlanRecord('sales'), checkPermission('sales-business-plan', 'view'))
 async getMonthlyPlanViewStructured(
   @request() req: Request,
   @response() res: Response
@@ -59,7 +65,8 @@ async getMonthlyPlanViewStructured(
     }
 
     const data = await this.salesTargetService.getMonthlyPlanViewStructured(
-      targetId as string
+      targetId as string,
+      res.locals.user?.id,
     );
 
     return res.status(200).json({
@@ -76,7 +83,30 @@ async getMonthlyPlanViewStructured(
 }
 
 
-@httpGet('/monthly-plan-update/:id')
+
+/** The employee or their direct manager edits a plan; an edit by the employee goes back to Pending. */
+@httpPatch('/update/monthly-plan/:id', guardPlanRecord('sales'), checkPermission('sales-business-plan', 'edit'))
+async updateMonthlyPlan(
+  @requestParam('id') id: string,
+  @request() req: Request,
+  @response() res: Response,
+  @next() next: NextFunction,
+) {
+  try {
+    const target = await this.salesTargetService.update(id, req.body, res.locals.user.id);
+    return res.status(200).json({
+      status: 'success',
+      message: target.status === 'Pending'
+        ? 'Sales plan saved and sent to your reporting manager for approval'
+        : 'Sales plan saved',
+      data: { id: target.id, status: target.status },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+@httpGet('/monthly-plan-update/:id', guardPlanRecord('sales'), checkPermission('sales-business-plan', 'edit'))
 async getMonthlyPlanUpdateStructured(
   @request() req: Request,
   @response() res: Response
@@ -92,7 +122,8 @@ async getMonthlyPlanUpdateStructured(
     }
 
     const data = await this.salesTargetService.getMonthlyPlanUpdateStructured(
-      targetId as string
+      targetId as string,
+      res.locals.user?.id,
     );
 
     return res.status(200).json({
@@ -115,7 +146,7 @@ async getMonthlyPlanUpdateStructured(
 
 
 //TODO: Get all sales targets
-@httpGet("/getAll")
+@httpGet("/getAll", checkPermission('sales-business-plan', 'view'))
 async getAllTargets(
   @request() req: Request,
   @response() res: Response,
@@ -141,7 +172,7 @@ async getAllTargets(
       toYear: req.query.toYear ? parseInt(req.query.toYear as string) : undefined,
     };
 
-    const data = await this.salesTargetService.getalltargets(employeeid, page, limit, filters);
+    const data = await this.salesTargetService.getalltargets(employeeid, (res.locals.user?.roles ?? []).includes(Role.ADMIN), page, limit, filters);
 
     return res.status(200).json({
       status: "success",
@@ -162,7 +193,7 @@ async getAllTargets(
 
 
 //TODO: Generate Excel for View Plan Only (single sheet)
-@httpGet('/view-plan-excel/:id')
+@httpGet('/view-plan-excel/:id', guardPlanRecord('sales'), checkPermission('sales-business-plan', 'export'))
 async generateViewPlanExcel(
   @request() req: Request,
   @response() res: Response
@@ -275,7 +306,7 @@ async serveExcelFile(
 
 
 //TODO: Get target performance by customer, product, and employee
-@httpGet('/performance/:employeeId/:month/:year')
+@httpGet('/performance/:employeeId/:month/:year', guardEmployeeScopeIn(DepartmentEnum.SALE))
 async getTargetPerformance(
   @requestParam("employeeId") employeeId: string,
   @requestParam("month") month: string,
@@ -306,7 +337,7 @@ async getTargetPerformance(
 }
 
 //TODO: Get sales per customer
-@httpGet('/sales-per-customer/:employeeId/:month/:year')
+@httpGet('/sales-per-customer/:employeeId/:month/:year', guardEmployeeScopeIn(DepartmentEnum.SALE))
 async getSalesPerCustomer(
   @requestParam("employeeId") employeeId: string,
   @requestParam("month") month: string,
@@ -334,7 +365,7 @@ async getSalesPerCustomer(
 
 
 //TODO: Get sales per product
-@httpGet('/sales-per-product/:employeeId/:month/:year')
+@httpGet('/sales-per-product/:employeeId/:month/:year', guardEmployeeScopeIn(DepartmentEnum.SALE))
 async getSalesPerProduct(
   @requestParam("employeeId") employeeId: string,
   @requestParam("month") month: string,
@@ -362,7 +393,7 @@ async getSalesPerProduct(
 
   //TODO: Approve / Reject Sales Target
   // PATCH /sales-target/:id/approve
-  // Body: { action: 'approved' | 'rejected' }
+  // Body: { action: 'Approved' | 'Rejected', remark? } (remark required to reject)
   @httpPatch('/:id/approve')
   async approveTarget(
     @requestParam('id') id: string,
@@ -372,16 +403,16 @@ async getSalesPerProduct(
   ) {
     try {
       const managerId = res.locals.user.id;
-      const { action } = req.body;
+      const action = parseStatus(TARGET_DECISIONS, req.body.action);
 
-      if (!action || !['approved', 'rejected'].includes(action)) {
+      if (!action) {
         return res.status(400).json({
           status: 'error',
-          message: "action must be 'approved' or 'rejected'",
+          message: "action must be 'Approved' or 'Rejected'",
         });
       }
 
-      const result = await this.salesTargetService.approveTarget(id, managerId, action);
+      const result = await this.salesTargetService.approveTarget(id, managerId, action, req.body.remark);
 
       return res.status(200).json({
         status: 'success',
@@ -417,7 +448,7 @@ async getSalesPerProduct(
   }
 
   //TODO: Get sales summary statistics
-@httpGet('/sales-summary/:employeeId/:month/:year')
+@httpGet('/sales-summary/:employeeId/:month/:year', guardEmployeeScopeIn(DepartmentEnum.SALE))
 async getSalesSummary(
   @requestParam("employeeId") employeeId: string,
   @requestParam("month") month: string,

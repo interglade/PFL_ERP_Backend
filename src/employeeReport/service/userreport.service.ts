@@ -10,7 +10,7 @@ import { DitemRepository } from "../../deliveryChallans/deliverychllan/repositor
 import { GrnProductRepository } from "../../grn/repository/grnProduct.repository";
 import { Customer } from "../../customer/addcustomer/entity/customer.entity";
 import { Status } from "../../utils/status.enum";
-import { DocumentTypeEnum } from "../../approvalFlow/entity/docuemnt.entity";
+import { DocumentStatus, DocumentTypeEnum } from "../../approvalFlow/entity/docuemnt.entity";
 import logger from "../../utils/logger";
 
 
@@ -374,7 +374,13 @@ async getCountOfAllDocumentsByStatus(startDate?: Date, endDate?: Date): Promise<
       resultMap[row.type][row.status] = parseInt(row.count, 10);
     });
 
-    const STATUSES = ["hold", "approved", "rejected", "COMPLETE"];
+    // Response keys (field names) for the statuses counted
+    const STATUS_KEYS: Array<[string, DocumentStatus]> = [
+      ['hold', DocumentStatus.HOLD],
+      ['approved', DocumentStatus.APPROVED],
+      ['rejected', DocumentStatus.REJECT],
+      ['complete', DocumentStatus.COMPLETE],
+    ];
 
     // ✅ Convert type to camelCase
     const toCamelCase = (str: string): string => {
@@ -391,8 +397,8 @@ async getCountOfAllDocumentsByStatus(startDate?: Date, endDate?: Date): Promise<
       const statusCounts: Record<string, number> = {};
 
       // Use DB result if present, else default to 0
-      STATUSES.forEach(status => {
-        statusCounts[status] = resultMap[type]?.[status] || 0;
+      STATUS_KEYS.forEach(([key, status]) => {
+        statusCounts[key] = resultMap[type]?.[status] || 0;
       });
 
       const total = Object.values(statusCounts).reduce((sum, val) => sum + val, 0);

@@ -74,7 +74,7 @@ export class AccPurchaseService {
     const params: any[] = [sqlTs(range.start), sqlTs(range.end)];
     const where =
       `AND g."createdAt" >= $1::timestamp AND g."createdAt" < $2::timestamp` +
-      scopeWhere(filters, params, { branch: 'g.branch_id', company: 'g.company_id' });
+      scopeWhere(filters, params, { branch: 'g.purchaselocation_id', company: 'g.company_id' });
     const docs = `WITH docs AS (${completedGrnsSql(where)})`;
 
     const [totals, topFarmers, topVendors, vendorCategories, topProducts, voucherSpend, daily] =
@@ -195,7 +195,7 @@ export class AccPurchaseService {
     const params: any[] = [sqlTs(earliestStart(PERIODS, now))];
     const where =
       `AND g."createdAt" >= $1::timestamp` +
-      scopeWhere(filters, params, { branch: 'g.branch_id', company: 'g.company_id' });
+      scopeWhere(filters, params, { branch: 'g.purchaselocation_id', company: 'g.company_id' });
     const rows: any[] = await this.dataSource.query(
       `WITH docs AS (${completedGrnsSql(where)})
        SELECT to_char(ts, 'YYYY-MM-DD') AS day,

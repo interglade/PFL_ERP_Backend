@@ -1,3 +1,5 @@
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from "inversify";
 import {
   controller,
@@ -16,6 +18,15 @@ import { StockCorrectionService } from "../service/stockCorrection.service";
 import { TYPES } from "../../types";
 
 
+/**
+ * Stock Correction is retired (client decision 2026-10-16): it changed only the
+ * kg roll-up, bypassing batch stock. Corrections are made with Stock Adjustment
+ * (/stock/adjustments, batch-level, Operation approval like the Dump Register).
+ * Creating and approving are switched off (410); history stays readable and
+ * leftover pending corrections can still be rejected by an admin (no stock effect).
+ */
+const RETIRED = 'Stock Correction is retired. Use Stock Adjustment (Inventory → Stock Adjustments) to correct stock by batch.';
+
 @controller("/stock-correction", deserializeUser, requireUser)
 export class StockCorrectionController {
   constructor(
@@ -30,14 +41,7 @@ export class StockCorrectionController {
     @response() res: Response,
     @next() next: NextFunction,
   ) {
-    try {
-      const userId = res.locals.user.id;
-      const result = await this.stockCorrectionService.submitCorrection(req.body, userId);
-      res.status(201).json({ status: "success", data: result });
-    } catch (error) {
-      if (error instanceof Error) return next(new AppError(400, error.message));
-      next(error);
-    }
+    return next(new AppError(410, RETIRED));
   }
 
   // GET /stock-correction/pending — all pending corrections
@@ -97,18 +101,12 @@ export class StockCorrectionController {
     @response() res: Response,
     @next() next: NextFunction,
   ) {
-    try {
-      const approverId = res.locals.user.id;
-      const result = await this.stockCorrectionService.approveCorrection(id, approverId, req.body);
-      res.status(200).json({ status: "success", message: "Correction approved", data: result });
-    } catch (error) {
-      if (error instanceof Error) return next(new AppError(400, error.message));
-      next(error);
-    }
+    return next(new AppError(410, RETIRED));
   }
 
   // PATCH /stock-correction/:id/reject
-  @httpPatch("/:id/reject")
+  // Admin only: clears leftover pending corrections (no stock effect)
+  @httpPatch("/:id/reject", requireRole(Role.ADMIN))
   public async reject(
     @requestParam("id") id: string,
     @request() req: Request,

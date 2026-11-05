@@ -1,3 +1,5 @@
+import { Role } from '../../../employee/entity/user.entity';
+import { requireRole } from '../../../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -285,7 +287,7 @@ export class ProductController {
     }
   }
 
-  @httpPost('/', uploadSingle.single('image'))
+  @httpPost('/', requireRole(Role.ADMIN), uploadSingle.single('image'))
   public async create(
     @request() req: Request,
     @response() res: Response,
@@ -329,7 +331,7 @@ export class ProductController {
   }
 
   
-  @httpPut('/:id', uploadSingle.single('image'), captureUser)
+  @httpPut('/:id', requireRole(Role.ADMIN), uploadSingle.single('image'), captureUser)
   public async update(
     @requestParam('id') id: string,
     @requestBody() productData: CreateProductDto,
@@ -385,7 +387,7 @@ export class ProductController {
       next(err);
     }
   }
-   @httpDelete("/delete/multiple")
+   @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
 public async softDeleteMultipleProducts(
   @request() req: Request,
   @response() res: Response,
@@ -435,7 +437,7 @@ public async softDeleteMultipleProducts(
   }
 }
 
-  @httpPost("/upload-product", uploadSingle.single('file'))
+  @httpPost("/upload-product", requireRole(Role.ADMIN), uploadSingle.single('file'))
   public async uploadProductsExcel(
     @request() req: Request,
     @response() res: Response,
@@ -469,11 +471,22 @@ public async softDeleteMultipleProducts(
       } catch (notifError) {
       }
       
+      // The report holds two kinds of note: master links left empty ("Saved")
+      // and attribute values the import added.
+      const linkIssueRows = new Set(
+        summary.draftIssues.filter((issue) => issue.outcome === 'Saved').map((issue) => issue.row),
+      ).size;
+      const newValues = summary.draftIssues.filter((issue) => issue.outcome !== 'Saved').length;
+
       ControllerLogger.logSuccess('Product Excel uploaded', 'bulk', req, res);
       res.status(200).json({
         status: 'success',
         message:
           `${summary.created} product(s) imported` +
+          (linkIssueRows
+            ? ` (${linkIssueRows} with a classification, category or subcategory left empty)`
+            : '') +
+          (newValues ? `, ${newValues} new attribute value(s) added - check them in the report` : '') +
           (summary.skipped.length ? `, ${summary.skipped.length} skipped` : '') +
           (summary.failed.length ? `, ${summary.failed.length} failed` : ''),
         data: summary,
@@ -483,7 +496,7 @@ public async softDeleteMultipleProducts(
       next(err);
     }
   }
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', requireRole(Role.ADMIN))
   public async exportProductsExcel(
     @request() req: Request,
     @response() res: Response,
@@ -533,7 +546,7 @@ public async softDeleteMultipleProducts(
     }
   }
 
-  @httpGet('/download/template')
+  @httpGet('/download/template', requireRole(Role.ADMIN))
   public async downloadExcelTemplate(
     @request() req: Request,
     @response() res: Response,
@@ -574,7 +587,7 @@ console.log("in controller");
     }
   }
 
-  @httpDelete('/:id')
+  @httpDelete('/:id', requireRole(Role.SUPER_ADMIN))
   public async delete(
     @requestParam('id') id: string,
     @request() req: Request,

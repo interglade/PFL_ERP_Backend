@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -38,7 +40,7 @@ import { NotificationService } from '../../notification/service/notification.ser
 import { ActivityAction, ActivityModule } from '../../employeeActivity/entity/userActivityLog.entity';
 
 
-@controller('/eodStock', deserializeUser, requireUser)
+@controller('/eodStock', deserializeUser, requireUser, requireRole(Role.ADMIN))
 export class EodStockController {
   constructor(
     @inject(TYPES.EodStockService)

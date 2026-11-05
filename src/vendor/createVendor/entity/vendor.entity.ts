@@ -42,11 +42,6 @@ export enum VendorClassification {
 //   MARKETING_PRODUCT = 'marketing product',
 //   STAFF_WELFARE = 'staff welfare',
 // }
-export enum ApprovalStatus1 {
-  PENDING = 'pending',
-  APPROVED = 'approved',
-  REJECTED = 'rejected',
-}
 
 @Entity('vendor')
 export class Vendor extends Model {

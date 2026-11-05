@@ -1,9 +1,15 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 import { TYPES } from '../../types';
 import { InwardRepository } from '../repository/inwardRegister.repository';
 import { InwardRegister } from '../entity/inwardRegister.entity';
 import AppError from '../../utils/appError';
+import { Source } from '../../utils/status.enum';
+import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
+import { attachToReceivingSource, refreshProcessingTransaction } from '../../receiving/receiving.transaction';
+import { ResolvedSource } from '../../receiving/receiving.types';
+import { priceLineFromSource, round2 } from '../../receiving/receiving.helpers';
 
 import { LessThanOrEqual, DataSource, SelectQueryBuilder, In, IsNull, ILike, DeepPartial } from 'typeorm';
 
@@ -82,10 +88,71 @@ export class InwardRegisterService {
         private readonly cacheService: CacheService,
         @inject(TYPES.ApprovalFlowService)
         private readonly approvalFlowService: ApprovalFlowService,
+        @inject(TYPES.ReceivingGuardService)
+        private readonly receivingGuardService: ReceivingGuardService,
   ) {}
 
   private readonly CACHE_PREFIX = 'iwr';
+
+  /** Company, receiving location, from-location and party default to the source when the form left them out. */
+  private applySourceDefaults(
+    data: {
+      companyName?: string | null;
+      location?: string | null;
+      fromLocation?: string | null;
+      selectedVendor?: { id: string } | null;
+      selectedFarmer?: { id: string } | null;
+      customerName?: string | null;
+      source?: Source;
+    },
+    resolved: ResolvedSource,
+  ): void {
+    // The company and the batch belong to the source and cannot be changed downstream.
+    if (resolved.companyId) data.companyName = resolved.companyId;
+    if (resolved.batchNo) (data as { batchNo?: string | null }).batchNo = resolved.batchNo;
+    if (!data.location && resolved.locationId) data.location = resolved.locationId;
+    if (!data.fromLocation && resolved.fromLocationId) data.fromLocation = resolved.fromLocationId;
+    if (!data.selectedVendor && !data.selectedFarmer && !data.customerName && resolved.partyId) {
+      if (resolved.partyType === 'vendor') {
+        data.selectedVendor = { id: resolved.partyId };
+        if (!data.source) data.source = Source.VENDOR;
+      } else if (resolved.partyType === 'farmer') {
+        data.selectedFarmer = { id: resolved.partyId };
+        if (!data.source) data.source = Source.FARMER;
+      } else if (resolved.partyType === 'customer') {
+        data.customerName = resolved.partyId;
+      }
+    }
+  }
   private readonly CACHE_TTL = 180;
+
+  /**
+   * Unit and unit price come from the source line; the amount is recomputed as
+   * quantity (in that unit) × unit price, and the header cost follows.
+   */
+  private priceLinesFromSource(
+    data: { inwardProducts?: Array<{ productName?: string | null; variant?: string | null; uom?: string | null; batchNo?: string | null; quantity?: number | null; unitPrice?: number | null; amount?: number | null }> | null; inwardCost?: number | null },
+    resolved: ResolvedSource,
+  ): void {
+    if (!Array.isArray(data.inwardProducts)) return;
+    const errors: string[] = [];
+    for (const item of data.inwardProducts) {
+      const { line, error } = priceLineFromSource(
+        resolved.products,
+        { productId: item.productName, variantId: item.variant ?? null, uomId: item.uom, batchNo: item.batchNo ?? null, unitPrice: item.unitPrice, quantity: item.quantity },
+        resolved.sourceNo,
+      );
+      if (error) errors.push(error);
+      item.uom = line.uomId ?? item.uom;
+      // A transfer line carries the batch the Transfer DC took (C5); others use the header batch.
+      item.batchNo = line.batchNo ?? null;
+      item.unitPrice = line.unitPrice;
+      item.quantity = line.quantity;
+      item.amount = line.amount;
+    }
+    if (errors.length > 0) throw new AppError(400, errors.join('; '));
+    data.inwardCost = round2(data.inwardProducts.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
+  }
 
   private async invalidateCache(id?: string): Promise<void> {
     const tasks: Promise<any>[] = [
@@ -109,21 +176,10 @@ export class InwardRegisterService {
 
  
 
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateSerialNo(): Promise<string> {
-      const now = new Date();
-      const yyyy = now.getFullYear().toString();
-      const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-      const dd = now.getDate().toString().padStart(2, '0');
-      const datePrefix = `IWD${yyyy}${mm}${dd}`;
-
-      // Count only records for today's prefix to get per-day sequence
-      const count = await this.inwardRegisterRepo.count({
-        where: { inwardNo: ILike(`${datePrefix}%`) },
-      });
-
-      const serialNo = `${datePrefix}${(count + 1).toString().padStart(4, '0')}`;
-      return serialNo;
-    }
+    return nextDocumentNumber(this.inwardRegisterRepo.manager, SERIES.inward, `IWD${compactDate()}`, 4);
+  }
 
 
     
@@ -167,6 +223,29 @@ public async createInwardRegister(data: CreateInwardRegisterInput): Promise<Crea
     // const productIds = variants.map(v => v.product?.id).filter(Boolean);
 const serialNo = await this.generateSerialNo();
     //  data.inwardNo = serialNo;
+
+    // Receiving links R1–R6: the Inward points at one COMPLETE source, lists
+    // every product of it once and stays within the unaccounted kg. The source
+    // row is locked inside this transaction so concurrent creates serialise.
+    const sourceRef = ReceivingGuardService.pickSourceRef(
+      { grnId: data.grnNo, deliveryChallanId: data.deliveryChallanNo, rbcId: data.rbcNo },
+      ReceivingGuardService.sourceTypeFromDocKind(data.inwardType),
+    );
+    const resolvedSource = await this.receivingGuardService.resolveAndAssert({
+      docType: 'inward',
+      sourceType: sourceRef?.sourceType,
+      sourceId: sourceRef?.sourceId,
+      lines: (data.inwardProducts ?? []).map((item) => ({
+        productId: item.productName,
+        variantId: item.variant ?? null,
+        uomId: item.uom ?? null,
+        batchNo: item.batchNo ?? null,
+        kg: item.netWeight,
+      })),
+      manager: queryRunner.manager,
+    });
+    this.applySourceDefaults(data, resolvedSource);
+    this.priceLinesFromSource(data, resolvedSource);
 
       const {
   requestedBy,
@@ -244,6 +323,7 @@ const serialNo = await this.generateSerialNo();
     amount: item.amount,
     netWeight: item.netWeight,
     grossWeight: item.grossWeight,
+    batchNo: item.batchNo ?? null,
   })),
 };
     // 4. Create Inward Register
@@ -273,6 +353,15 @@ const serialNo = await this.generateSerialNo();
       lastActionBy: { id: data.requestedBy },
       document_type_id: savedInwardId
     });
+    // The Inward joins its source's transaction (docs/transaction-tracking-plan.md §9.4).
+    const txnNo = await attachToReceivingSource(queryRunner.manager, {
+      sourceType: resolvedSource.sourceType,
+      sourceId: resolvedSource.sourceId,
+      docType: 'inward',
+      docId: savedInwardId,
+      docNo: serialNo,
+    });
+    if (!Array.isArray(savedInward)) (savedInward as InwardRegister).txnNo = txnNo;
 
     // 6. Inventory is NOT touched here.
     //    Stock is added to inventory_stock only when this Inward Register's
@@ -355,6 +444,7 @@ public async getAllRecycleBinInwardRegisters(queryOptions: PaginationOptions, us
         createdTime: formatDateTime(doc.createdAt).createdTime,
         // From relatedData
       id: rd.id || null,
+      txnNo: rd.txnNo ?? null,
       batchNo: rd.batchNo || null,
       inwardType: rd.inwardType || null,
       remarks: rd.remarks || null,
@@ -521,14 +611,14 @@ async getInwardidforupdate(id: string, userId: string): Promise<InwardRegisterUp
       .leftJoin('inwardProducts.variant', 'variant')
       .leftJoin('ir.customerName','customer')
       .select([
-        'ir.id', 'ir.inwardType', 'ir.batchNo', 'ir.source', 'ir.date',
+        'ir.id', 'ir.inwardType', 'ir.batchNo', 'ir.txnNo', 'ir.source', 'ir.date',
         'ir.totalWeightInKg', 'ir.incomingGrossQty', 'ir.incomingNetQty',
         'ir.inwardGrossQty', 'ir.inwardNetQty', 'ir.inwardCost', 'ir.remarks', 'ir.createdAt',
         'grnNo.id', 'location.id', 'fromLocation.id', 'companyName.id',
         'deliveryChallanNo.id', 'rbcNo.id',
         'selectedVendor.id', 'selectedFarmer.id',
         'inwardBy.id', 'purchasedBy.id',
-        'inwardProducts.id', 'inwardProducts.grossWeight', 'inwardProducts.netWeight',
+        'inwardProducts.id', 'inwardProducts.grossWeight', 'inwardProducts.netWeight', 'inwardProducts.batchNo',
         'inwardProducts.weight', 'inwardProducts.packingMaterialWeight',
         'inwardProducts.quantity', 'inwardProducts.unitPrice', 'inwardProducts.amount',
         'productName.id','productName.name','productName.productCode', 'uom.id', 'variant.id',
@@ -553,6 +643,7 @@ async getInwardidforupdate(id: string, userId: string): Promise<InwardRegisterUp
       createdDate,
       createdTime,
       inwardType: inwardRegister.inwardType,
+      txnNo: inwardRegister.txnNo ?? null,
       companyName: inwardRegister.companyName?.id ?? null,
       location: inwardRegister.location?.id ?? null,
       fromLocation: inwardRegister.fromLocation?.id ?? null,
@@ -590,6 +681,7 @@ async getInwardidforupdate(id: string, userId: string): Promise<InwardRegisterUp
           quantity: p.quantity,
           unitPrice: p.unitPrice,
           amount: p.amount,
+          batchNo: p.batchNo ?? null,
         }),
       ),
     };
@@ -607,6 +699,7 @@ console.log(transformedInwardRegister)
   ): Promise<InwardRegister> {
     const inwardRegister = await this.inwardRegisterRepo.findOne({
       where: { id },
+      relations: ['grnNo', 'deliveryChallanNo', 'rbcNo', 'inwardProducts', 'inwardProducts.productName', 'inwardProducts.variant', 'inwardProducts.uom'],
     });
 
     if (!inwardRegister) {
@@ -615,11 +708,43 @@ console.log(transformedInwardRegister)
  data.date= normalizeDateFormat(data.date);
     const oldData = { ...inwardRegister };
 
-    Object.assign(inwardRegister, data);
+    // Receiving links: the edited Inward must still match its source exactly
+    // (lines not sent are validated as they are stored).
+    const updatedInwardRegister = await this.dataSource.transaction(async (manager) => {
+      const sourceRef = ReceivingGuardService.pickSourceRef(
+        {
+          grnId: data.grnNo !== undefined ? data.grnNo : inwardRegister.grnNo?.id,
+          deliveryChallanId: data.deliveryChallanNo !== undefined ? data.deliveryChallanNo : inwardRegister.deliveryChallanNo?.id,
+          rbcId: data.rbcNo !== undefined ? data.rbcNo : inwardRegister.rbcNo?.id,
+        },
+        ReceivingGuardService.sourceTypeFromDocKind(data.inwardType ?? inwardRegister.inwardType),
+      );
+      const lines = data.inwardProducts
+        ? data.inwardProducts.map((item) => ({ productId: item.productName, variantId: item.variant ?? null, uomId: item.uom ?? null, batchNo: item.batchNo ?? null, kg: item.netWeight }))
+        : (inwardRegister.inwardProducts ?? []).map((item) => ({ productId: item.productName?.id, variantId: item.variant?.id ?? null, uomId: item.uom?.id ?? null, batchNo: item.batchNo ?? null, kg: item.netWeight }));
+      const resolvedSource = await this.receivingGuardService.resolveAndAssert({
+        docType: 'inward',
+        sourceType: sourceRef?.sourceType,
+        sourceId: sourceRef?.sourceId,
+        lines,
+        excludeDocId: id,
+        manager,
+      });
+      this.applySourceDefaults(data, resolvedSource);
+      this.priceLinesFromSource(data, resolvedSource);
 
-    const updatedInwardRegister = await this.inwardRegisterRepo.save(
-      inwardRegister,
-    );
+      Object.assign(inwardRegister, data);
+      const saved = await manager.save(inwardRegister);
+      // Re-attach: moves the Inward when its source changed, else refreshes the transaction.
+      saved.txnNo = await attachToReceivingSource(manager, {
+        sourceType: resolvedSource.sourceType,
+        sourceId: resolvedSource.sourceId,
+        docType: 'inward',
+        docId: id,
+        docNo: saved.inwardNo ?? null,
+      });
+      return saved;
+    });
 
     await this.auditLogService.logChange(
       'InwardRegister',
@@ -712,6 +837,7 @@ console.log(transformedInwardRegister)
     inwardRegister.deletionScheduledAt = sixMonthsFromNow;
     console.log('in delete service', inwardRegister.deletionScheduledAt);
     await this.inwardRegisterRepo.save(inwardRegister);
+    await refreshProcessingTransaction(this.inwardRegisterRepo.manager, 'inward', id);
     console.log(`InwardRegister with ID ${id} marked for deletion.`);
     await this.invalidateCache(id);
     return {No:inwardRegister.inwardNo};
@@ -890,7 +1016,7 @@ public async getAllInwardRegisters(queryOptions: PaginationOptions, userId: stri
         .leftJoin('ir.purchasedBy', 'purchasedBy')
         .leftJoin('ir.inwardBy', 'inwardBy')
         .select([
-          'ir.id', 'ir.batchNo', 'ir.inwardType', 'ir.inwardNo', 'ir.source',
+          'ir.id', 'ir.batchNo', 'ir.inwardType', 'ir.inwardNo', 'ir.txnNo', 'ir.source',
           'ir.inwardNetQty', 'ir.inwardGrossQty', 'ir.incomingNetQty', 'ir.incomingGrossQty',
           'ir.inwardCost', 'ir.totalWeightInKg', 'ir.remarks', 'ir.date',
           'grnNo.grnNo', 'deliveryChallanNo.challanNo', 'rbcNo.rbcNo',
@@ -918,6 +1044,7 @@ public async getAllInwardRegisters(queryOptions: PaginationOptions, userId: stri
           createdDate,
           createdTime,
           id: rd?.id ?? null,
+          txnNo: rd?.txnNo ?? null,
           batchNo: rd?.batchNo ?? null,
           inwardType: rd?.inwardType ?? null,
           inwardNo: rd?.inwardNo ?? null,
@@ -1024,7 +1151,7 @@ public async getInwardregisterByIdForView(docid: string, userId: string, isAdmin
       .leftJoin('inwardProducts.uom', 'uom')
       .leftJoin('inwardProducts.variant', 'variant')
       .select([
-        'ir.id', 'ir.inwardType', 'ir.inwardNo', 'ir.batchNo', 'ir.remarks', 'ir.source',
+        'ir.id', 'ir.inwardType', 'ir.inwardNo', 'ir.txnNo', 'ir.batchNo', 'ir.remarks', 'ir.source',
         'ir.incomingGrossQty', 'ir.incomingNetQty', 'ir.inwardGrossQty', 'ir.inwardNetQty',
         'ir.inwardCost', 'ir.totalWeightInKg', 'ir.date', 'ir.createdAt',
         'grnNo.grnNo', 'deliveryChallanNo.challanNo', 'rbcNo.rbcNo',
@@ -1044,7 +1171,7 @@ public async getInwardregisterByIdForView(docid: string, userId: string, isAdmin
         'residensialAddress.location', 'residensialAddress.city', 'residensialAddress.state', 'residensialAddress.pincode',
         'purchasedBy.firstName', 'purchasedBy.lastName',
         'inwardBy.firstName', 'inwardBy.lastName',
-        'inwardProducts.id', 'inwardProducts.packingMaterialWeight', 'inwardProducts.quantity',
+        'inwardProducts.id', 'inwardProducts.packingMaterialWeight', 'inwardProducts.quantity', 'inwardProducts.batchNo',
         'inwardProducts.weight', 'inwardProducts.unitPrice', 'inwardProducts.amount',
         'inwardProducts.netWeight', 'inwardProducts.grossWeight',
         'productName.name', 'uom.unit', 'variant.variantName',
@@ -1107,6 +1234,7 @@ public async getInwardregisterByIdForView(docid: string, userId: string, isAdmin
       id: inwardRegister.id,
       inwardType: inwardRegister.inwardType,
       inwardNo: inwardRegister.inwardNo,
+      txnNo: inwardRegister.txnNo ?? null,
       batchNo: inwardRegister.batchNo,
       remarks: inwardRegister.remarks,
       source: inwardRegister.source,
@@ -1178,6 +1306,7 @@ public async deleteMultipleInwardRegister(ids: string[]): Promise<BulkDeleteResu
 
       await this.inwardRegisterRepo.softDelete(inwardRegister.id);
       await this.inwardRegisterRepo.update(inwardRegister.id, { isDeleted: true } as any);
+      await refreshProcessingTransaction(this.inwardRegisterRepo.manager, 'inward', inwardRegister.id);
        success.push({ id, No: inwardRegister.inwardNo });
     }
     const message = `Deletion completed. Success: ${success.length}, Failed: ${failed.length}`;

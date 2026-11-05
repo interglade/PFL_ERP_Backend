@@ -1,3 +1,4 @@
+import { canActOnDocument } from '../documentAccess';
 import {
   controller,
   httpGet,
@@ -11,6 +12,9 @@ import {
 } from 'inversify-express-utils';
 import { deserializeUser, requireUser } from '../../middleware/deserializeUser';
 import { inject } from 'inversify';
+import { DataSource } from 'typeorm';
+import { NotificationService } from '../../notification/service/notification.service';
+import { documentStatusOf, notifyApprovalTransition } from '../../notification/flowNotifications';
 import { TYPES } from '../../types';
 
 import { NextFunction, Request, Response } from 'express';
@@ -23,7 +27,7 @@ import { Documentb, DocumentStatus, DocumentTypeEnum } from '../entity/docuemnt.
 import { buildQuery, PaginationOptions } from '../../utils/pagination';
 import { ApprovalFlowRepository } from '../repository/approvalFlow.repository';
 
-import { ApproverStatus } from '../entity/approvalname.entity';
+import { ApproverStatus, parseApproverDecision } from '../entity/approvalname.entity';
 import { DocumentbService } from '../service/documentb.service';
 import { DocumentbRepository } from '../repository/documentb.repository';
 import { DocDoubleApproverService } from '../service/docDoubleApprover.service';
@@ -48,12 +52,30 @@ export class DocumentbController {
     @inject(TYPES.DocDoubleApproverService)
     private docDoubleApproveService: DocDoubleApproverService,
     @inject(TYPES.DocSingalApproverService)
-    private docSingleApproveService: DocSingalApproverService
+    private docSingleApproveService: DocSingalApproverService,
+    @inject(TYPES.DataSource) private readonly dataSource: DataSource,
+    @inject(TYPES.NotificationService) private readonly notificationService: NotificationService,
   ) { }
+
+  /** D-9: after an approval action, tell the people of the documents that can now move on. */
+  private async notifyTransition(documentId: string, before: string | null, userId: string): Promise<void> {
+    await notifyApprovalTransition(this.dataSource, this.notificationService, documentId, before, userId);
+  }
 
 
   
 
+
+  /** Whether the signed-in user may approve / reject this document now (shows the buttons). */
+  @httpGet('/can-act/:documentId')
+  async canAct(req: Request, res: Response): Promise<void> {
+    try {
+      const canAct = await canActOnDocument(req.params.documentId, res.locals.user.id);
+      res.status(200).json({ status: 'success', data: { canAct } });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || 'Internal server error' });
+    }
+  }
 
   @httpPatch('/update/:documentId')
   async approveDocument(req: Request, res: Response): Promise<void> {
@@ -62,26 +84,28 @@ export class DocumentbController {
       const userId = res.locals.user.id; // Auth middleware should attach the user
       
       const { documentId } = req.params;
-      const { status, reason } = req.body;
-      
-
-      // ✅ Validate status
-      if (!['approved', 'reject','query'].includes(status)) {
-        res.status(400).json({ message: 'Invalid status. Must be approved or reject.' });
+      const { reason } = req.body;
+      const status = parseApproverDecision(req.body.status);
+      if (!status) {
+        res.status(400).json({ message: 'Invalid status. Must be Approved or Rejected.' });
         return;
       }
 
+      const before = await documentStatusOf(this.dataSource, documentId);
       await this.docuemntbService.approveDocumentStep(
         documentId,
         userId,
-        status as ApproverStatus,
+        status,
         reason,
       );
+      await this.notifyTransition(documentId, before, userId);
 
       res.status(200).json({ message: `Document ${status} successfully` });
     } catch (error: any) {
       console.error('Error approving document:', error.message);
-      res.status(500).json({ message: error.message || 'Internal server error' });
+      // Deliberate refusals (wrong endpoint, creator, closed document) keep their 4xx status.
+      const code = Number(error?.statusCode);
+      res.status(code >= 400 && code < 500 ? code : 500).json({ message: error.message || 'Internal server error' });
     }
   }
 
@@ -93,26 +117,28 @@ export class DocumentbController {
       const userId = res.locals.user.id; // Auth middleware should attach the user
       
       const { documentId } = req.params;
-      const { status, reason } = req.body;
-      
-
-      // ✅ Validate status
-      if (!['approved', 'reject','query'].includes(status)) {
-        res.status(400).json({ message: 'Invalid status. Must be approved or reject.' });
+      const { reason } = req.body;
+      const status = parseApproverDecision(req.body.status);
+      if (!status) {
+        res.status(400).json({ message: 'Invalid status. Must be Approved or Rejected.' });
         return;
       }
 
+      const before = await documentStatusOf(this.dataSource, documentId);
       await this.docDoubleApproveService.approveDocumentStepForDoubleLevel(
         documentId,
         userId,
-        status as ApproverStatus,
+        status,
         reason,
       );
+      await this.notifyTransition(documentId, before, userId);
 
       res.status(200).json({ message: `Document ${status} successfully` });
     } catch (error: any) {
       console.error('Error approving document:', error.message);
-      res.status(500).json({ message: error.message || 'Internal server error' });
+      // Deliberate refusals (wrong endpoint, creator, closed document) keep their 4xx status.
+      const code = Number(error?.statusCode);
+      res.status(code >= 400 && code < 500 ? code : 500).json({ message: error.message || 'Internal server error' });
     }
   }
 
@@ -122,25 +148,28 @@ export class DocumentbController {
       const userId = res.locals.user.id; // Auth middleware should attach the user
       
       const { documentId } = req.params;
-      const { status, reason } = req.body;
-
-      // ✅ Validate status
-      if (!['approved', 'reject','query'].includes(status)) {
-        res.status(400).json({ message: 'Invalid status. Must be approved or reject.' });
+      const { reason } = req.body;
+      const status = parseApproverDecision(req.body.status);
+      if (!status) {
+        res.status(400).json({ message: 'Invalid status. Must be Approved or Rejected.' });
         return;
       }
 
+      const before = await documentStatusOf(this.dataSource, documentId);
       await this.docSingleApproveService.approveDocumentStepForSingleLevel(
         documentId,
         userId,
-        status as ApproverStatus,
+        status,
         reason,
       );
+      await this.notifyTransition(documentId, before, userId);
 
       res.status(200).json({ message: `Document ${status} successfully` });
     } catch (error: any) {
       console.error('Error approving document:', error.message);
-      res.status(500).json({ message: error.message || 'Internal server error' });
+      // Deliberate refusals (e.g. a dispatch whose source is not approved yet) keep their 4xx status.
+      const code = Number(error?.statusCode);
+      res.status(code >= 400 && code < 500 ? code : 500).json({ message: error.message || 'Internal server error' });
     }
   }
 

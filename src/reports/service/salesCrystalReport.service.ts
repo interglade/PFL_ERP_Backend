@@ -1,4 +1,5 @@
 import { injectable, inject } from 'inversify';
+import { requireStatus } from '../../utils/status.enum';
 import { Repository, Between, In } from 'typeorm';
 
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
@@ -7,6 +8,7 @@ import { CustomerDeliveryChallan } from '../../deliveryChallans/customerDelivery
 import { Item } from '../../deliveryChallans/deliverychllan/entity/dItem.entity';
 import { PostReturnByCustomer } from '../../returnByCustomer/entity/postReturnByCustomer.entity';
 import { ReturnedProducts } from '../../returnByCustomer/entity/returnProduct.entity';
+import { DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 
 export interface SalesReportFilters {
     startDate?: Date;
@@ -19,8 +21,6 @@ export interface SalesReportFilters {
     companyId?: string;
     fromLocationId?: string;
     toLocationId?: string;
-    driverName?: string;
-    vehicleNo?: string;
     approvalStatus?: string;
     challanNo?: string;
     grnNo?: string;
@@ -63,10 +63,6 @@ export interface SalesDetailedReport {
     deliveryAddress: string;
     poNumber: string;
     grnNo: string;
-    driverName: string;
-    driverContact: string;
-    vehicleNo: string;
-    licenseNo: string;
     totalProductAmount: number;
     totalPackagingAmount: number;
     netProductWeight: number;
@@ -154,14 +150,6 @@ export interface SalesSummary {
         totalAmount: number;
         totalNetWeight: number;
         dcCount: number;
-    }>;
-
-    driverPerformance: Array<{
-        driverName: string;
-        totalDeliveries: number;
-        totalAmount: number;
-        totalNetWeight: number;
-        averageDeliveryValue: number;
     }>;
 }
 
@@ -302,22 +290,12 @@ export class SalesCrystalReportService {
             });
         }
 
-        if (filters.driverName) {
-            queryBuilder.andWhere('dc.driverName LIKE :driverName', {
-                driverName: `%${filters.driverName}%`,
-            });
-        }
-
-        if (filters.vehicleNo) {
-            queryBuilder.andWhere('dc.vehicleNo = :vehicleNo', {
-                vehicleNo: filters.vehicleNo,
-            });
-        }
-
         if (filters.approvalStatus) {
-            queryBuilder.andWhere('dc.approvalStatus = :approvalStatus', {
-                approvalStatus: filters.approvalStatus,
-            });
+            // The DC's approval lives in documents.status (dc.approvalStatus is never updated)
+            queryBuilder.andWhere(
+                `EXISTS (SELECT 1 FROM documents sr_d WHERE sr_d.document_type_id = dc.id::text AND sr_d."isDeleted" = false AND sr_d.status = :approvalStatus)`,
+                { approvalStatus: requireStatus(DocumentStatus, filters.approvalStatus, 'approvalStatus') },
+            );
         }
 
         if (filters.challanNo) {
@@ -439,10 +417,6 @@ export class SalesCrystalReportService {
                 `${dc.deliveryAddress?.address1 || ''}, ${dc.deliveryAddress?.location || ''}, ${dc.deliveryAddress?.state || ''} ${dc.deliveryAddress?.pincode || ''}`.trim() : '',
             poNumber: dc.poNumber || '',
             grnNo: dc.grnNo?.grnNo || '',
-            driverName: dc.driverName || '',
-            driverContact: dc.contactNo || '',
-            vehicleNo: dc.vehicleNo || '',
-            licenseNo: dc.licenseNo || '',
             totalProductAmount: Number(dc.totalProductAmount) || 0,
             totalPackagingAmount: Number(dc.totalPackagingMaterialAmount) || 0,
             netProductWeight: Number(dc.netProductWeight) || 0,
@@ -542,9 +516,6 @@ export class SalesCrystalReportService {
         // Location-wise breakdown
         const locationWiseBreakdown = await this.getLocationBreakdown(filters);
 
-        // Driver performance
-        const driverPerformance = await this.getDriverPerformance(filters);
-
         return {
             totalDeliveryChallans,
             totalSalesAmount,
@@ -559,7 +530,6 @@ export class SalesCrystalReportService {
             yearlyTrends,
             customTrends,
             locationWiseBreakdown,
-            driverPerformance,
         };
     }
 
@@ -820,40 +790,6 @@ export class SalesCrystalReportService {
             totalAmount: Number(r.totalAmount) || 0,
             totalNetWeight: Number(r.totalNetWeight) || 0,
             dcCount: Number(r.dcCount) || 0,
-        }));
-    }
-
-    /**
-     * Get driver performance
-     */
-    private async getDriverPerformance(filters: SalesReportFilters, limit: number = 10) {
-        const queryBuilder = this.dcRepository
-            .createQueryBuilder('dc')
-            .select('dc.driverName', 'driverName')
-            .addSelect('COUNT(dc.id)', 'totalDeliveries')
-            .addSelect('SUM(dc.totalProductAmount)', 'totalAmount')
-            .addSelect('SUM(dc.netProductWeight)', 'totalNetWeight')
-            .addSelect('AVG(dc.totalProductAmount)', 'averageDeliveryValue')
-            .where('dc.driverName IS NOT NULL')
-            .groupBy('dc.driverName')
-            .orderBy('SUM(dc.totalProductAmount)', 'DESC')
-            .limit(limit);
-
-        if (filters.startDate && filters.endDate) {
-            queryBuilder.andWhere('dc.createdAt BETWEEN :startDate AND :endDate', {
-                startDate: filters.startDate,
-                endDate: filters.endDate,
-            });
-        }
-
-        const results = await queryBuilder.getRawMany();
-
-        return results.map((r) => ({
-            driverName: r.driverName || 'Unknown',
-            totalDeliveries: Number(r.totalDeliveries) || 0,
-            totalAmount: Number(r.totalAmount) || 0,
-            totalNetWeight: Number(r.totalNetWeight) || 0,
-            averageDeliveryValue: Number(r.averageDeliveryValue) || 0,
         }));
     }
 

@@ -1,8 +1,11 @@
 import { inject, injectable } from 'inversify';
+import { requireStatus } from '../../utils/status.enum';
 
 import { In } from 'typeorm';
 
 import { DataSource } from 'typeorm';
+import { grnPaidAndBalance } from '../../grn/grnPayment';
+import { DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 
 // ─── Filter Interface ────────────────────────────────────────────────────────
 
@@ -21,12 +24,10 @@ export interface IGrnReportFilters {
   source?: string;
   billNo?: string;
   grnNo?: string;
-  requestingDepartment?: string;
+  batchNo?: string;
   purchaseInstructionsBy?: string;
   purchaseBy?: string;
-  vehicleNo?: string;
-  receivedThrough?: string;
-  deliveryReceivingPerson?: string;
+  receivingPerson?: string;
   securityPerson?: string;
   rmn?: string;
   product?: string[];
@@ -67,7 +68,6 @@ export class GrnReportService {
       .leftJoinAndSelect('grnProducts.uom', 'uom')
       .leftJoinAndSelect('grn.purchaseForSalesLocation', 'purchaseForSalesLocation')
       .leftJoinAndSelect('grn.purchaseLocation', 'purchaseLocation')
-      .leftJoinAndSelect('grn.purchaseBy', 'purchaseBy')
       .leftJoinAndSelect('grn.purchaseInstructionsBy', 'purchaseInstructionsBy')
       .leftJoinAndSelect('grn.paymentInfo', 'paymentInfo')
       .leftJoinAndSelect('grn.createdBy', 'createdBy')
@@ -185,10 +185,8 @@ export class GrnReportService {
       queryBuilder.andWhere('grn.grnNo ILIKE :grnNo', { grnNo: `%${filters.grnNo}%` });
     }
 
-    if (filters.requestingDepartment) {
-      queryBuilder.andWhere('grn.requestingDepartment = :requestingDepartment', {
-        requestingDepartment: filters.requestingDepartment,
-      });
+    if (filters.batchNo) {
+      queryBuilder.andWhere('grn.batchNo ILIKE :batchNo', { batchNo: `%${filters.batchNo}%` });
     }
 
     if (filters.purchaseInstructionsBy) {
@@ -197,23 +195,14 @@ export class GrnReportService {
       });
     }
 
+    // "Purchase By" is the free-text name typed on the GRN (`purchasedBy`).
     if (filters.purchaseBy) {
-      queryBuilder.andWhere('grn.purchaseBy = :purchaseBy', { purchaseBy: filters.purchaseBy });
+      queryBuilder.andWhere('grn.purchasedBy ILIKE :purchaseBy', { purchaseBy: `%${filters.purchaseBy}%` });
     }
 
-    if (filters.vehicleNo) {
-      queryBuilder.andWhere('grn.vehicleNo ILIKE :vehicleNo', { vehicleNo: `%${filters.vehicleNo}%` });
-    }
-
-    if (filters.receivedThrough) {
-      queryBuilder.andWhere('grn.receivedThrough ILIKE :receivedThrough', {
-        receivedThrough: `%${filters.receivedThrough}%`,
-      });
-    }
-
-    if (filters.deliveryReceivingPerson) {
-      queryBuilder.andWhere('grn.deliveryReceivingPerson ILIKE :deliveryReceivingPerson', {
-        deliveryReceivingPerson: `%${filters.deliveryReceivingPerson}%`,
+    if (filters.receivingPerson) {
+      queryBuilder.andWhere('grn.receivingPerson ILIKE :receivingPerson', {
+        receivingPerson: `%${filters.receivingPerson}%`,
       });
     }
 
@@ -299,7 +288,7 @@ export class GrnReportService {
 
     // Status filter - filter by document status
     if (filters.status) {
-      queryBuilder.andWhere('document.status = :status', { status: filters.status });
+      queryBuilder.andWhere('document.status = :status', { status: requireStatus(DocumentStatus, filters.status, 'status') });
     }
   }
 
@@ -331,8 +320,6 @@ export class GrnReportService {
       console.log('GRN Data:', {
         grnNo: grn.grnNo,
         createdAt: grn.createdAt,
-        vehicleNo: grn.vehicleNo,
-        receivedThrough: grn.receivedThrough,
         documentStatus,
         verifiedBy,
         approvedBy
@@ -340,6 +327,9 @@ export class GrnReportService {
 
       return {
         grnNo: grn.grnNo ? grn.grnNo.toUpperCase() : null,
+        batchNo: grn.batchNo ?? null,
+        totalGrossWeight: grn.totalGrossWeight ?? null,
+        totalNetWeight: grn.totalNetWeight ?? null,
         vendorFarmer: selectedParty
           ? grn.source === 'vendor'
             ? selectedParty.companyName
@@ -352,7 +342,6 @@ export class GrnReportService {
         // Additional fields for detailed view
         id: grn.id,
         companyName: grn.companyName?.name || null,
-        requestingDepartment: grn.requestingDepartment,
         grnType: grn.grnType,
         locationType: grn.locationType,
         purchaseType: grn.purchaseType,
@@ -368,11 +357,9 @@ export class GrnReportService {
         otherCharges: grn.otherCharges,
         amtWords: grn.amtWords,
         purchasedBy: grn.purchasedBy,
-        receivedThrough: grn.receivedThrough || '',
-        vehicleNo: grn.vehicleNo ? grn.vehicleNo.toUpperCase() : '',
         timeIn: grn.timeIn,
         cratesIn: grn.cratesIn,
-        deliveryReceivingPerson: grn.deliveryReceivingPerson,
+        receivingPerson: grn.receivingPerson,
         rmn: grn.rmn,
         specialReq: grn.specialReq,
         securityPerson: grn.securityPerson,
@@ -381,15 +368,15 @@ export class GrnReportService {
         purchaseInstructionsBy: grn.purchaseInstructionsBy
           ? `${grn.purchaseInstructionsBy.firstName} ${grn.purchaseInstructionsBy.lastName}`
           : null,
-        purchaseBy: grn.purchaseBy
-          ? `${grn.purchaseBy.firstName} ${grn.purchaseBy.lastName}`
-          : null,
+        purchaseBy: grn.purchasedBy || null,
         createdBy: grn.createdBy
           ? `${grn.createdBy.firstName} ${grn.createdBy.lastName}`
           : null,
         status: documentStatus,
         verifiedBy: verifiedBy,
         approvedBy: approvedBy,
+        ammountStatus: grn.ammountStatus ?? null,
+        ...grnPaidAndBalance(grn.totalAmt, grn.paymentInfo?.advancePaidAmt, grn.paidAmt),
         paymentInfo: grn.paymentInfo
           ? {
               paymentMode: grn.paymentInfo.paymentMode,
@@ -406,9 +393,7 @@ export class GrnReportService {
           productName: product.productName?.name || null,
           variant: product.variant?.variantName || null,
           quantity: product.quantity,
-          revisedQuantity: product.revisedQuantity,
           unitPrice: product.unitPrice,
-          revisedRate: product.revisedRate,
           uom: product.uom?.unit || null,
           amount: product.amount,
           grossWeight: product.grossWeight,
@@ -519,19 +504,20 @@ export class GrnReportService {
 
       // Helper function to get status color
       const getStatusColor = (status: string): string => {
-        const statusLower = status?.toLowerCase() || '';
-        switch (statusLower) {
-          case 'hold':
+        switch (status) {
+          case DocumentStatus.DRAFT:
+            return 'FF757575'; // Grey
+          case DocumentStatus.HOLD:
             return 'FFFF5700'; // Orange
-          case 'verified':
+          case DocumentStatus.VERIFIED:
             return 'FF6A00FF'; // Indigo
-          case 'approved':
+          case DocumentStatus.APPROVED:
             return 'FF40BF40'; // Light Green
-          case 'finalizing':
+          case DocumentStatus.FINALIZING:
             return 'FF0063B1'; // Blue
-          case 'complete':
+          case DocumentStatus.COMPLETE:
             return 'FF006600'; // Dark Green
-          case 'reject':
+          case DocumentStatus.REJECT:
             return 'FFAF0606'; // Red
           default:
             return 'FFFFFFFF'; // White (no color)
@@ -767,12 +753,10 @@ export class GrnReportService {
 
       addParameter('Bill No', filters.billNo || 'All');
       addParameter('GRN No', filters.grnNo || 'All');
-      addParameter('Requesting Department', filters.requestingDepartment || 'All');
+      addParameter('Batch No', filters.batchNo || 'All');
       addParameter('Purchase Instructions By', filters.purchaseInstructionsBy || 'All');
       addParameter('Purchase By', filters.purchaseBy || 'All');
-      addParameter('Vehicle No', filters.vehicleNo || 'All');
-      addParameter('Received Through', filters.receivedThrough || 'All');
-      addParameter('Delivery Receiving Person', filters.deliveryReceivingPerson || 'All');
+      addParameter('Receiving Person', filters.receivingPerson || 'All');
       addParameter('Security Person', filters.securityPerson || 'All');
       addParameter('RMN', filters.rmn || 'All');
       
@@ -827,8 +811,9 @@ export class GrnReportService {
         'Due Date',
         'Verified By',
         'Approved By',
-        'Vehicle No.',
-        'Received Through'
+        'Batch No.',
+        'Total Gross Weight',
+        'Total Net Weight'
       ];
 
       headers.forEach((header, index) => {
@@ -863,7 +848,7 @@ export class GrnReportService {
           const dueDate = toExcelDate(grn.paymentInfo?.dueDate);
           
           row.getCell(1).value = createdAtDate;
-          row.getCell(2).value = grn.status ? grn.status.toUpperCase() : '';
+          row.getCell(2).value = grn.status ?? '';
           row.getCell(3).value = grn.vendorFarmer || '';
           row.getCell(4).value = grn.createdBy || '';
           row.getCell(5).value = grn.source || '';
@@ -888,8 +873,11 @@ export class GrnReportService {
           row.getCell(24).value = dueDate;
           row.getCell(25).value = grn.verifiedBy || '';
           row.getCell(26).value = grn.approvedBy || '';
-          row.getCell(27).value = grn.vehicleNo || '';
-          row.getCell(28).value = grn.receivedThrough || '';
+          row.getCell(27).value = grn.batchNo || '';
+          row.getCell(28).value = Number(grn.totalGrossWeight) || 0;
+          row.getCell(29).value = Number(grn.totalNetWeight) || 0;
+          row.getCell(28).numFmt = '#,##0.000';
+          row.getCell(29).numFmt = '#,##0.000';
 
           // Apply status color
           const statusColor = getStatusColor(grn.status);
@@ -917,7 +905,7 @@ export class GrnReportService {
           if (paymentDate) row.getCell(23).numFmt = 'dd/mm/yyyy';
           if (dueDate) row.getCell(24).numFmt = 'dd/mm/yyyy';
           
-          for (let i = 1; i <= 28; i++) {
+          for (let i = 1; i <= 29; i++) {
             row.getCell(i).border = {
               top: { style: 'thin' },
               left: { style: 'thin' },
@@ -946,7 +934,7 @@ export class GrnReportService {
             // Set values for first row only (will be merged)
             if (index === 0) {
               row.getCell(1).value = createdAtDate;
-              row.getCell(2).value = grn.status ? grn.status.toUpperCase() : '';
+              row.getCell(2).value = grn.status ?? '';
               row.getCell(3).value = grn.vendorFarmer || '';
               row.getCell(4).value = grn.createdBy || '';
               row.getCell(5).value = grn.source || '';
@@ -961,8 +949,11 @@ export class GrnReportService {
               row.getCell(24).value = dueDate;
               row.getCell(25).value = grn.verifiedBy || '';
               row.getCell(26).value = grn.approvedBy || '';
-              row.getCell(27).value = grn.vehicleNo || '';
-              row.getCell(28).value = grn.receivedThrough || '';
+              row.getCell(27).value = grn.batchNo || '';
+              row.getCell(28).value = Number(grn.totalGrossWeight) || 0;
+              row.getCell(29).value = Number(grn.totalNetWeight) || 0;
+              row.getCell(28).numFmt = '#,##0.000';
+              row.getCell(29).numFmt = '#,##0.000';
 
               // Apply status color
               const statusColor = getStatusColor(grn.status);
@@ -1005,7 +996,7 @@ export class GrnReportService {
             if (dueDate) row.getCell(23).numFmt = 'dd/mm/yyyy';
 
             // Add borders
-            for (let i = 1; i <= 27; i++) {
+            for (let i = 1; i <= 29; i++) {
               row.getCell(i).border = {
                 top: { style: 'thin' },
                 left: { style: 'thin' },
@@ -1084,14 +1075,15 @@ export class GrnReportService {
             // Merge Approved By (column 26)
             recordSheet.mergeCells(startRow, 26, endRow, 26);
             recordSheet.getCell(startRow, 26).alignment = { vertical: 'middle', horizontal: 'left' };
-            
-            // Merge Vehicle No. (column 27)
-            recordSheet.mergeCells(startRow, 27, endRow, 27);
-            recordSheet.getCell(startRow, 27).alignment = { vertical: 'middle', horizontal: 'left' };
-            
-            // Merge Received Through (column 28)
-            recordSheet.mergeCells(startRow, 28, endRow, 28);
-            recordSheet.getCell(startRow, 28).alignment = { vertical: 'middle', horizontal: 'left' };
+
+            // Merge Batch No. (column 27), Total Gross Weight (28), Total Net Weight (29)
+            [27, 28, 29].forEach((col) => {
+              recordSheet.mergeCells(startRow, col, endRow, col);
+              recordSheet.getCell(startRow, col).alignment = {
+                vertical: 'middle',
+                horizontal: col === 27 ? 'left' : 'right',
+              };
+            });
           }
         }
       });
@@ -1123,8 +1115,9 @@ export class GrnReportService {
       recordSheet.getColumn(24).width = 12; // Due Date
       recordSheet.getColumn(25).width = 18; // Verified By
       recordSheet.getColumn(26).width = 18; // Approved By
-      recordSheet.getColumn(27).width = 15; // Vehicle No.
-      recordSheet.getColumn(28).width = 18; // Received Through
+      recordSheet.getColumn(27).width = 16; // Batch No.
+      recordSheet.getColumn(28).width = 18; // Total Gross Weight
+      recordSheet.getColumn(29).width = 18; // Total Net Weight
 
       // Generate buffer
       const buffer = await workbook.xlsx.writeBuffer();

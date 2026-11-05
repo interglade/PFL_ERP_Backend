@@ -1,6 +1,6 @@
 import { inject, injectable } from 'inversify';
 import * as XLSX from 'xlsx';
-import { DataSource, In } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { CustomerRepository } from '../repository/customer.repository';
 import { Customer } from '../entity/customer.entity';
 
@@ -24,6 +24,8 @@ import { UserRepository } from '../../../employee/repository/user.repository';
 ;
 import { NotificationService } from '../../../notification/service/notification.service';
 import { Status } from '../../../utils/status.enum';
+import { applyMasterFilters } from '../../../global/filters/masterDataFilter';
+import { CUSTOMER_FILTERS } from '../filters/customer.filters';
 import { formatDateTime } from '../../../utils/dateUtils';
 import { CacheService } from '../../../global/cache.service';
 import { CreateCustomerDto, CustomerListResponseDto, CustomerViewResponseDto, PaginatedResponse } from '../dto/createCustomer.dto';
@@ -41,6 +43,7 @@ import {
   CorporateRegistrationType,
 } from '../entity/statutoryCust.entity';
 import {
+  attachImportReport,
   buildDataWorkbook,
   buildTemplateWorkbook,
   deleteFromSpaces,
@@ -57,7 +60,13 @@ import {
   CUSTOMER_SHEET,
   CUSTOMER_SPECIFICATION_GROUP,
 } from '../excel/customer.columns';
-import { findOrCreateByName } from '../../../excel/lookupByName';
+import { normaliseName } from '../../../excel/lookupByName';
+import { LookupIndex } from '../../../excel/lookupIndex';
+import { DraftLinks } from '../../../excel/draftLinks';
+import { ContactPool, mergeFilled, RegistrationRowReader } from '../../../excel/registrationRow';
+import { WorkbookLists } from '../../../excel/excelColumn';
+import { assertImportPrerequisites } from '../../../excel/importPrerequisites';
+import { countMasterRecords } from '../../../excel/importPrerequisiteCounts';
 
 const CACHE_PREFIX = 'customer';
 const CACHE_TTL = 180;       // 3 min for lists
@@ -370,9 +379,9 @@ export class CustomerService {
           `Your customer "${customerName}" has been sent for approval`,
           creatorId,
         );
-        await this.notificationService.createNotiForRole(
+        await this.notificationService.createNotiForRoles(
           `Customer "${customerName}" is awaiting your approval, created by ${creatorName}`,
-          Role.VERIFIER,
+          [Role.VERIFIER, Role.ADMIN],
         );
       }
     } catch {
@@ -442,6 +451,8 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
       { draft: Status.DRAFT, userId },
     );
   }
+
+  applyMasterFilters(queryBuilder, CUSTOMER_FILTERS, queryOptions.masterFilters);
 
   const customers = await buildQuery(queryBuilder, queryOptions, 'customer');
 
@@ -1790,13 +1801,16 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
       queryBuilder.andWhere('customer.status != :draft', { draft: Status.DRAFT });
     }
 
+    applyMasterFilters(queryBuilder, CUSTOMER_FILTERS, options.masterFilters);
+
     const { data } = await buildQuery(
       queryBuilder,
       { ...options, page: undefined, limit: undefined },
       'customer',
     );
 
-    const workbook = buildDataWorkbook(CUSTOMER_SHEET, data as Customer[]);
+    const lists = this.customerWorkbookLists(await this.loadCustomerLinkIndexes());
+    const workbook = buildDataWorkbook(CUSTOMER_SHEET, data as Customer[], lists);
     return uploadWorkbookToSpaces(workbook, 'Customers', data.length);
   }
 
@@ -1805,29 +1819,69 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
    * from the same column map as the export.
    */
   async buildExcelTemplate(): Promise<UploadedExport> {
-    const workbook = buildTemplateWorkbook(CUSTOMER_SHEET);
+    const lists = this.customerWorkbookLists(await this.loadCustomerLinkIndexes());
+    const workbook = buildTemplateWorkbook(CUSTOMER_SHEET, lists);
     return uploadWorkbookToSpaces(workbook, 'Customer_Template', 0);
   }
 
+  /** Customer Types and Categories, each loaded once per file and matched in memory. */
+  private async loadCustomerLinkIndexes() {
+    const live = <T extends { isDeleted?: boolean }>(records: T[]) =>
+      records.filter((record) => !record.isDeleted);
+
+    const [types, categories] = await Promise.all([
+      this.dataSource.getRepository(CustomerType).find(),
+      this.dataSource.getRepository(CustomerCategory).find(),
+    ]);
+
+    return {
+      types: LookupIndex.fromRecords(live(types), { names: (t) => [t.name] }),
+      categories: LookupIndex.fromRecords(live(categories), { names: (c) => [c.name] }),
+    };
+  }
+
+  /** Current master names for the dropdowns in the template and the export. */
+  private customerWorkbookLists(
+    indexes: Awaited<ReturnType<CustomerService['loadCustomerLinkIndexes']>>,
+  ): WorkbookLists {
+    return {
+      'customer-type': indexes.types.displayNames(),
+      'customer-category': indexes.categories.displayNames(),
+    };
+  }
+
   /**
-   * Imports customers from a spreadsheet uploaded to Spaces.
+   * Imports customers from a spreadsheet uploaded to Spaces
+   * (docs/registration-import-plan.md, decisions agreed 2026-11-04).
    *
-   * A customer whose organisation name is already on record is skipped and
-   * reported rather than updated, and the uploaded file is removed from Spaces
-   * once read - success or failure.
+   * Row by row (D1). Every customer the import saves is a **draft** (D2): the
+   * admin checks it and submits it from the form. A cell the form would refuse,
+   * a mobile / email another customer already has, a required cell left blank
+   * (the billing and delivery address included) and a type or category that does
+   * not match are left empty and listed in the report (D4, D5).
    *
-   * Owner and approval status are not read from the sheet: every imported
-   * customer belongs to `createdById` and starts as pending, exactly as if it
-   * had been entered through the form.
+   * A row with the Customer Code of a draft customer updates it: filled cells
+   * replace what is saved, empty cells keep it (D3). Customers past draft are not
+   * changed by an import (D6). A new row whose organisation name is already on
+   * record is skipped. `checkOnly` runs every check and saves nothing.
+   *
+   * The uploaded file is removed from Spaces once read, success or failure.
    */
-  async upload(filePath: string, createdById: string): Promise<ImportSummary> {
+  async upload(
+    filePath: string,
+    createdById: string,
+    options: { checkOnly?: boolean } = {},
+  ): Promise<ImportSummary> {
     if (!filePath) {
       throw new AppError(400, 'No file URL provided');
     }
 
+    const checkOnly = !!options.checkOnly;
     const summary = emptySummary();
 
     try {
+      await assertImportPrerequisites('customer', countMasterRecords);
+
       const sheet = await readUploadedSheet(filePath, CUSTOMER_SHEET);
       summary.unknownColumns = sheet.unknownColumns;
       summary.missingColumns = sheet.missingColumns;
@@ -1846,307 +1900,171 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
       }
 
       const customerRepo = this.dataSource.getRepository(Customer);
-      const categoryRepo = this.dataSource.getRepository(CustomerCategory);
-      const typeRepo = this.dataSource.getRepository(CustomerType);
+      const linkIndexes = await this.loadCustomerLinkIndexes();
 
-      const byHeader = new Map(CUSTOMER_SHEET.columns.map((c) => [c.header, c]));
-      const column = (header: string) => {
-        const found = byHeader.get(header);
-        if (!found) throw new Error(`Unknown customer column: ${header}`);
-        return found;
-      };
-      const text = (row: ExcelRow, header: string) =>
-        row.cell<string | null>(column(header));
-      const num = (row: ExcelRow, header: string) =>
-        row.cell<number | null>(column(header));
-      const bool = (row: ExcelRow, header: string) =>
-        row.cell<boolean | null>(column(header));
-      const date = (row: ExcelRow, header: string) => {
-        const value = row.cell<string | null>(column(header));
-        return value ? new Date(value) : null;
+      // Existing customers by name (case, spacing and punctuation ignored) and by
+      // code, and every mobile / email in use, loaded once; rows of this file
+      // are added as they go.
+      const existingCustomers = await customerRepo.find({
+        relations: ['billingDetails', 'deliveryDetails', 'keyMobileNumbers'],
+      });
+      const byName = new Map<string, string>();
+      const byCode = new Map<string, Customer>();
+      const contacts = new ContactPool();
+      for (const existing of existingCustomers) {
+        const owner = { key: existing.id, label: customerLabel(existing) };
+        if (existing.organisationName) byName.set(normaliseName(existing.organisationName), owner.label);
+        if (existing.customerCode) byCode.set(existing.customerCode.toUpperCase(), existing);
+        for (const phone of [
+          existing.primaryContactNo,
+          existing.secondaryContactNo,
+          existing.billingDetails?.primaryContactNo,
+          existing.billingDetails?.secondaryContactNo,
+          existing.deliveryDetails?.primaryContactNo,
+          existing.deliveryDetails?.secondaryContactNo,
+          existing.keyMobileNumbers?.accDeptMobileNo,
+          existing.keyMobileNumbers?.ownerMobileNo,
+          existing.keyMobileNumbers?.visitingContactNo,
+        ]) {
+          contacts.add('phone', phone, owner);
+        }
+        for (const email of [
+          existing.emailPrimary,
+          existing.emailSecondary,
+          existing.billingDetails?.emailPrimary,
+          existing.billingDetails?.emailSecondary,
+          existing.deliveryDetails?.emailPrimary,
+          existing.deliveryDetails?.emailSecondary,
+        ]) {
+          contacts.add('email', email, owner);
+        }
+      }
+
+      /** Sets the type and category the customer does not have yet; misses go to `draft`. */
+      const applyLinks = (customer: Customer, reader: RegistrationRowReader) => {
+        if (!customer.customerCategory) {
+          customer.customerCategory = reader.draft.one(
+            linkIndexes.categories,
+            'Customer Category',
+            reader.text('Customer Category'),
+          ) as CustomerCategory;
+        }
+        if (!customer.customerTypes) {
+          customer.customerTypes = reader.draft.one(
+            linkIndexes.types,
+            'Customer Type',
+            reader.text('Customer Type'),
+          ) as CustomerType;
+        }
       };
 
-      // Address2 and Location stay optional - plenty of addresses have neither -
-      // but a billing or delivery address without these four is not an address.
-      const requiredAddressParts = ['Address1', 'City', 'State', 'Pincode'];
-      const missingAddressParts = (row: ExcelRow, prefix: string) =>
-        requiredAddressParts
-          .map((part) => `${prefix} ${part}`)
-          .filter((header) => !text(row, header));
+      const codeColumn = CUSTOMER_SHEET.columns.find((c) => c.header === 'Customer Code')!;
 
       for (const row of sheet.rows) {
         try {
-          const organisationName = text(row, 'Organisation Name');
+          const draft = new DraftLinks();
+          const customerCode = row.cell<string | null>(codeColumn);
+
+          // ── A draft customer named by its code: update it ──────────────
+          if (customerCode) {
+            const known = byCode.get(customerCode.toUpperCase());
+            if (!known) {
+              summary.skipped.push({
+                row: row.rowNumber,
+                reason: `Customer Code ${customerCode} was not found - clear it to add the row as a new customer`,
+              });
+              continue;
+            }
+            if (known.status !== Status.DRAFT) {
+              summary.skipped.push({
+                row: row.rowNumber,
+                reason: `Customer ${customerCode} is ${known.status} - an import only changes draft customers; edit it in the form`,
+              });
+              continue;
+            }
+
+            const target = await customerRepo.findOne({
+              where: { id: known.id },
+              relations: [
+                'customerCategory', 'customerTypes', 'customerAddress', 'statutoryDetails',
+                'bankDetails', 'billingDetails', 'billingDetails.billingAddress',
+                'deliveryDetails', 'deliveryDetails.deliveryAddress', 'paymentTerms',
+                'keyMobileNumbers', 'officeUseOnly', 'productSpecification',
+              ],
+            });
+            if (!target) throw new Error(`Customer ${customerCode} could not be loaded`);
+
+            const reader = new RegistrationRowReader(CUSTOMER_SHEET, row, draft, {
+              contacts,
+              ownerKey: target.id,
+            });
+            const incoming = this.customerFromRow(customerRepo, reader);
+            applyLinks(incoming, reader);
+
+            // A new name must not be another customer's
+            const newName = incoming.organisationName;
+            if (newName && normaliseName(newName) !== normaliseName(target.organisationName ?? '')) {
+              const holder = byName.get(normaliseName(newName));
+              if (holder) {
+                draft.note('Organisation Name', newName, `Kept the saved name: already used by ${holder}`);
+                delete (incoming as Partial<Customer>).organisationName;
+              }
+            }
+
+            mergeFilled(target, incoming);
+            target.status = Status.DRAFT;
+            if (!checkOnly) await customerRepo.save(target);
+
+            summary.updated++;
+            if (draft.isDraft) summary.drafted++;
+            summary.draftIssues.push(
+              ...draft.toReport(row.rowNumber, target.customerCode, target.organisationName),
+            );
+            reader.registerContacts({ key: target.id, label: customerLabel(target) });
+            if (target.organisationName) {
+              byName.set(normaliseName(target.organisationName), customerLabel(target));
+            }
+            continue;
+          }
+
+          // ── A new customer ─────────────────────────────────────────────
+          const ownerKey = `row-${row.rowNumber}`;
+          const reader = new RegistrationRowReader(CUSTOMER_SHEET, row, draft, { contacts, ownerKey });
+          const organisationName = reader.text('Organisation Name');
           if (!organisationName) {
-            summary.skipped.push({
-              row: row.rowNumber,
-              reason: 'Organisation Name is empty',
-            });
+            summary.skipped.push({ row: row.rowNumber, reason: 'Organisation Name is empty' });
             continue;
           }
-
-          const missingAddress = [
-            ...missingAddressParts(row, 'Billing'),
-            ...missingAddressParts(row, 'Delivery'),
-          ];
-
-          if (missingAddress.length) {
-            summary.skipped.push({
-              row: row.rowNumber,
-              reason: `Billing and delivery address are required. Missing: ${missingAddress.join(', ')}`,
-            });
-            continue;
-          }
-
-          const existing = await customerRepo
-            .createQueryBuilder('customer')
-            .where('LOWER(customer.organisationName) = LOWER(:name)', {
-              name: organisationName,
-            })
-            .getOne();
-
+          const existing = byName.get(normaliseName(organisationName));
           if (existing) {
             summary.skipped.push({
               row: row.rowNumber,
-              reason: `Customer "${organisationName}" already exists (${existing.customerCode ?? existing.id})`,
+              reason: `Customer "${organisationName}" already exists (${existing})`,
             });
             continue;
           }
 
-          // ── Category / type ─────────────────────────────────────────────
-          // Both are matched with case, spacing and punctuation ignored, so
-          // "Retail Chain" reuses a "retail chain" row instead of adding one.
-          const categoryName = text(row, 'Customer Category');
-          const category: CustomerCategory | null = categoryName
-            ? await findOrCreateByName(categoryRepo, 'name', categoryName)
-            : null;
-
-          const typeName = text(row, 'Customer Type');
-          const type: CustomerType | null = typeName
-            ? await findOrCreateByName(typeRepo, 'name', typeName)
-            : null;
-
-          // ── Sub-records ─────────────────────────────────────────────────
-          const address = Address.create({
-            address1: text(row, 'Address1') ?? undefined,
-            address2: text(row, 'Address2') ?? undefined,
-            location: text(row, 'Location') ?? undefined,
-            city: text(row, 'City') ?? undefined,
-            state: text(row, 'State') ?? undefined,
-            pincode: text(row, 'Pincode') ?? undefined,
-          });
-
-          const statutoryDetails = StatutoryDetails.create({
-            panNo: text(row, 'PAN Number') ?? undefined,
-            aadharNo: text(row, 'Aadhar Number') ?? undefined,
-            gstn: text(row, 'GST Number') ?? undefined,
-            certificationsDetails:
-              row.cell<CertificationType | null>(column('Certification Type')) ??
-              undefined,
-            otherCertifications: text(row, 'Other Certifications') ?? undefined,
-            corpRegiDetails:
-              row.cell<CorporateRegistrationType | null>(
-                column('Corporate Registration Type'),
-              ) ?? undefined,
-            otherCorpRegiDetails:
-              text(row, 'Other Corporate Registration Details') ?? undefined,
-            cinNo: text(row, 'CIN Number') ?? undefined,
-          });
-
-          const bankDetails = BankDetailsCust.create({
-            bankAccHolderFName:
-              text(row, 'Bank Account Holder First Name') ?? undefined,
-            bankAccHolderMName:
-              text(row, 'Bank Account Holder Middle Name') ?? undefined,
-            bankAccHolderLName:
-              text(row, 'Bank Account Holder Last Name') ?? undefined,
-            bankName: text(row, 'Bank Name') ?? undefined,
-            bankBranch: text(row, 'Bank Branch') ?? undefined,
-            bankAccNo: text(row, 'Bank Account Number') ?? undefined,
-            ifscCode: text(row, 'IFSC Code') ?? undefined,
-            accType: row.cell<AccountType | null>(column('Account Type')) ?? undefined,
-            otherAccType: text(row, 'Other Account Type') ?? undefined,
-          });
-
-          const billingDetails = BillingDetailsCust.create({
-            billingName: text(row, 'Billing Name') ?? undefined,
-            commonlyKnownAs: text(row, 'Billing Commonly Known As') ?? undefined,
-            contactPersonFName:
-              text(row, 'Billing Contact Person First Name') ?? undefined,
-            contactPersonMName:
-              text(row, 'Billing Contact Person Middle Name') ?? undefined,
-            contactPersonLName:
-              text(row, 'Billing Contact Person Last Name') ?? undefined,
-            primaryContactNo: text(row, 'Billing Primary Contact No') ?? undefined,
-            secondaryContactNo:
-              text(row, 'Billing Secondary Contact No') ?? undefined,
-            emailPrimary: text(row, 'Billing Primary Email') ?? undefined,
-            emailSecondary: text(row, 'Billing Secondary Email') ?? undefined,
-            billingAddress: Address.create({
-              address1: text(row, 'Billing Address1') ?? undefined,
-              address2: text(row, 'Billing Address2') ?? undefined,
-              location: text(row, 'Billing Location') ?? undefined,
-              city: text(row, 'Billing City') ?? undefined,
-              state: text(row, 'Billing State') ?? undefined,
-              pincode: text(row, 'Billing Pincode') ?? undefined,
-            }),
-          });
-
-          const deliveryDetails = DeliveryDetails.create({
-            receivingPersonFName:
-              text(row, 'Delivery Receiving Person First Name') ?? undefined,
-            receivingPersonMName:
-              text(row, 'Delivery Receiving Person Middle Name') ?? undefined,
-            receivingPersonLName:
-              text(row, 'Delivery Receiving Person Last Name') ?? undefined,
-            primaryContactNo: text(row, 'Delivery Primary Contact No') ?? undefined,
-            secondaryContactNo:
-              text(row, 'Delivery Secondary Contact No') ?? undefined,
-            emailPrimary: text(row, 'Delivery Primary Email') ?? undefined,
-            emailSecondary: text(row, 'Delivery Secondary Email') ?? undefined,
-            deliveryAddress: Address.create({
-              address1: text(row, 'Delivery Address1') ?? undefined,
-              address2: text(row, 'Delivery Address2') ?? undefined,
-              location: text(row, 'Delivery Location') ?? undefined,
-              city: text(row, 'Delivery City') ?? undefined,
-              state: text(row, 'Delivery State') ?? undefined,
-              pincode: text(row, 'Delivery Pincode') ?? undefined,
-            }),
-          });
-
-          const paymentTerms = PaymentTerms.create({
-            paymentMode: text(row, 'Payment Mode') ?? undefined,
-            otherPaymentMode: text(row, 'Other Payment Mode') ?? undefined,
-            paymentMade: text(row, 'Payment Made') ?? undefined,
-            otherPaymentMade: text(row, 'Other Payment Made') ?? undefined,
-            marginDeposit: text(row, 'Margin Deposit') ?? undefined,
-            rtv: bool(row, 'RTV Allowed') ?? undefined,
-            agreementExecuted: bool(row, 'Agreement Executed') ?? undefined,
-            lc: text(row, 'Letter Of Credit') ?? undefined,
-            bg: text(row, 'Bank Guarantee') ?? undefined,
-            securityDepoCheqNo:
-              text(row, 'Security Deposit Cheque No') ?? undefined,
-            securityDepoAmt: num(row, 'Security Deposit Amount') ?? undefined,
-            IELinAmt: num(row, 'Initial Exposure Limit Amount') ?? undefined,
-            IELRecommendedBy:
-              text(row, 'Initial Exposure Limit Recommended By') ?? undefined,
-            IELRecommendedDate:
-              date(row, 'Initial Exposure Limit Recommended Date') ?? undefined,
-            RELinAmt: num(row, 'Revised Exposure Limit Amount') ?? undefined,
-            RELRecommendedBy:
-              text(row, 'Revised Exposure Limit Recommended By') ?? undefined,
-            RELRecommendedDate:
-              date(row, 'Revised Exposure Limit Recommended Date') ?? undefined,
-            reason: text(row, 'Exposure Limit Reason') ?? undefined,
-          });
-
-          const keyMobileData = keyMobileNoData.create({
-            accDeptFName: text(row, 'Accounts Dept First Name') ?? undefined,
-            accDeptMName: text(row, 'Accounts Dept Middle Name') ?? undefined,
-            accDeptLName: text(row, 'Accounts Dept Last Name') ?? undefined,
-            accDeptMobileNo: text(row, 'Accounts Dept Mobile No') ?? undefined,
-            ownerFName: text(row, 'Owner First Name') ?? undefined,
-            ownerMName: text(row, 'Owner Middle Name') ?? undefined,
-            ownerLName: text(row, 'Owner Last Name') ?? undefined,
-            ownerMobileNo: text(row, 'Owner Mobile No') ?? undefined,
-            mandiLicenceNo: text(row, 'Mandi Licence No') ?? undefined,
-            regiNo: text(row, 'Registration No') ?? undefined,
-            electricityBill: text(row, 'Electricity Bill') ?? undefined,
-            consumerNo: text(row, 'Electricity Consumer No') ?? undefined,
-            customerBlacklisted: text(row, 'Blacklisted By Anyone') ?? undefined,
-            ifBlacklistedReason: text(row, 'Blacklisted Reason') ?? undefined,
-            blackListedBy: text(row, 'Blacklisted By') ?? undefined,
-            visitingCard: text(row, 'Visiting Card') ?? undefined,
-            visitingContactNo: text(row, 'Visiting Contact No') ?? undefined,
-            ref1FName: text(row, 'Reference1 First Name') ?? undefined,
-            ref1MName: text(row, 'Reference1 Middle Name') ?? undefined,
-            ref1LName: text(row, 'Reference1 Last Name') ?? undefined,
-            ref1ContactNo: text(row, 'Reference1 Contact No') ?? undefined,
-            ref1Email: text(row, 'Reference1 Email') ?? undefined,
-            ref2FName: text(row, 'Reference2 First Name') ?? undefined,
-            ref2MName: text(row, 'Reference2 Middle Name') ?? undefined,
-            ref2LName: text(row, 'Reference2 Last Name') ?? undefined,
-            ref2ContactNo: text(row, 'Reference2 Contact No') ?? undefined,
-            ref2Email: text(row, 'Reference2 Email') ?? undefined,
-          });
-
-          const officeUseOnly = OfficeUseOnly.create({
-            proposerBDName: text(row, 'Proposer BD Name') ?? undefined,
-            pflCoordinator: text(row, 'PFL Coordinator') ?? undefined,
-            recommendedBy: text(row, 'Recommended By') ?? undefined,
-            dispatchLocationPfl: text(row, 'PFL Dispatch Location') ?? undefined,
-            approvedBy: text(row, 'Approved By') ?? undefined,
-            relationshipManager: text(row, 'Relationship Manager') ?? undefined,
-            avgBillingMonthly: num(row, 'Average Monthly Billing') ?? undefined,
-            volumeMonthly: num(row, 'Monthly Volume (Tonnes)') ?? undefined,
-            customerVerification:
-              bool(row, 'Customer Verification Completed') ?? undefined,
-            verificationAgency: text(row, 'Verification Agency') ?? undefined,
-            validityPeriod: date(row, 'Validity Period') ?? undefined,
-            dueDiligenceDone: bool(row, 'Due Diligence Done') ?? undefined,
-            creditWorthinessDue: text(row, 'Credit Worthiness Due') ?? undefined,
-            keyAccountPersonAssigned:
-              text(row, 'Key Account Person Assigned') ?? undefined,
-            sinceWhen: date(row, 'Customer Since') ?? undefined,
-            ledgerCreatedDate: date(row, 'Ledger Created Date') ?? undefined,
-            ledgerCreatedBy: text(row, 'Ledger Created By') ?? undefined,
-            ledgerVerifiedApprovedBy:
-              text(row, 'Ledger Verified Approved By') ?? undefined,
-            createdBy: text(row, 'Office Use Created By') ?? undefined,
-            additionalNotes: text(row, 'Additional Notes') ?? undefined,
-          });
-
-          const specColumn = (header: string) =>
-            CUSTOMER_SPECIFICATION_GROUP.columns.find((c) => c.header === header)!;
-
-          const productSpecification = row.eachGroupBlock(
-            CUSTOMER_SPECIFICATION_GROUP,
-            (index) => {
-              const at = (header: string) =>
-                row.groupCell<string | null>(
-                  CUSTOMER_SPECIFICATION_GROUP,
-                  index,
-                  specColumn(header),
-                ) ?? undefined;
-
-              return ProductSpecification.create({
-                articleName: at('Article Name'),
-                specifications: at('Specifications'),
-                packingMaterialSpec: at('Packing Material Spec'),
-                parameters: at('Packing Parameters'),
-                rejectionCriteria: at('Rejection Criteria'),
-                comment: at('Comment'),
-              });
-            },
-          );
-
-          // ── Owner ───────────────────────────────────────────────────────
-          const customer = customerRepo.create({
-            organisationName,
-            organisationType: text(row, 'Organisation Type') ?? undefined,
-            otherType: text(row, 'Other Organisation Type') ?? undefined,
-            customerCategory: category ?? undefined,
-            customerTypes: type ?? undefined,
-            primaryContactNo: text(row, 'Primary Contact No') ?? undefined,
-            secondaryContactNo: text(row, 'Secondary Contact No') ?? undefined,
-            emailPrimary: text(row, 'Primary Email') ?? undefined,
-            emailSecondary: text(row, 'Secondary Email') ?? undefined,
-            status: Status.PENDING,
-            createdBy: creator,
-            customerAddress: address,
-            statutoryDetails,
-            bankDetails,
-            billingDetails,
-            deliveryDetails,
-            paymentTerms,
-            keyMobileNumbers: keyMobileData,
-            officeUseOnly,
-            productSpecification,
-          });
+          const customer = this.customerFromRow(customerRepo, reader);
+          applyLinks(customer, reader);
+          reader.noteMissingRequired(['Organisation Name']);
+          customer.status = Status.DRAFT;
+          customer.createdBy = creator;
 
           // customerCode is assigned by the entity's @BeforeInsert hook.
-          await customerRepo.save(customer);
+          const saved = checkOnly ? customer : await customerRepo.save(customer);
+
           summary.created++;
+          if (draft.isDraft) summary.drafted++;
+          summary.draftIssues.push(
+            ...draft.toReport(row.rowNumber, saved.customerCode ?? null, organisationName),
+          );
+          const owner = {
+            key: saved.id ?? ownerKey,
+            label: saved.customerCode ? customerLabel(saved) : `row ${row.rowNumber}`,
+          };
+          reader.registerContacts(owner);
+          byName.set(normaliseName(organisationName), owner.label);
+          if (saved.customerCode) byCode.set(saved.customerCode.toUpperCase(), saved);
         } catch (rowError: any) {
           summary.failed.push({
             row: row.rowNumber,
@@ -2155,14 +2073,192 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
         }
       }
 
-      if (summary.created > 0) {
+      if (!checkOnly && (summary.created > 0 || summary.updated > 0)) {
         await this.invalidateCustomerCache();
       }
 
+      await attachImportReport(summary, 'Customer');
       return summary;
     } finally {
       await deleteFromSpaces(filePath);
     }
+  }
+
+  /**
+   * A Customer built from one row - every cell through the column rules. Used as
+   * the new customer, or merged onto a draft (only what is filled). Type and
+   * category are matched by the caller.
+   */
+  private customerFromRow(customerRepo: Repository<Customer>, reader: RegistrationRowReader): Customer {
+    const text = (header: string) => reader.text(header) ?? undefined;
+    const num = (header: string) => reader.number(header) ?? undefined;
+    const bool = (header: string) => reader.boolean(header) ?? undefined;
+    const date = (header: string) => reader.date(header) ?? undefined;
+    const address = (prefix: string) =>
+      Address.create({
+        address1: text(`${prefix}Address1`),
+        address2: text(`${prefix}Address2`),
+        location: text(`${prefix}Location`),
+        city: text(`${prefix}City`),
+        state: text(`${prefix}State`),
+        pincode: text(`${prefix}Pincode`),
+      });
+
+    const statutoryDetails = StatutoryDetails.create({
+      panNo: text('PAN Number'),
+      aadharNo: text('Aadhaar Number'),
+      gstn: text('GSTIN'),
+      certificationsDetails: reader.value<CertificationType>('Certification Type') ?? undefined,
+      otherCertifications: text('Other Certifications'),
+      corpRegiDetails: reader.value<CorporateRegistrationType>('Corporate Registration Type') ?? undefined,
+      otherCorpRegiDetails: text('Other Corporate Registration Details'),
+      cinNo: text('CIN Number'),
+    });
+
+    const bankDetails = BankDetailsCust.create({
+      bankAccHolderFName: text('Bank Account Holder First Name'),
+      bankAccHolderMName: text('Bank Account Holder Middle Name'),
+      bankAccHolderLName: text('Bank Account Holder Last Name'),
+      bankName: text('Bank Name'),
+      bankBranch: text('Bank Branch'),
+      bankAccNo: text('Bank Account Number'),
+      ifscCode: text('IFSC Code'),
+      accType: reader.value<AccountType>('Account Type') ?? undefined,
+      otherAccType: text('Other Account Type'),
+    });
+
+    const billingDetails = BillingDetailsCust.create({
+      billingName: text('Billing Name'),
+      commonlyKnownAs: text('Billing Commonly Known As'),
+      contactPersonFName: text('Billing Contact Person First Name'),
+      contactPersonMName: text('Billing Contact Person Middle Name'),
+      contactPersonLName: text('Billing Contact Person Last Name'),
+      primaryContactNo: text('Billing Primary Contact No'),
+      secondaryContactNo: text('Billing Secondary Contact No'),
+      emailPrimary: text('Billing Primary Email'),
+      emailSecondary: text('Billing Secondary Email'),
+      billingAddress: address('Billing '),
+    });
+
+    const deliveryDetails = DeliveryDetails.create({
+      receivingPersonFName: text('Delivery Receiving Person First Name'),
+      receivingPersonMName: text('Delivery Receiving Person Middle Name'),
+      receivingPersonLName: text('Delivery Receiving Person Last Name'),
+      primaryContactNo: text('Delivery Primary Contact No'),
+      secondaryContactNo: text('Delivery Secondary Contact No'),
+      emailPrimary: text('Delivery Primary Email'),
+      emailSecondary: text('Delivery Secondary Email'),
+      deliveryAddress: address('Delivery '),
+    });
+
+    const paymentTerms = PaymentTerms.create({
+      paymentMode: text('Payment Mode'),
+      otherPaymentMode: text('Other Payment Mode'),
+      paymentMade: text('Payment Made'),
+      otherPaymentMade: text('Other Payment Made'),
+      marginDeposit: text('Margin Deposit'),
+      rtv: bool('RTV Allowed'),
+      agreementExecuted: bool('Agreement Executed'),
+      lc: text('Letter Of Credit'),
+      bg: text('Bank Guarantee'),
+      securityDepoCheqNo: text('Security Deposit Cheque No'),
+      securityDepoAmt: num('Security Deposit Amount'),
+      IELinAmt: num('Initial Exposure Limit Amount'),
+      IELRecommendedBy: text('Initial Exposure Limit Recommended By'),
+      IELRecommendedDate: date('Initial Exposure Limit Recommended Date'),
+      RELinAmt: num('Revised Exposure Limit Amount'),
+      RELRecommendedBy: text('Revised Exposure Limit Recommended By'),
+      RELRecommendedDate: date('Revised Exposure Limit Recommended Date'),
+      reason: text('Exposure Limit Reason'),
+    });
+
+    const keyMobileNumbers = keyMobileNoData.create({
+      accDeptFName: text('Accounts Dept First Name'),
+      accDeptMName: text('Accounts Dept Middle Name'),
+      accDeptLName: text('Accounts Dept Last Name'),
+      accDeptMobileNo: text('Accounts Dept Mobile No'),
+      ownerFName: text('Owner First Name'),
+      ownerMName: text('Owner Middle Name'),
+      ownerLName: text('Owner Last Name'),
+      ownerMobileNo: text('Owner Mobile No'),
+      mandiLicenceNo: text('Mandi Licence No'),
+      regiNo: text('Registration No'),
+      electricityBill: text('Electricity Bill'),
+      consumerNo: text('Electricity Consumer No'),
+      customerBlacklisted: text('Blacklisted By Anyone'),
+      ifBlacklistedReason: text('Blacklisted Reason'),
+      blackListedBy: text('Blacklisted By'),
+      visitingCard: text('Visiting Card'),
+      visitingContactNo: text('Visiting Contact No'),
+      ref1FName: text('Reference 1 First Name'),
+      ref1MName: text('Reference 1 Middle Name'),
+      ref1LName: text('Reference 1 Last Name'),
+      ref1ContactNo: text('Reference 1 Contact No'),
+      ref1Email: text('Reference 1 Email'),
+      ref2FName: text('Reference 2 First Name'),
+      ref2MName: text('Reference 2 Middle Name'),
+      ref2LName: text('Reference 2 Last Name'),
+      ref2ContactNo: text('Reference 2 Contact No'),
+      ref2Email: text('Reference 2 Email'),
+    });
+
+    const officeUseOnly = OfficeUseOnly.create({
+      proposerBDName: text('Proposer BD Name'),
+      pflCoordinator: text('PFL Coordinator'),
+      recommendedBy: text('Recommended By'),
+      dispatchLocationPfl: text('PFL Dispatch Location'),
+      approvedBy: text('Approved By'),
+      relationshipManager: text('Relationship Manager'),
+      avgBillingMonthly: num('Average Monthly Billing'),
+      volumeMonthly: num('Monthly Volume (Tonnes)'),
+      customerVerification: bool('Customer Verification Completed'),
+      verificationAgency: text('Verification Agency'),
+      validityPeriod: date('Validity Period'),
+      dueDiligenceDone: bool('Due Diligence Done'),
+      creditWorthinessDue: text('Credit Worthiness Due'),
+      keyAccountPersonAssigned: text('Key Account Person Assigned'),
+      sinceWhen: date('Customer Since'),
+      ledgerCreatedDate: date('Ledger Created Date'),
+      ledgerCreatedBy: text('Ledger Created By'),
+      ledgerVerifiedApprovedBy: text('Ledger Verified Approved By'),
+      createdBy: text('Office Use Created By'),
+      additionalNotes: text('Additional Notes'),
+    });
+
+    const specColumn = (header: string) =>
+      CUSTOMER_SPECIFICATION_GROUP.columns.find((c) => c.header === header)!;
+    const productSpecification = reader.row.eachGroupBlock(CUSTOMER_SPECIFICATION_GROUP, (index) => {
+      const at = (header: string) =>
+        reader.row.groupCell<string | null>(CUSTOMER_SPECIFICATION_GROUP, index, specColumn(header)) ??
+        undefined;
+      return ProductSpecification.create({
+        articleName: at('Article Name'),
+        specifications: at('Specifications'),
+        packingMaterialSpec: at('Packing Material Spec'),
+        parameters: at('Packing Parameters'),
+        rejectionCriteria: at('Rejection Criteria'),
+        comment: at('Comment'),
+      });
+    });
+
+    return customerRepo.create({
+      organisationName: text('Organisation Name'),
+      organisationType: text('Organisation Type'),
+      otherType: text('Other Organisation Type'),
+      primaryContactNo: text('Primary Contact No'),
+      secondaryContactNo: text('Secondary Contact No'),
+      emailPrimary: text('Primary Email'),
+      emailSecondary: text('Secondary Email'),
+      customerAddress: address(''),
+      statutoryDetails,
+      bankDetails,
+      billingDetails,
+      deliveryDetails,
+      paymentTerms,
+      keyMobileNumbers,
+      officeUseOnly,
+      productSpecification,
+    });
   }
 
   async submitCustomer(
@@ -2242,7 +2338,7 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
   async approveCustomer(customerId: string, approverId: string, status: Status) {
     // Validate status — only approved or rejected are valid outcomes
     if (status !== Status.APPROVED && status !== Status.REJECTED) {
-      throw new AppError(400, `Invalid status '${status}'. Only 'approved' or 'rejected' are allowed.`);
+      throw new AppError(400, `Invalid status '${status}'. Only 'Approved' or 'Rejected' are allowed.`);
     }
 
     const approver = await this.userRepository.findOne({
@@ -2250,9 +2346,9 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
     });
     if (!approver) throw new AppError(404, 'Approver not found');
 
-    // Only VERIFIER role can approve/reject customers
-    if (!approver.roles || !approver.roles.includes(Role.VERIFIER)) {
-      throw new AppError(403, 'Only a Verifier can approve or reject customers');
+    // Only ADMIN or VERIFIER role can approve/reject customers
+    if (!approver.roles || !(approver.roles.includes(Role.ADMIN) || approver.roles.includes(Role.VERIFIER))) {
+      throw new AppError(403, 'Only an Admin or Verifier can approve or reject customers');
     }
 
     const customer = await this.customerRepository.findOne({
@@ -2262,7 +2358,7 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
 
     // Customer must be in 'pending' status — draft means not yet submitted
     if (customer.status !== Status.PENDING) {
-      throw new AppError(400, `Customer cannot be approved because its current status is '${customer.status}'. Only customers with status 'pending' can be approved or rejected.`);
+      throw new AppError(400, `Customer cannot be approved because its current status is '${customer.status}'. Only customers with status 'Pending' can be approved or rejected.`);
     }
 
     customer.status = status;
@@ -2282,7 +2378,7 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
 
       const approver = await this.userRepository.findOneBy({ id: approverId });
       const verifierName = `${approver?.firstName || ''} ${approver?.lastName || ''}`.trim()
-        || (approver as any)?.username || 'Verifier';
+        || (approver as any)?.username || (approver?.roles?.includes(Role.ADMIN) ? 'Admin' : 'Verifier');
 
       const customerName = customer.organisationName || 'Customer';
 
@@ -2360,3 +2456,7 @@ async findAllCustomers(queryOptions: PaginationOptions, userId: string): Promise
     return { affected: result.affected, deleted };
   }
 }
+
+/** How the import names a customer: "CUST20261104001 FreshMart Retail". */
+const customerLabel = (customer: Pick<Customer, 'customerCode' | 'organisationName'>): string =>
+  [customer.customerCode, customer.organisationName].filter(Boolean).join(' ');

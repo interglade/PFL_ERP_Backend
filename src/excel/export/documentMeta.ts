@@ -15,7 +15,7 @@ import { USER_COLUMNS, chunk } from './exportQuery';
 import { personName } from './exportValue';
 
 /** Stage relations on `documents_approve_by_whom`, in workflow order. */
-const STAGES = [
+export const STAGES = [
   { relation: 'verified', label: 'Verifier' },
   { relation: 'firstApproved', label: 'Approver Level 1' },
   { relation: 'secondApproved', label: 'Approver Level 2' },

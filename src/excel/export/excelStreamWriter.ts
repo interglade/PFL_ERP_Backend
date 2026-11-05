@@ -149,6 +149,35 @@ export async function streamExportWorkbook(
   const rowsPerSheet: Record<string, number> = {};
   const takenNames = new Set<string>();
 
+  for (const summary of definition.summarySheets ?? []) {
+    if (isAborted()) throw new ExportAbortedError();
+    const rows = await summary.build({ manager: options.manager, refs: options.refs });
+    const name = safeSheetName(summary.name, takenNames);
+    const worksheet = workbook.addWorksheet(name);
+    worksheet.columns = summary.widths.map((width, index) => ({ key: `c${index}`, width }));
+    for (const row of rows) {
+      const added = worksheet.addRow(row.cells.map((cell, index) => toCellValue(row.types?.[index], cell)));
+      if (row.style === 'title') {
+        added.font = { bold: true, size: 14 };
+        added.height = 24;
+      } else if (row.style === 'header') {
+        added.eachCell((cell) => {
+          cell.fill = HEADER_FILL;
+          cell.font = HEADER_FONT;
+          cell.numFmt = 'General';
+        });
+      } else if (row.style === 'total') {
+        added.font = { bold: true };
+      }
+      added.eachCell((cell) => {
+        cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+      });
+      added.commit();
+    }
+    worksheet.commit();
+    rowsPerSheet[name] = rows.length;
+  }
+
   for (const sheet of definition.sheets) {
     let name = safeSheetName(sheet.name, takenNames);
     let worksheet = openWorksheet(workbook, sheet, name);

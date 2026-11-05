@@ -99,9 +99,10 @@ function parseBoolean(value: string, param: string): boolean {
   throw new AppError(400, `Invalid ${param} '${value}'. Expected true or false`);
 }
 
-function parseEnum(value: string, param: string, allowed: readonly string[]): string[] {
+/** `exact` (statuses): the value as written; otherwise any case. */
+function parseEnum(value: string, param: string, allowed: readonly string[], exact = false): string[] {
   return list(value).map((v) => {
-    const match = allowed.find((a) => a.toLowerCase() === v.toLowerCase());
+    const match = exact ? allowed.find((a) => a === v) : allowed.find((a) => a.toLowerCase() === v.toLowerCase());
     if (!match) throw new AppError(400, `Invalid ${param} '${v}'. Allowed values: ${allowed.join(', ')}`);
     return match;
   });
@@ -116,7 +117,7 @@ function parseField(field: FieldFilter, raw: string): FilterValue {
       return parseIds(raw, field.param);
     }
     case 'enum':
-      return parseEnum(raw, field.param, field.values ?? []);
+      return parseEnum(raw, field.param, field.values ?? [], field.exact);
     case 'iexact':
       return list(raw).map((v) => v.toLowerCase());
     case 'boolean':
@@ -170,7 +171,7 @@ export function parseDocumentFilters(query: ParsedQs, documentType: string): Doc
 
   // Document-level
   const status = readParam(query, 'status');
-  if (status !== undefined) criteria.status = parseEnum(status, 'status', Object.values(DocumentStatus));
+  if (status !== undefined) criteria.status = parseEnum(status, 'status', Object.values(DocumentStatus), true);
   for (const param of ['search', 'documentNo', 'createdBy', 'approvedBy']) {
     const raw = readParam(query, param);
     if (raw !== undefined) criteria[param] = raw;

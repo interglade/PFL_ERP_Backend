@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne, Unique } from "typeorm";
+import { Column, Entity, Index, JoinColumn, ManyToOne } from "typeorm";
 import Model from "../../global/model.entity";
 import { User } from "../../employee/entity/user.entity";
 
@@ -61,8 +61,20 @@ export function normalizeDepartment(value: string): DepartmentEnum {
 }
 
 
+/**
+ * Closure table of each department's reporting tree. The depth-1 rows (who reports to whom)
+ * are the source of truth; every write rebuilds the department's other rows from them
+ * (WorkflowHierarchyService).
+ *
+ * The two unique indexes are created by migration 1792801400000-WorkflowHierarchyIntegrity
+ * (it removes duplicates first). `synchronize: false` keeps TypeORM sync from creating them on
+ * a database that still has duplicates, or dropping them as unknown.
+ */
 @Entity("workflow_hierarchy")
-// @Unique(["department", "ancestor", "descendant", "depth"]) // TODO: Uncomment after running cleanDuplicateWorkflowHierarchy script
+// (department, ancestor_id, descendant_id) unique
+@Index("UQ_workflow_hierarchy_pair", { synchronize: false })
+// (department, descendant_id) unique WHERE depth = 1: one direct manager
+@Index("UQ_workflow_hierarchy_one_manager", { synchronize: false })
 export class WorkflowHierarchy extends Model
  {
     

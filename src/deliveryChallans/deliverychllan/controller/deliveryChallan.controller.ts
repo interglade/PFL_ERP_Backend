@@ -40,8 +40,13 @@ export class DeliveryChallanController {
         ? isReturnByCustomerCreatedRaw === 'true'
         : undefined;
 
-      // overAllStatus filter — document status e.g. 'complete', 'reject', 'pending'
+      // overAllStatus filter — a document status, e.g. 'Complete', 'Rejected'
       const overAllStatus = req.query.overAllStatus as string | undefined;
+
+      // Receiving picker params (stock-transfer only): receivable=true, missing=aqr|inward|dump, toLocationId
+      const receivable = req.query.receivable === 'true' ? true : req.query.receivable === 'false' ? false : undefined;
+      const missing = typeof req.query.missing === 'string' && req.query.missing.trim() ? req.query.missing.trim() : undefined;
+      const toLocationId = typeof req.query.toLocationId === 'string' && req.query.toLocationId.trim() ? req.query.toLocationId.trim() : undefined;
 
       const result = await this.deliveryChallanService.getDcTypeNumbers(
         dcType,
@@ -50,6 +55,7 @@ export class DeliveryChallanController {
         search,
         isReturnByCustomerCreated,
         overAllStatus,
+        { receivable, missing, toLocationId },
       );
 
       res.status(200).json({

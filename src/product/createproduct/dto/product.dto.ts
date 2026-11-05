@@ -15,6 +15,9 @@ export interface ProductVariantDto {
   productName?: string | null;
   variantName?: string | null;
   variantCode?: string | null;
+  isActive?: boolean;
+  /** Attribute values of this combination. */
+  valueIds?: string[];
   count?: string | null;
   size?: string | null;
   variety?: string | null;
@@ -70,7 +73,11 @@ export interface CreateProductDto {
 
   thresholdStock?: number | null;
 
-  variant?: ProductVariantDto[];
+  /**
+   * `{ attributeValueIds, combinations? }`, as a JSON string from the
+   * multipart form. Absent leaves the variants unchanged.
+   */
+  variantSetup?: string | { attributeValueIds: string[]; combinations?: string[][] };
 
   qualityParameters?: QualityParameterDto[];
 }
@@ -108,6 +115,9 @@ export interface ProductDetailResponseDto {
   uom: string | null;
 
   qualityParameters: QualityParameterDto[];
+
+  /** The values the product may vary by, in attribute order. */
+  attributeValues: { id: string; value: string; attributeId?: string; attribute?: string }[];
 
   variant: ProductVariantDto[];
 }

@@ -3,6 +3,8 @@ import { InwardType } from "../entity/inwardRegister.entity";
 
 
 export interface CreateInwardProductDto {
+  /** Batch of the line (transfer / return receipts); set from the source by the server. */
+  batchNo?: string | null;
   productName: string;
   variant?: string;
   uom: string;
@@ -136,6 +138,8 @@ export interface InwardRegisterViewDto {
   id: string;
   inwardType: string;
   inwardNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   batchNo: string | null;
   remarks: string | null;
   source: string;
@@ -166,6 +170,8 @@ export interface InwardRegisterViewDto {
 // ─── Update (Edit) DTOs ───────────────────────────────────────────────────────
 
 export interface InwardUpdateProductDto {
+  /** Batch of the line (transfer / return receipts). */
+  batchNo?: string | null;
   id: string | null;
   productName: string | null;
   productCode: string | null;
@@ -188,6 +194,8 @@ export interface InwardRegisterUpdateDto {
   createdTime: string | null;
 
   inwardType: string;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   location: string | null;
   fromLocation: string | null;
@@ -230,6 +238,8 @@ export interface InwardRegisterListItemDto {
   batchNo: string | null;
   inwardType: string | null;
   inwardNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   source: string | null;
 
   inwardNetQty: number | null;
@@ -266,6 +276,8 @@ export interface InwardRegisterListResultDto {
 // ─── Update Input DTOs (request body) ────────────────────────────────────────
 
 export interface UpdateInwardProductInputDto {
+  /** Batch of the line (transfer / return receipts); set from the source by the server. */
+  batchNo?: string | null;
   productName?: string | null;
   variant?: string | null;
   uom?: string | null;

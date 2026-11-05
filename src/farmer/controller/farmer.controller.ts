@@ -1,3 +1,9 @@
+import { guardRegistrationEdit } from '../../middleware/registrationAccess';
+import { Farmer } from '../entity/farmer.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { checkPermission } from '../../middleware/checkPermission';
+import { registrationImportMessage } from '../../excel/registrationRow';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -23,6 +29,8 @@ import {
 
 
 import { PaginationOptions } from '../../utils/pagination';
+import { parseMasterFilters } from '../../global/filters/masterDataFilter';
+import { FARMER_FILTERS } from '../filters/farmer.filters';
 import { upload } from '../../middleware/upload.middleware';
 import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { s3 } from '../../middleware/spaces.config';
@@ -51,7 +59,7 @@ export class FarmerController {
   ) {}
 
   @httpPost(
-    '/',
+    '/', checkPermission('farmers', 'create'),
     upload.fields([
       { name: 'farmPhoto', maxCount: 1 },
       { name: 'farmerPhoto', maxCount: 1 },
@@ -130,7 +138,7 @@ export class FarmerController {
     }
   }
 
-   @httpGet('/')
+   @httpGet('/', checkPermission('farmers', 'view'))
   public async getAllFarmers(
     @request() req: Request,
     @response() res: Response,
@@ -145,8 +153,9 @@ export class FarmerController {
         filters: {},
         sort: (sort as string) || undefined,
         search: (search as string) || '',
+        masterFilters: parseMasterFilters(req.query, FARMER_FILTERS),
       };
-      
+
       const farmers = await this.farmerService.getAllFarmers(queryOptions,userId);
 
       if (!farmers) {
@@ -187,7 +196,7 @@ export class FarmerController {
    * - req.body madhe URL string asel → existing URL tashi rahu de
    */
   @httpPatch(
-    '/submit/:id',
+    '/submit/:id', checkPermission('farmers', 'create'),
     upload.fields([
       { name: 'farmPhoto', maxCount: 1 },
       { name: 'farmerPhoto', maxCount: 1 },
@@ -256,7 +265,7 @@ export class FarmerController {
     }
   }
 
-  @httpPatch("/approve/:id")
+  @httpPatch("/approve/:id", requireRole(Role.ADMIN, Role.VERIFIER))
   async approveFarmer(
     @requestParam('id') farmerId: string,
     @request() req: Request,
@@ -327,7 +336,7 @@ export class FarmerController {
 //     }
 //   }
 
-  @httpGet('/view/:id')
+  @httpGet('/view/:id', checkPermission('farmers', 'view'))
   public async getFarmerByIdforview(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -358,7 +367,7 @@ export class FarmerController {
     }
   }
 
-  @httpGet('/update/:id')
+  @httpGet('/update/:id', guardRegistrationEdit(Farmer, 'farmer'), checkPermission('farmers', 'edit'))
   public async getFarmerByIdforupdate(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -389,7 +398,8 @@ export class FarmerController {
     }
   }
 
-  @httpPost('/upload-farmer', uploadSingle.single('file'))
+  /** Admin only (docs/registration-import-plan.md D8); `?checkOnly=true` checks and saves nothing. */
+  @httpPost('/upload-farmer', requireRole(Role.ADMIN), uploadSingle.single('file'))
   public async uploadFarmerExcel(
     @request() req: Request,
     @response() res: Response,
@@ -408,18 +418,17 @@ export class FarmerController {
 
       // Every imported farmer is owned by whoever ran the import - the sheet
       // has no say in it.
+      const checkOnly = req.query.checkOnly === 'true';
       const summary = await this.farmerService.createFarmerwithExcel(
         (req.file as any).location || (req.file as any).path || req.file.filename,
         userId,
+        { checkOnly },
       );
 
       ControllerLogger.logSuccess('Farmer Excel uploaded', 'bulk', req, res);
       res.status(200).json({
         status: 'success',
-        message:
-          `${summary.created} farmer(s) imported` +
-          (summary.skipped.length ? `, ${summary.skipped.length} skipped` : '') +
-          (summary.failed.length ? `, ${summary.failed.length} failed` : ''),
+        message: registrationImportMessage('Farmers', summary, checkOnly),
         data: summary,
       });
     } catch (error) {
@@ -498,15 +507,14 @@ export class FarmerController {
 
 
   @httpPut(
-    '/:id',
+    '/:id', guardRegistrationEdit(Farmer, 'farmer'), checkPermission('farmers', 'edit'),
     captureUser,
     upload.fields([
       { name: 'farmPhoto', maxCount: 1 },
       { name: 'farmerPhoto', maxCount: 1 },
       { name: 'idProofCopy', maxCount: 1 },
       { name: 'sevenTwelveCopy', maxCount: 1 },
-    ]),
-  )
+    ]), protectBody)
   public async updateFarmer(
     @requestParam('id') id: string,
     @request() req: Request<{}, {}, any>,
@@ -602,7 +610,7 @@ export class FarmerController {
   // Returns every document slot (7/12, ID proof, farmer photo, farm photo)
   // with its stored URL and a JWT-gated download link via /files/download.
 
-  @httpGet('/attachments/:id')
+  @httpGet('/attachments/:id', checkPermission('farmers', 'view'))
   public async getFarmerAttachments(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -656,7 +664,7 @@ export class FarmerController {
   // The raw S3 URL is fetched from the DB and proxied through /files/download
   // so the download is always gated behind JWT auth.
 
-  @httpGet('/:id/download/id-proof')
+  @httpGet('/:id/download/id-proof', checkPermission('farmers', 'view'))
   public async downloadIdProof(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -676,7 +684,7 @@ export class FarmerController {
     }
   }
 
-  @httpGet('/:id/download/seven-twelve')
+  @httpGet('/:id/download/seven-twelve', checkPermission('farmers', 'view'))
   public async downloadSevenTwelve(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -696,7 +704,7 @@ export class FarmerController {
     }
   }
 
-  @httpGet('/:id/download/farmer-photo')
+  @httpGet('/:id/download/farmer-photo', checkPermission('farmers', 'view'))
   public async downloadFarmerPhoto(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -716,7 +724,7 @@ export class FarmerController {
     }
   }
 
-  @httpGet('/:id/download/farm-photo')
+  @httpGet('/:id/download/farm-photo', checkPermission('farmers', 'view'))
   public async downloadFarmPhoto(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -736,7 +744,7 @@ export class FarmerController {
     }
   }
 
-  @httpDelete('/:id')
+  @httpDelete('/:id', requireRole(Role.SUPER_ADMIN))
   public async deleteFarmer(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -826,7 +834,7 @@ export class FarmerController {
     }
   }
 
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('farmers', 'export'))
   public async exportFarmersExcel(
     @request() req: Request,
     @response() res: Response,
@@ -846,6 +854,7 @@ export class FarmerController {
         filters: {},
         sort: (sort as string) || undefined,
         search: (search as string) || '',
+        masterFilters: parseMasterFilters(req.query, FARMER_FILTERS),
       };
 
       const file = await this.farmerService.exportToExcel(queryOptions, userId);
@@ -876,7 +885,7 @@ export class FarmerController {
     }
   }
 
-  @httpGet('/download/template')
+  @httpGet('/download/template', requireRole(Role.ADMIN))
   public async downloadExcelTemplate(
     @request() req: Request,
     @response() res: Response,
@@ -916,7 +925,7 @@ export class FarmerController {
   }
 
   //TODO:Delete Mutilple
-   @httpDelete("/delete/multiple")
+   @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
   public async softDeleteMultipleFarmers(
     @request() req: Request,
     @response() res: Response,

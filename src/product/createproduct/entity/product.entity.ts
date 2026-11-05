@@ -5,6 +5,8 @@ import {
   JoinColumn,
   OneToMany,
   Index,
+  ManyToMany,
+  JoinTable,
 } from 'typeorm';
 
 import { QualityParameter } from './quantityParameter.entity';
@@ -14,6 +16,7 @@ import { ProductCategory } from '../../productCategory/entity/product_category.e
 import { UOM } from '../../../uom/entity/uom.entity';
 import { ProductVarient } from '../../productVarient/entity/productVarient.entity';
 import { ProductSubcategory } from '../../productSubcategory/entity/product_subcategory.entity';
+import { ProductAttributeValue } from '../../productAttribute/entity/productAttributeValue.entity';
 
 
 
@@ -63,6 +66,19 @@ export class Product extends Model {
     nullable  :true,
   })
   variant:ProductVarient[];
+
+  /** The attribute values this product may vary by; variants are built from these. */
+  @ManyToMany(() => ProductAttributeValue)
+  @JoinTable({
+    name: 'product_allowed_value',
+    joinColumn: { name: 'product_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'attribute_value_id', referencedColumnName: 'id' },
+  })
+  allowedValues: ProductAttributeValue[];
+
+  /** Last variant number handed out, so a deleted variant's code is never reused. */
+  @Column({ name: 'last_variant_seq', type: 'int', default: 0 })
+  lastVariantSeq: number;
 
   // @Index({ unique: true })
   @Column({ name: 'product_code', type: 'varchar', length: 100, nullable:true })

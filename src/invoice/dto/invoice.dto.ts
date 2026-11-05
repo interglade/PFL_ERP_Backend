@@ -1,4 +1,4 @@
-import { ammountStatus } from "../../utils/status.enum";
+import { GrnPaymentStatus } from "../../utils/status.enum";
 
 
 export interface InvoiceProductDto {
@@ -90,13 +90,16 @@ export type UpdateInvoiceDto = Partial<CreateInvoiceDto>;
 
 export interface InvoiceListItemDto {
   documentId?: string | null;
-  ammountStatus:ammountStatus;
+  /** Unpaid / Partial / Paid, from the recorded payments */
+  ammountStatus: GrnPaymentStatus;
   overAllStatus?: string | null;
   createdBy?: string | null;
   createdDate?: string | null;
   createdTime?: string | null;
   id: string;
   invoiceNo?: string | null;
+  /** Transaction number (the Customer DC's Sale), null before go-live. */
+  txnNo?: string | null;
   invoiceDate?: Date | null;
   vehicleNo?: string | null;
   companyName?: string | null;
@@ -126,6 +129,8 @@ export interface InvoiceDetailDto {
     secondFinalized?: { userId: string; name: string; status: string; reason: string | null } | null;
   } | null;
   invoiceNo?: string | null;
+  /** Transaction number (the Customer DC's Sale), null before go-live. */
+  txnNo?: string | null;
   invoiceDate?: Date | null;
   createdDate?: string | null;
   createdTime?: string | null;

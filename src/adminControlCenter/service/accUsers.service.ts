@@ -33,9 +33,9 @@ const FLOW_CATEGORY: Record<string, 'Procurement' | 'Sale' | 'Operation'> = {
   Sale: 'Sale',
   DC_TYPE_CUSTOMER: 'Sale',
   'second-sale': 'Sale',
+  DC_TYPE_OTHER: 'Sale',
   Operation: 'Operation',
   DC_TYPE_STOCK_TRANSFER: 'Operation',
-  DC_TYPE_OTHER: 'Operation',
   'vehicle-dispatch-register': 'Operation',
 };
 
@@ -237,7 +237,7 @@ export class AccUsersService {
   private async notInWorkflow(): Promise<Gap[]> {
     const rows: any[] = await this.dataSource.query(
       `SELECT e.id FROM employees e
-        WHERE e."isDeleted" = false AND e.status::text = 'ACTIVE'
+        WHERE e."isDeleted" = false AND e.status::text = 'Active'
           AND NOT ('admin' = ANY(e.roles::text[]))
           AND NOT EXISTS (SELECT 1 FROM workflow_hierarchy h
                            WHERE (h.ancestor_id = e.id OR h.descendant_id = e.id)
@@ -257,7 +257,7 @@ export class AccUsersService {
         `SELECT DISTINCT p."employeeId" AS "userId", dd."documentType"::text AS "docType"
            FROM document_permissions p
            JOIN document_definitions dd ON dd.id = p.document_definition_id
-           JOIN employees e ON e.id = p."employeeId" AND e."isDeleted" = false AND e.status::text = 'ACTIVE'
+           JOIN employees e ON e.id = p."employeeId" AND e."isDeleted" = false AND e.status::text = 'Active'
           WHERE p."canCreate" = true AND p."isDeleted" = false`,
       ),
       this.dataSource.query(
@@ -286,7 +286,7 @@ export class AccUsersService {
     const rows: any[] = await this.dataSource.query(
       `WITH live_flows AS (
          SELECT f.* FROM approval_flows f
-           JOIN employees c ON c.id = f.creator_id AND c."isDeleted" = false AND c.status::text = 'ACTIVE'
+           JOIN employees c ON c.id = f.creator_id AND c."isDeleted" = false AND c.status::text = 'Active'
           WHERE f."isDeleted" = false
        ),
        participants AS (
@@ -308,7 +308,7 @@ export class AccUsersService {
        SELECT p.user_id::text AS "userId", COUNT(DISTINCT p.flow)::int AS flows
          FROM participants p
          JOIN employees e ON e.id = p.user_id
-        WHERE e."isDeleted" = true OR e.status::text <> 'ACTIVE'
+        WHERE e."isDeleted" = true OR e.status::text <> 'Active'
         GROUP BY p.user_id`,
     );
     return rows.map((r) => ({
@@ -364,7 +364,7 @@ export class AccUsersService {
   private async flowConfigGaps(): Promise<Gap[]> {
     const flows: any[] = await this.dataSource.query(
       `SELECT f.id, f.creator_id AS "creatorId" FROM approval_flows f
-         JOIN employees c ON c.id = f.creator_id AND c."isDeleted" = false AND c.status::text = 'ACTIVE'
+         JOIN employees c ON c.id = f.creator_id AND c."isDeleted" = false AND c.status::text = 'Active'
         WHERE f."isDeleted" = false AND f.type::text = 'Procurement'`,
     );
     const defs = await loadFlows(this.dataSource, flows.map((f) => f.id));

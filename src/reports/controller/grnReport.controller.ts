@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import {
   controller,
   httpPost,
@@ -37,7 +38,7 @@ export class GrnReportController {
     this.bucketName = process.env.DO_SPACES_BUCKET || 'your-bucket-name';
   }
 
-  @httpPost('/download')
+  @httpPost('/download', checkPermission('purchase-report', 'export'))
   async downloadGrnReport(
     @request() req: Request,
     @response() res: Response,
@@ -129,12 +130,10 @@ export class GrnReportController {
       status,
       billNo,
       grnNo,
-      requestingDepartment,
+      batchNo,
       purchaseInstructionsBy,
       purchaseBy,
-      vehicleNo,
-      receivedThrough,
-      deliveryReceivingPerson,
+      receivingPerson,
       securityPerson,
       rmn,
     } = body;
@@ -171,12 +170,10 @@ export class GrnReportController {
       status,
       billNo,
       grnNo,
-      requestingDepartment,
+      batchNo,
       purchaseInstructionsBy,
       purchaseBy,
-      vehicleNo,
-      receivedThrough,
-      deliveryReceivingPerson,
+      receivingPerson,
       securityPerson,
       rmn,
     };

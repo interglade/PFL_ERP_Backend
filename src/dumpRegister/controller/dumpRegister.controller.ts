@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView, restartApprovalAfterEditOf } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from "inversify";
 import {
   controller,
@@ -43,7 +49,7 @@ export class DumpRegisterController {
     private readonly documentExportService: DocumentExportService,
   ) {}
 
-  @httpPost("/")
+  @httpPost("/", checkPermission('dump-register', 'create'))
   public async createDumpRegister(
     @request() req: Request<{}, {}, CreateDumpRegisterDto>,
     @response() res: Response,
@@ -99,7 +105,7 @@ export class DumpRegisterController {
 
 
 
-  @httpGet("/recyclebin")
+  @httpGet("/recyclebin", requireRole(Role.SUPER_ADMIN))
   public async getAllRecycleBinDumpRegisters(
     @request() req: Request,
     @response() res: Response,
@@ -144,7 +150,7 @@ export class DumpRegisterController {
     }
   }
 
-  @httpGet("/update/:id")
+  @httpGet("/update/:id", checkPermission('dump-register', 'edit'), guardDocumentEdit(ApprovalDocType.DUMP_REGISTER, 'Dump Register'))
   public async getDumpRegisterByIdforupate(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -170,7 +176,7 @@ export class DumpRegisterController {
     }
   }
 
-  @httpGet("/view/:id")
+  @httpGet("/view/:id", checkPermission('dump-register', 'view'), guardDocumentView(ApprovalDocType.DUMP_REGISTER, 'Dump Register'))
   public async getDumpRegisterByIdforView(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -201,7 +207,7 @@ export class DumpRegisterController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('dump-register', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -215,7 +221,7 @@ export class DumpRegisterController {
     });
   }
 
-  @httpGet("/")
+  @httpGet("/", checkPermission('dump-register', 'view'))
   public async getAllDumpRegisters(
     @request() req: Request,
     @response() res: Response,
@@ -275,7 +281,7 @@ export class DumpRegisterController {
     }
   }
 
-  @httpPatch("/:id", captureUser)
+  @httpPatch("/:id", checkPermission('dump-register', 'edit'), guardDocumentEdit(ApprovalDocType.DUMP_REGISTER, 'Dump Register'), captureUser, protectBody)
   public async updateDumpRegister(
     @requestParam("id") id: string,
     @request() req: Request<{ id: string }, {}, UpdateDumpRegisterDto>,
@@ -291,6 +297,8 @@ export class DumpRegisterController {
         ControllerLogger.logNotFound('Dump Register', id, req, res);
         return next(new AppError(404, "Dump register not found or could not be updated"));
       }
+      // Edited before the second approval: the approval starts again
+      await restartApprovalAfterEditOf(ApprovalDocType.DUMP_REGISTER, id, 'Dump Register edited: approval restarted');
 
       await this.notificationService.createNoti(
         `Dump register updated`,
@@ -325,7 +333,7 @@ export class DumpRegisterController {
     }
   }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", checkPermission('dump-register', 'delete'), guardDocumentDelete(ApprovalDocType.DUMP_REGISTER, 'Dump Register'))
   public async deleteDumpRegister(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -389,7 +397,7 @@ export class DumpRegisterController {
 
 
 
-  @httpDelete("/delete/multiple/dumpRegisters")
+  @httpDelete("/delete/multiple/dumpRegisters", checkPermission('dump-register', 'delete'), guardDocumentDelete(ApprovalDocType.DUMP_REGISTER, 'Dump Register'))
   public async deleteMultipleDumpRegisters(
     @request() req: Request<{}, {}, { ids: string[] }>,
     @response() res: Response,

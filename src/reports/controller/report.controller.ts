@@ -1,3 +1,4 @@
+import { checkPermission, checkAnyPermission } from '../../middleware/checkPermission';
 import { inject } from 'inversify';
 import {
   controller,
@@ -71,7 +72,7 @@ export class ReportController {
     this.bucketName = process.env.DO_SPACES_BUCKET || 'your-bucket-name';
   }
 
-  @httpPost('/generate')
+  @httpPost('/generate', checkAnyPermission(['purchase-report', 'view'], ['sales-report', 'view']))
   public async generateReport(
     @request() req: Request,
     @response() res: Response,
@@ -149,7 +150,7 @@ export class ReportController {
     }
   }
 
-  @httpPost('/summary')
+  @httpPost('/summary', checkAnyPermission(['purchase-report', 'view'], ['sales-report', 'view']))
   public async getReportSummary(
     @request() req: Request,
     @response() res: Response,
@@ -199,7 +200,7 @@ export class ReportController {
     }
   }
 
-  @httpPost('/export-excel')
+  @httpPost('/export-excel', checkAnyPermission(['purchase-report', 'export'], ['sales-report', 'export']))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -258,7 +259,7 @@ export class ReportController {
     }
   }
 
-  @httpPost('/download/procurementReport')
+  @httpPost('/download/procurementReport', checkPermission('purchase-report', 'export'))
   public async exportToExcelAndStore(
     @request() req: Request,
     @response() res: Response,
@@ -341,7 +342,7 @@ export class ReportController {
     }
   }
 
-  @httpPost('/download/salesReport')
+  @httpPost('/download/salesReport', checkPermission('sales-report', 'export'))
   public async exportSalesReportToExcelAndStore(
     @request() req: Request,
     @response() res: Response,

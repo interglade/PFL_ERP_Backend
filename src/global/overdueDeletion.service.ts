@@ -1,6 +1,7 @@
 import { Repository} from 'typeorm';
 import { AppDataSource } from '../utils/data-source';
 import Model from './model.entity';
+import { refreshTransaction } from '../transactions/transaction.core';
 
 export class OverdueDeletionService {
 //     // Helper method to get the repository for any entity that extends Model
@@ -13,13 +14,25 @@ export class OverdueDeletionService {
         try {
             // Get the repository for the entity
             const repo = this.getRepositoryForEntity(entity);
-    
+
+            // Transactions of the rows about to go: refreshed after the delete so they turn Cancelled / move on.
+            const hasTxnNo = repo.metadata.columns.some((c) => c.databaseName === 'txn_no');
+            const txnNos: string[] = hasTxnNo
+                ? (await repo.createQueryBuilder('rec')
+                    .select('DISTINCT rec.txn_no', 'txn_no')
+                    .where('rec.deletionScheduledAt <= :date', { date: new Date() })
+                    .andWhere('rec.txn_no IS NOT NULL')
+                    .getRawMany<{ txn_no: string }>()).map((r) => r.txn_no)
+                : [];
+
             const result = await repo
                 .createQueryBuilder()
                 .delete()  // Directly delete records in one operation
                 .where('deletionScheduledAt <= :date', { date: new Date() })
                 .execute();
     
+            for (const txnNo of txnNos) await refreshTransaction(AppDataSource.manager, txnNo);
+
             if (result.affected) {
                 console.log(`Deleted ${result.affected} overdue records for ${entity.name}.`);
             } else {

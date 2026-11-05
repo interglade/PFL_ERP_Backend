@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from "inversify";
 import {
   controller,
@@ -138,7 +140,7 @@ export class UOMController {
     }
   }
 
-  @httpPost("/")
+  @httpPost("/", requireRole(Role.ADMIN))
   public async create(
     @requestBody() uomData: CreateUOMDto,
     @request() req: Request,
@@ -169,7 +171,7 @@ export class UOMController {
     }
   }
 
-  @httpPatch("/:id",captureUser)
+  @httpPatch("/:id", requireRole(Role.ADMIN),captureUser)
   public async update(
     @requestParam("id") id: string,
     @requestBody() uomData: UpdateUOMDto,
@@ -207,7 +209,7 @@ export class UOMController {
     }
   }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", requireRole(Role.SUPER_ADMIN))
   public async delete(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -247,7 +249,7 @@ export class UOMController {
     }
   }
 
-  @httpDelete("/multiple-delete/delete")
+  @httpDelete("/multiple-delete/delete", requireRole(Role.SUPER_ADMIN))
   public async multipleDelete(
     @requestBody() body: BulkDeleteUOMDto,
     @request() req: Request,

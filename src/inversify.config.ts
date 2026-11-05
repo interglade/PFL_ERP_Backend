@@ -61,6 +61,15 @@ import { ProductController } from "./product/createproduct/controller/product.co
 import { DriversService } from "./driver/service/driver.service";
 import { DriverRepository } from "./driver/repository/driver.repository";
 import { DriverController } from "./driver/controller/drivers.controller";
+import { Drivers } from "./driver/entity/driver.entity";
+import { TransporterService } from "./transporter/service/transporter.service";
+import { TransporterRepository } from "./transporter/repository/transporter.repository";
+import { TransporterController } from "./transporter/controller/transporter.controller";
+import { Transporter } from "./transporter/entity/transporter.entity";
+import { VehicleService } from "./vehicle/service/vehicle.service";
+import { VehicleRepository } from "./vehicle/repository/vehicle.repository";
+import { VehicleController } from "./vehicle/controller/vehicle.controller";
+import { Vehicle } from "./vehicle/entity/vehicle.entity";
 import { ProductClassificationService} from "./product/productClassification/service/product_classification.service";
 import { ProductClassificationController } from "./product/productClassification/controller/productClassification.controller";
 import { ProductClassificationRepository } from "./product/productClassification/repository/product_classification.repository";
@@ -103,6 +112,7 @@ import { RfpaController } from "./rfpa/controller/rfpa.controller";
 import { DealSlip } from "./dealSlip/entity/dealSlip.entity";
 import { DealSlipRepository } from "./dealSlip/repository/dealSlip.repository";
 import { DealSlipService } from "./dealSlip/service/dealSlip.service";
+import { DealSlipAutoCreateService } from "./dealSlip/service/dealSlipAutoCreate.service";
 import { DealSlipController } from "./dealSlip/controller/dealSlip.controller";
 import { GrnRepository } from "./grn/repository/grn.repository";
 import { GRN } from "./grn/entity/grn.entity";
@@ -251,8 +261,6 @@ import { InventoryStockService } from "./inventoryStock/service/inventoryStock.s
 import { InventoryMovementService } from "./inventoryStock/service/inventoryMovement.service";
 import { ProductVarientsRepository } from "./product/productVarient/repository/productVarients.repository";
 import { ProductVarient } from "./product/productVarient/entity/productVarient.entity";
-import { ProductVarientService } from "./product/productVarient/service/productVarient.service";
-import { ProductVarientController } from "./product/productVarient/controller/productVarient.controller";
 import { PackingMaterialRepository } from "./packingMaterial/repository/packingMaterial.repository";
 import { PackingMaterial } from "./packingMaterial/entity/packingMaterial.entity";
 import { PackingMaterialService } from "./packingMaterial/service/packingMaterial.service";
@@ -289,6 +297,16 @@ import { AdminDashboardService } from "./dashboard/service/adminDashboardService
 import { WeeklyBusinessPlanService } from "./dashboard/service/weeklyBusinessPlan.service";
 import { AdminDashboardController } from "./dashboard/controller/adminDashboard.controller";
 import { AdminControlCenterController } from "./adminControlCenter/controller/adminControlCenter.controller";
+import { MyDashboardController } from "./myDashboard/controller/myDashboard.controller";
+import { MyWorkService } from "./myDashboard/service/myWork.service";
+import { MyPaymentsService } from "./myDashboard/service/myPayments.service";
+import { MyDepartmentsService } from "./myDashboard/service/myDepartments.service";
+import { ReportCenterController } from "./reportCenter/controller/reportCenter.controller";
+import { ReportCenterService } from "./reportCenter/service/reportCenter.service";
+import { MasterDataExcelService } from "./masterData/service/masterDataExcel.service";
+import { MasterDataExcelController } from "./masterData/controller/masterDataExcel.controller";
+import { LocationExcelService } from "./masterData/service/locationExcel.service";
+import { EmployeeExcelService } from "./employee/service/employeeExcel.service";
 import { AccFiltersService } from "./adminControlCenter/service/accFilters.service";
 import { AccOverviewService } from "./adminControlCenter/service/accOverview.service";
 import { AccPurchaseService } from "./adminControlCenter/service/accPurchase.service";
@@ -298,6 +316,8 @@ import { AccUsersService } from "./adminControlCenter/service/accUsers.service";
 import { ProductVarientRepository } from "./product/productVarient/repository/varients.repository";
 import { ProductVarientsService } from "./product/productVarient/service/varients.service";
 import { VarientsController } from "./product/productVarient/controller/varient.controller";
+import { ProductAttributeService } from "./product/productAttribute/service/productAttribute.service";
+import { ProductAttributeController } from "./product/productAttribute/controller/productAttribute.controller";
 import { ExcelController } from "./getExcel/getexcel.controller";
 import { ActiveSessionRepository } from "./auth/repository/activeSession.repository";
 import { ActiveSession } from "./auth/entity/activeSession.entity";
@@ -370,6 +390,18 @@ import { StockCorrectionController } from "./stockCorrection/controller/stockCor
 import { GrnProductHistoryRepository } from "./grn/repository/grnProductHistory.repository";
 import { GrnProductHistoryService } from "./grn/service/grnProductHistory.service";
 import { GrnProductHistory } from "./grn/entity/grnProductHistory.entity";
+import { GrnPaymentService } from "./grn/service/grnPayment.service";
+import { GrnPaymentController } from "./grn/controller/grnPayment.controller";
+import { InvoicePaymentService } from "./invoice/service/invoicePayment.service";
+import { InvoicePaymentController } from "./invoice/controller/invoicePayment.controller";
+import { ReceivingStatusService } from "./receiving/service/receivingStatus.service";
+import { TransactionService } from "./transactions/service/transaction.service";
+import { TransactionController } from "./transactions/controller/transaction.controller";
+import { ReceivingGuardService } from "./receiving/service/receivingGuard.service";
+import { ReceivingController } from "./receiving/controller/receiving.controller";
+import { StockBatchController } from "./inventoryStock/controller/stockBatch.controller";
+import { StockAdjustmentService } from "./inventoryStock/adjustment/stockAdjustment.service";
+import { DcDeliveryController } from "./deliveryChallans/customerDeliveryChllan/controller/dcDelivery.controller";
 
 const container = new Container();
 //socket server
@@ -628,9 +660,25 @@ container
  
 
 //-------------------------driver------------------------------
-container.bind<DriversService>(TYPES.DriversService).to(DriversService);
-container.bind<DriverRepository>(TYPES.DriverRepository).to(DriverRepository).inSingletonScope();
+container.bind<DriversService>(TYPES.DriversService).to(DriversService).inSingletonScope();
+container.bind<DriverRepository>(TYPES.DriverRepository).toDynamicValue((context) => {
+  const dataSource = context.container.get<DataSource>(TYPES.DataSource);
+  return dataSource.getRepository(Drivers).extend(DriverRepository);
+}).inSingletonScope();
 container.bind<DriverController>(TYPES.DriverController).to(DriverController).inSingletonScope();
+//-------------------------transporter / vehicle registration------------------------------
+container.bind<TransporterService>(TYPES.TransporterService).to(TransporterService).inSingletonScope();
+container.bind<TransporterRepository>(TYPES.TransporterRepository).toDynamicValue((context) => {
+  const dataSource = context.container.get<DataSource>(TYPES.DataSource);
+  return dataSource.getRepository(Transporter).extend(TransporterRepository);
+}).inSingletonScope();
+container.bind<TransporterController>(TYPES.TransporterController).to(TransporterController).inSingletonScope();
+container.bind<VehicleService>(TYPES.VehicleService).to(VehicleService).inSingletonScope();
+container.bind<VehicleRepository>(TYPES.VehicleRepository).toDynamicValue((context) => {
+  const dataSource = context.container.get<DataSource>(TYPES.DataSource);
+  return dataSource.getRepository(Vehicle).extend(VehicleRepository);
+}).inSingletonScope();
+container.bind<VehicleController>(TYPES.VehicleController).to(VehicleController).inSingletonScope();
 //-------------------------------productclassfication------------------------------
 container.bind<ProductClassificationService>(TYPES.ProductClassificationService).to(ProductClassificationService);
 container.bind<ProductClassificationController>(TYPES.ProductClassificationController).to(ProductClassificationController);
@@ -748,6 +796,7 @@ container.bind<DealSlipRepository>(TYPES.DealSlipRepository).toDynamicValue((con
   return dataSource.getRepository(DealSlip).extend(DealSlipRepository);
 }).inRequestScope(); // or .singletonScope() depending on your scope requirements
 container.bind<DealSlipService>(TYPES.DealSlipService).to(DealSlipService);
+container.bind<DealSlipAutoCreateService>(TYPES.DealSlipAutoCreateService).to(DealSlipAutoCreateService).inSingletonScope();
 container.bind<DealSlipController>(TYPES.DealSlipController).to( DealSlipController);
 
 //----------------------------------Grn---------------------------------
@@ -1075,8 +1124,6 @@ container.bind<ProductVarientsRepository>(TYPES.ProductVarientsRepository).toDyn
   const dataSource = context.container.get<DataSource>(TYPES.DataSource);
   return dataSource.getRepository(ProductVarient).extend(ProductVarientsRepository);
 }).inRequestScope(); 
-container.bind<ProductVarientService>(TYPES.ProductVarientService).to(ProductVarientService).inSingletonScope();
-container.bind<ProductVarientController>(TYPES.ProductVarientsController).to(ProductVarientController).inSingletonScope();
 //packingmaterial
 container.bind<PackingMaterialRepository>(TYPES.PackingMaterialRepository).toDynamicValue((context) => {
   const dataSource = context.container.get<DataSource>(TYPES.DataSource);
@@ -1161,6 +1208,8 @@ container.bind<ProductVarientRepository>(TYPES.ProductVarientRepository).toDynam
 }).inRequestScope();
 container.bind<ProductVarientsService>(TYPES.ProductVarientsService).to(ProductVarientsService).inSingletonScope();
 container.bind<VarientsController>(TYPES.VarientsController).to(VarientsController).inSingletonScope();
+container.bind<ProductAttributeService>(TYPES.ProductAttributeService).to(ProductAttributeService).inSingletonScope();
+container.bind<ProductAttributeController>(TYPES.ProductAttributeController).to(ProductAttributeController).inSingletonScope();
 container.bind<ExcelController>(TYPES.ExcelController).to(ExcelController).inSingletonScope();
 container.bind<ActiveSessionRepository>(TYPES.ActiveSessionRepository).toDynamicValue((context) => {
   const dataSource = context.container.get<DataSource>(TYPES.DataSource);
@@ -1366,6 +1415,23 @@ container.bind<GrnProductHistoryRepository>(TYPES.GrnProductHistoryRepository).t
   return dataSource.getRepository(GrnProductHistory).extend(GrnProductHistoryRepository);
 }).inRequestScope();
 container.bind<GrnProductHistoryService>(TYPES.GrnProductHistoryService).to(GrnProductHistoryService).inSingletonScope();
+// GRN payment history (docs/grn-payment-history-plan.md)
+container.bind<GrnPaymentService>(TYPES.GrnPaymentService).to(GrnPaymentService);
+container.bind<GrnPaymentController>(TYPES.GrnPaymentController).to(GrnPaymentController);
+container.bind<InvoicePaymentService>(TYPES.InvoicePaymentService).to(InvoicePaymentService);
+container.bind<InvoicePaymentController>(TYPES.InvoicePaymentController).to(InvoicePaymentController);
+
+// Receiving links: live source status, Arrivals worklist and the one-per-source guard
+container.bind<ReceivingStatusService>(TYPES.ReceivingStatusService).to(ReceivingStatusService).inSingletonScope();
+container.bind<ReceivingGuardService>(TYPES.ReceivingGuardService).to(ReceivingGuardService).inSingletonScope();
+container.bind<ReceivingController>(TYPES.ReceivingController).to(ReceivingController).inSingletonScope();
+container.bind<StockBatchController>(TYPES.StockBatchController).to(StockBatchController).inSingletonScope();
+container.bind<StockAdjustmentService>(TYPES.StockAdjustmentService).to(StockAdjustmentService).inSingletonScope();
+container.bind<DcDeliveryController>(TYPES.DcDeliveryController).to(DcDeliveryController).inSingletonScope();
+
+// Report Center (docs/reports-plan.md)
+container.bind<ReportCenterService>(TYPES.ReportCenterService).to(ReportCenterService).inSingletonScope();
+container.bind<ReportCenterController>(TYPES.ReportCenterController).to(ReportCenterController).inSingletonScope();
 
 // Admin Control Center dashboard
 container.bind<AccFiltersService>(TYPES.AccFiltersService).to(AccFiltersService).inSingletonScope();
@@ -1375,4 +1441,20 @@ container.bind<AccSalesService>(TYPES.AccSalesService).to(AccSalesService).inSin
 container.bind<AccDocumentsService>(TYPES.AccDocumentsService).to(AccDocumentsService).inSingletonScope();
 container.bind<AccUsersService>(TYPES.AccUsersService).to(AccUsersService).inSingletonScope();
 container.bind<AdminControlCenterController>(TYPES.AdminControlCenterController).to(AdminControlCenterController).inSingletonScope();
+
+// Standard user dashboard (docs/user-dashboard-plan.md)
+container.bind<MyWorkService>(TYPES.MyWorkService).to(MyWorkService).inSingletonScope();
+container.bind<MyPaymentsService>(TYPES.MyPaymentsService).to(MyPaymentsService).inSingletonScope();
+container.bind<MyDepartmentsService>(TYPES.MyDepartmentsService).to(MyDepartmentsService).inSingletonScope();
+container.bind<MyDashboardController>(TYPES.MyDashboardController).to(MyDashboardController).inSingletonScope();
+
+// Master data Excel import / export (docs/master-data-excel-plan.md)
+container.bind<LocationExcelService>(TYPES.LocationExcelService).to(LocationExcelService).inSingletonScope();
+container.bind<EmployeeExcelService>(TYPES.EmployeeExcelService).to(EmployeeExcelService).inSingletonScope();
+container.bind<MasterDataExcelService>(TYPES.MasterDataExcelService).to(MasterDataExcelService).inSingletonScope();
+container.bind<MasterDataExcelController>(TYPES.MasterDataExcelController).to(MasterDataExcelController).inSingletonScope();
+
+// Transaction tracking (docs/transaction-tracking-plan.md)
+container.bind<TransactionService>(TYPES.TransactionService).to(TransactionService).inSingletonScope();
+container.bind<TransactionController>(TYPES.TransactionController).to(TransactionController).inSingletonScope();
 export { container };

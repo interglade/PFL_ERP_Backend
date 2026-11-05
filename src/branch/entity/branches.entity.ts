@@ -1,11 +1,10 @@
-import { Entity, Column, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
+import { Entity, Column, ManyToOne, JoinColumn } from 'typeorm';
 
 import Model from '../../global/model.entity';
 
 import { ApprovalLevel } from '../../approvalFlow/entity/approvalLevel.entity';
 import { Address } from '../../address/entity/address.entity';
 import { User } from '../../employee/entity/user.entity';
-import { GRN } from '../../grn/entity/grn.entity';
 
 
 export enum BranchType {
@@ -56,8 +55,6 @@ export class Branches extends Model {
   @Column({ type: 'text', nullable: true })
   prefix: string;
 
-  @OneToMany(() => GRN, (grn) => grn.location, { onDelete: 'SET NULL' })
-  grns: GRN[];
   // @OneToMany(() => ApprovalLevel, (level) => level.location)
   // approvalLevels: ApprovalLevel[];
 

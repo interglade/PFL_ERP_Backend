@@ -1,3 +1,7 @@
+import { invoiceHasLivePayments } from './invoicePayment.service';
+import { assertDeliveryConfirmed } from '../../deliveryChallans/customerDeliveryChllan/service/dcDelivery';
+import { normalizePricingBasis } from '../../deliveryChallans/deliverychllan/service/dcPricing';
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 
@@ -20,13 +24,16 @@ import { CacheService } from '../../global/cache.service';
 import AppError from '../../utils/appError';
 import { Documentb, DocumentStatus, DocumentTypeEnum } from '../../approvalFlow/entity/docuemnt.entity';
 import { DocumentTypeEnum as DocDefEnum } from '../../documentDef/entity/documentdef.entity';
+import { dcIdsOfSalesDocuments, syncCustomerDcSalesLinks } from '../../deliveryChallans/customerDeliveryChllan/service/dcSalesLinks';
+import { attachToDcTransaction } from '../../deliveryChallans/customerDeliveryChllan/service/dcTransaction';
+import { refreshTransactionOf } from '../../transactions/transaction.core';
 import { applyDocumentFilters, safeSqlSort } from '../../global/filters/documentFilter.query';
 import { ApprovalFlowService } from '../../approvalFlow/service/approvalFlow.service';
 import { formatDateTime } from '../../utils/dateUtils';
 import logger from '../../utils/logger';
 import { PaginationOptions } from '../../utils/pagination';
 import { BulkDeleteResultDto } from '../../global/general.dto';
-import { ammountStatus } from '../../utils/status.enum';
+import { assertCustomerDcReady } from '../../vehicleDispatch/service/dispatchRules';
 
 @injectable()
 export class FinalInvoiceService {
@@ -121,9 +128,17 @@ export class FinalInvoiceService {
         throw new AppError(400, `Invoice has already been created for this delivery challan`);
       }
 
+      // DC and its vehicle dispatch must be approved (docs/dispatch-enforcement-plan.md D6).
+      await assertCustomerDcReady(queryRunner.manager, deliveryChallanId);
+      // The invoice waits for the delivery confirmation (D-1 / D-3).
+      await assertDeliveryConfirmed(queryRunner.manager, deliveryChallanId);
+
       // Generate invoice number
       const companyName = deliveryChallan.companyName?.name || 'Company';
-      const locationPrefix = deliveryChallan.fromLocation?.name || 'LOC';
+      // Location prefix code (Vashi DC → VAS), not its name: invoice numbers stay short and space-free
+      const locationPrefix = (deliveryChallan.fromLocation?.prefix || deliveryChallan.fromLocation?.name || 'LOC')
+        .replace(/[^A-Za-z0-9]/g, '')
+        .toUpperCase();
       const invoiceNo = await this.generateInvoiceNo(companyName, locationPrefix);
 
       // ── Per-product calculations based on accepted qty ──────────────────────
@@ -139,12 +154,17 @@ export class FinalInvoiceService {
           : originalQty - returnedQty - rejectedQty;
 
         const unitPrice     = Number(dcProduct.unitPrice  ?? 0);
-        const acceptedAmt   = parseFloat((acceptedQty * unitPrice).toFixed(4));
 
         // Weight proportional to accepted / original qty
         const ratio         = originalQty > 0 ? acceptedQty / originalQty : 1;
         const acceptedGross = parseFloat((Number(dcProduct.grossWeight ?? 0) * ratio).toFixed(4));
         const acceptedNet   = parseFloat((Number(dcProduct.netWeight   ?? 0) * ratio).toFixed(4));
+
+        // Billed per unit (accepted qty × price) or per kg (accepted net kg × price), as on the DC line.
+        const pricingBasis  = normalizePricingBasis(dcProduct.pricingBasis);
+        const acceptedAmt   = pricingBasis === 'per_kg'
+          ? parseFloat((acceptedNet * unitPrice).toFixed(4))
+          : parseFloat((acceptedQty * unitPrice).toFixed(4));
 
         return {
           productName:  dcProduct.productName,
@@ -155,6 +175,7 @@ export class FinalInvoiceService {
           returnedQty,
           rejectedQty,
           unitPrice,
+          pricingBasis,
           amount:       acceptedAmt,
           grossWeight:  acceptedGross,
           netWeight:    acceptedNet,
@@ -187,9 +208,20 @@ export class FinalInvoiceService {
         .replace(/\b\w/g, (c: string) => c.toUpperCase()) + ' Only';
 
       // ── Build invoice header ──────────────────────────────────────────────
+      // Vehicle of the goods: the DC's sales dispatch, or the GRN's purchase dispatch on a direct sale
+      const [vehicleRow] = await queryRunner.manager.query(
+        `SELECT d."vehicleNo" FROM dispatch d
+          WHERE COALESCE(d."isDeleted", false) = false
+            AND (d.delivery_challan_id = $1
+                 OR d.grn_id = (SELECT dc.grn_id FROM delivery_challan_purchase dc WHERE dc.id = $1))
+          ORDER BY (d.delivery_challan_id = $1) DESC, d."createdAt" DESC LIMIT 1`,
+        [deliveryChallanId],
+      );
+
       const invoiceData = {
         invoiceNo,
         invoiceDate:        additionalData.invoiceDate || new Date(),
+        vehicleNo:          additionalData.vehicleNo || vehicleRow?.vehicleNo || null,
         companyName:        deliveryChallan.companyName,
         deliveryChallan:    { id: deliveryChallanId },
         customerName:       deliveryChallan.customerName,
@@ -197,7 +229,6 @@ export class FinalInvoiceService {
         fromLocation:       deliveryChallan.fromLocation,
         billingAddress:     deliveryChallan.billingAddress,
         deliveryAddress:    deliveryChallan.deliveryAddress,
-        vehicleNo:          deliveryChallan.vehicleNo,
         placeOfSupply:      additionalData.placeOfSupply || deliveryChallan.deliveryAddress?.state,
         totalProductAmount,
         netProductWeight,
@@ -229,6 +260,9 @@ export class FinalInvoiceService {
       // Mark delivery challan as invoice created
       deliveryChallan.isInvoiceCreated = true;
       await queryRunner.manager.save(deliveryChallan);
+
+      // Transaction number: the invoice joins its Customer DC's Sale (docs/transaction-tracking-plan.md §9.4).
+      await attachToDcTransaction(queryRunner.manager, 'final-invoice', savedInvoice.id);
 
       //console.log("Creating document for final invoice...");
       // Create document
@@ -276,38 +310,21 @@ export class FinalInvoiceService {
     }
   }
 
+  /**
+   * `INITIALS-YEAR-LOCATION-00001`, the serial running per company initials +
+   * year + location and issued by the shared sequence (no race between two
+   * invoices, location names containing "-" no longer reset the serial).
+   */
   private async generateInvoiceNo(companyName: string, locationPrefix: string): Promise<string> {
-    // Get the last invoice for this company and location
-    const lastInvoice = await this.invoiceRepository
-      .createQueryBuilder('invoice')
-      .leftJoinAndSelect('invoice.companyName', 'company')
-      .leftJoinAndSelect('invoice.fromLocation', 'location')
-      .where('company.name = :companyName', { companyName })
-      .andWhere('location.name = :locationPrefix', { locationPrefix })
-      .orderBy('invoice.createdAt', 'DESC')
-      .getOne();
-
-    let lastSerialNumber = 0;
-    
-    if (lastInvoice && lastInvoice.invoiceNo) {
-      // Extract serial number from invoice format: INITIALS-YEAR-LOCATION-SERIAL
-      const parts = lastInvoice.invoiceNo.split('-');
-      if (parts.length === 4) {
-        lastSerialNumber = parseInt(parts[3]) || 0;
-      }
-    }
-
-    // Extract first letter of each word to create company initials
+    // First letter of each word of the company name (words starting with a letter).
     const companyInitials = companyName
-      .split(/\s+/) // Split by whitespace
-      .map(word => word.trim())
-      .filter(word => word.length > 0 && /[a-zA-Z]/.test(word[0])) // Only words starting with letters
-      .map(word => word[0].toUpperCase()) // Take first letter and uppercase
+      .split(/\s+/)
+      .map((word) => word.trim())
+      .filter((word) => word.length > 0 && /[a-zA-Z]/.test(word[0]))
+      .map((word) => word[0].toUpperCase())
       .join('');
     const year = new Date().getFullYear();
-    const serialNumber = (lastSerialNumber + 1).toString().padStart(5, '0');
-    
-    return `${companyInitials}-${year}-${locationPrefix}-${serialNumber}`;
+    return nextDocumentNumber(this.dataSource.manager, SERIES.invoice, `${companyInitials}-${year}-${locationPrefix}-`, 5);
   }
 
   public async getByIdForUpdate(id: string): Promise<any> {
@@ -339,6 +356,7 @@ export class FinalInvoiceService {
     const formattedInvoice = {
       id: invoice.id,
       invoiceNo: invoice.invoiceNo,
+      txnNo: invoice.txnNo ?? null,
       invoiceDate: invoice.invoiceDate,
       companyName: invoice.companyName?.id || null,
       deliveryChallan: invoice.deliveryChallan?.id || null,
@@ -429,7 +447,7 @@ export class FinalInvoiceService {
       .leftJoin('invoice.deliveryAddress', 'deliveryAddress')
       .leftJoin('invoice.createdBy', 'createdBy')
       .select([
-        'invoice.id', 'invoice.invoiceNo', 'invoice.invoiceDate', 'invoice.vehicleNo',
+        'invoice.id', 'invoice.invoiceNo', 'invoice.txnNo', 'invoice.invoiceDate', 'invoice.vehicleNo',
         'invoice.poNumber', 'invoice.placeOfSupply', 'invoice.totalProductAmount',
         'invoice.netProductWeight', 'invoice.totalAmount', 'invoice.totalAmtInWords',
         'invoice.cgst', 'invoice.sgst', 'invoice.igst', 'invoice.taxAmount',
@@ -471,6 +489,7 @@ export class FinalInvoiceService {
       overAllStatus: document.overAllStatus,
       approvalSummary: document.approvalSummary ?? null,
       invoiceNo: invoice.invoiceNo,
+      txnNo: invoice.txnNo ?? null,
       invoiceDate: invoice.invoiceDate,
       createdDate,
       createdTime,
@@ -544,8 +563,10 @@ export class FinalInvoiceService {
     queryOptions: PaginationOptions,
     userId: string,
     isAdmin: boolean = false,
+    paymentManager: boolean = false,
   ): Promise<{ data: InvoiceListItemDto[]; meta: { total: number; page: number; pages: number } }> {
-    const cacheKey = `${this.CACHE_PREFIX}:all:${userId}:${isAdmin ? 'admin' : 'user'}:${createHash('md5').update(JSON.stringify(queryOptions)).digest('hex')}`;
+    const scope = isAdmin ? 'admin' : paymentManager ? 'payment' : 'user';
+    const cacheKey = `${this.CACHE_PREFIX}:all:${userId}:${scope}:${createHash('md5').update(JSON.stringify(queryOptions)).digest('hex')}`;
     console.log("in invoice service — cache key:", cacheKey);
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) {
@@ -572,7 +593,7 @@ export class FinalInvoiceService {
       .leftJoin('invoice.billingAddress', 'billingAddress')
       .leftJoin('invoice.deliveryAddress', 'deliveryAddress')
       .select([
-        'invoice.id', 'invoice.invoiceNo', 'invoice.invoiceDate', 'invoice.vehicleNo',
+        'invoice.id', 'invoice.invoiceNo', 'invoice.txnNo', 'invoice.invoiceDate', 'invoice.vehicleNo',
         'invoice.poNumber', 'invoice.totalProductAmount', 'invoice.netProductWeight',
         'invoice.totalAmount', 'invoice.ammountStatus', 'invoice.createdAt',
         'company.name', 'deliveryChallan.challanNo',
@@ -596,13 +617,17 @@ export class FinalInvoiceService {
       .andWhere('invoice.deletedAt IS NULL');
 
     // Admin sees every invoice; everyone else only the ones they created or
-    // approve at either level.
+    // approve at either level. Payment Managers also see every completed invoice,
+    // in its approval flow or not, to record its payments.
     if (!isAdmin) {
       qb.andWhere(
         new Brackets((qb) => {
           qb.orWhere('firstApproverUser.id = :userId', { userId })
             .orWhere('secondApproverUser.id = :userId', { userId })
             .orWhere('lastActionBy.id = :userId', { userId });
+          if (paymentManager) {
+            qb.orWhere('doc.status = :paymentCompleteStatus', { paymentCompleteStatus: DocumentStatus.COMPLETE });
+          }
         }),
       );
     }
@@ -612,6 +637,7 @@ export class FinalInvoiceService {
       qb.andWhere(
         new Brackets((qb) => {
           qb.orWhere('LOWER(invoice.invoiceNo) LIKE :term', { term })
+            .orWhere('LOWER(invoice.txnNo) LIKE :term', { term })
             .orWhere('LOWER(company.name) LIKE :term', { term })
             .orWhere('LOWER(customerName.organisationName) LIKE :term', { term })
             .orWhere('LOWER(deliveryChallan.challanNo) LIKE :term', { term })
@@ -654,6 +680,7 @@ export class FinalInvoiceService {
         createdTime,
         id: invoice.id,
         invoiceNo: invoice.invoiceNo,
+        txnNo: invoice.txnNo ?? null,
         invoiceDate: invoice.invoiceDate,
         vehicleNo: invoice.vehicleNo ?? null,
         companyName: (invoice as any).companyName?.name ?? null,
@@ -838,6 +865,7 @@ export class FinalInvoiceService {
             state: shipToAddress.state || '',
             pincode: shipToAddress.pincode || '',
           } : { city: '' },
+          contactNo: customer?.primaryContactNo || customer?.secondaryContactNo || '',
           gstn: customer?.statutoryDetails?.gstn || '',
           panNo: customer?.statutoryDetails?.panNo || '',
           items: items,
@@ -860,39 +888,6 @@ export class FinalInvoiceService {
         throw new Error(`Failed to fetch invoice for PDF generation: ${error.message}`);
       }
     }
-  /**
-   * Update the ammountStatus (paid / unpaid) of an Invoice by its ID.
-   */
-  public async updateAmountStatus(
-    id: string,
-    status: ammountStatus,
-  ): Promise<{ id: string; ammountStatus: ammountStatus }> {
-    const invoice = await this.invoiceRepository.findOne({ where: { id }, withDeleted: true });
-    if (!invoice) throw new AppError(404, `Invoice with ID ${id} not found`);
-
-    invoice.ammountStatus = status;
-    await this.invoiceRepository.save(invoice);
-
-    // Invalidate all:*, update:id, view:id, pdf:id
-    await this.invalidateCache(id);
-
-    // Also invalidate view/update caches that are keyed by document ID
-    try {
-      const doc = await this.documentbRepository.findOne({
-        where: { document_type_id: id } as any,
-        select: ['id'] as any,
-      });
-      if (doc?.id) {
-        await Promise.all([
-          this.cacheService.del(`${this.CACHE_PREFIX}:view:${doc.id}`),
-          this.cacheService.del(`${this.CACHE_PREFIX}:update:${doc.id}`),
-        ]);
-      }
-    } catch (_) { /* non-critical */ }
-
-    return { id: invoice.id, ammountStatus: invoice.ammountStatus };
-  }
-
   public async deleteMultipleFinalInvoices(ids: string[]): Promise<BulkDeleteResultDto> {
    const success: { id: string; No: string }[] = [];
   const failed: { id: string; reason: string }[] = [];
@@ -903,6 +898,11 @@ export class FinalInvoiceService {
       });
       if (!finalInvoice) {
         failed.push({ id, reason: 'FinalInvoice not found' });
+        continue;
+      }
+      // As for GRN: an invoice with recorded payments can no longer be deleted (void them first)
+      if (await invoiceHasLivePayments(this.dataSource.manager, finalInvoice.id)) {
+        failed.push({ id, reason: `Final Invoice ${finalInvoice.invoiceNo ?? ''} has recorded payments; void them before deleting`.replace(/\s+/g, ' ') });
         continue;
       }
       const relatedDocument = await this.documentbRepository.findOne({
@@ -918,6 +918,13 @@ export class FinalInvoiceService {
 
       await this.invoiceRepository.softDelete(finalInvoice.id);
       await this.invoiceRepository.update(finalInvoice.id, { isDeleted: true } as any);
+      // The DC can be invoiced again.
+      await syncCustomerDcSalesLinks(
+        this.dataSource.manager,
+        await dcIdsOfSalesDocuments(this.dataSource.manager, DocumentTypeEnum.FINAL_INVOICE, [finalInvoice.id]),
+      );
+      // The Sale's invoice step goes back to pending.
+      await refreshTransactionOf(this.dataSource.manager, 'final-invoice', finalInvoice.id);
       await this.invalidateCache(finalInvoice.id);
       success.push({id, No: finalInvoice.invoiceNo});
     } catch (error: any) {

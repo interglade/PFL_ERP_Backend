@@ -6,9 +6,9 @@ import { User } from "../../employee/entity/user.entity";
 import Model from "../../global/model.entity";
 
 export enum Status {
-  PENDING = "pending", 
-  REJECTED = "rejected",
-  APPROVED = "approved"
+  PENDING = "Pending",
+  REJECTED = "Rejected",
+  APPROVED = "Approved"
 }
 
 @Entity("sales_targets")
@@ -32,7 +32,17 @@ export class SalesTarget extends Model {
   totalMonthlySale: number; // auto-calculated
 
   @Column({ type: 'enum', enum: Status, default: Status.PENDING })
-  status: Status; // DRAFT, PENDING, APPROVED, REJECTED
+  status: Status;
 
+  /** Who approved or rejected the plan (the creating manager when it was approved automatically). */
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: "approved_by_id" })
+  approvedBy: User | null;
+
+  @Column({ name: "approved_at", type: "timestamp", nullable: true })
+  approvedAt: Date | null;
+
+  @Column({ name: "approval_remark", type: "text", nullable: true })
+  approvalRemark: string | null;
 
 }

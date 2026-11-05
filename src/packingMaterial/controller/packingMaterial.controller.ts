@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import {
   controller,
   httpGet,
@@ -77,7 +79,7 @@ export class PackingMaterialController {
     }
   }
 
-  @httpPost('/')
+  @httpPost('/', requireRole(Role.ADMIN))
   public async createPackingMaterial(
     @request() req: Request<{}, {}, CreatePackingMaterialDto>,
     @response() res: Response,
@@ -160,7 +162,7 @@ export class PackingMaterialController {
     }
   }
 
-  @httpPatch('/:id')
+  @httpPatch('/:id', requireRole(Role.ADMIN))
   public async updatePackingMaterial(
     @requestParam('id') id: string,
     @request() req: Request<{}, {}, UpdatePackingMaterialDto>,
@@ -218,12 +220,8 @@ export class PackingMaterialController {
     @next() next: NextFunction,
   ) {
     try {
-      const packingMaterial = await this.packingMaterialService.getAllPartial() as PackingMaterialPartialDto[];
-
-      if (!packingMaterial || packingMaterial.length === 0) {
-        logger.warn('Packing Material not found');
-        return next(new AppError(404, 'Packing Material not found'));
-      }
+      // An empty master is a valid (empty) dropdown, not an error
+      const packingMaterial = ((await this.packingMaterialService.getAllPartial()) ?? []) as PackingMaterialPartialDto[];
 
       ControllerLogger.logList("Packing Material Partial", req, res);
 
@@ -248,7 +246,7 @@ export class PackingMaterialController {
     }
   }
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', requireRole(Role.SUPER_ADMIN))
   public async deleteMultiplePackingMaterials(
     @request() req: Request<{}, {}, BulkDeletePackingMaterialDto>,
     @response() res: Response,

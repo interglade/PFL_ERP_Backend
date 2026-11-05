@@ -1,3 +1,4 @@
+import { checkAnyPermission } from '../../middleware/checkPermission';
 import { controller, httpDelete, httpGet, httpPatch, httpPost, next, request, response } from "inversify-express-utils";
 
 import { inject } from "inversify";
@@ -102,7 +103,7 @@ public async getPaymentRequestById(
 }
 
 // Create a new payment request
-@httpPost("/:id")
+@httpPost("/:id", checkAnyPermission(['grn', 'create'], ['grn', 'edit']))
 public async createPaymentRequest(
   @request() req: Request,
   @response() res: Response,
@@ -140,7 +141,7 @@ public async createPaymentRequest(
 }
 
 // Update a payment request
-@httpPatch("/:id",captureUser)
+@httpPatch("/:id", checkAnyPermission(['grn', 'create'], ['grn', 'edit']),captureUser)
 public async updatePaymentRequest(
   @request() req: Request,
   @response() res: Response,
@@ -182,7 +183,7 @@ public async updatePaymentRequest(
 }
 
 // Delete a payment request
-@httpDelete("/:id")
+@httpDelete("/:id", checkAnyPermission(['grn', 'create'], ['grn', 'edit']))
 public async deletePaymentRequest(
   @request() req: Request,
   @response() res: Response,

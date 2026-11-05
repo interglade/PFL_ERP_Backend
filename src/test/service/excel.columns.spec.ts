@@ -31,12 +31,11 @@ import {
 import {
   PRODUCT_PARAMETER_GROUP,
   PRODUCT_SHEET,
-  PRODUCT_VARIANT_GROUP,
 } from '../../product/createproduct/excel/product.columns';
 import { FARMER_SHEET } from '../../farmer/excel/farmer.columns';
 import { VENDOR_SHEET } from '../../vendor/createVendor/excel/vendor.columns';
 import { CUSTOMER_SHEET } from '../../customer/addcustomer/excel/customer.columns';
-import { getVariantIdentifier } from '../../product/productVarient/service/varients.service';
+import { splitValueList } from '../../product/productVarient/service/variantSync';
 
 async function reload(workbook: ExcelJS.Workbook): Promise<ExcelJS.Workbook> {
   const buffer = await workbook.xlsx.writeBuffer();
@@ -71,10 +70,10 @@ describe.each(SHEETS)('%s column map', (_name, def) => {
     // Data sheet first, then the docs, then the hidden dropdown source.
     expect(names[0]).toBe(def.sheetName);
     expect(names).toContain('Instructions');
-    expect(names.filter((n) => n !== def.sheetName && n !== 'Instructions')).toEqual(
-      ['Lists'],
-    );
-    expect(template.getWorksheet('Lists')!.state).toBe('veryHidden');
+    // The dropdown source exists only when some column offers a dropdown.
+    const extras = names.filter((n) => n !== def.sheetName && n !== 'Instructions');
+    expect(['Lists'].slice(0, extras.length)).toEqual(extras);
+    if (extras.length) expect(template.getWorksheet('Lists')!.state).toBe('veryHidden');
 
     const parsed = parseWorkbook(template, def);
     expect(parsed.unknownColumns).toEqual([]);
@@ -117,8 +116,7 @@ describe('system-filled columns', () => {
       [
         'Product Code',
         'Product Image',
-        'Variant1.Variant Code',
-        'Variant1.Variant Name',
+        'Variant Codes',
       ],
     ],
     [
@@ -133,10 +131,10 @@ describe('system-filled columns', () => {
         'Vendor Code',
         'Status',
         'Created By',
-        'GSTN_Copy',
+        'GSTIN Copy',
         'Cancelled Cheque Copy',
-        'If_GSTN_Copy',
-        'If Cancelled Cheque',
+        'GSTIN Copy Provided',
+        'Cancelled Cheque Provided',
       ],
     ],
     [
@@ -197,10 +195,11 @@ describe('system-filled columns', () => {
     '%s: the template is exactly the columns a user may fill in',
     async (_name, def) => {
       // Stronger than "the known system columns are absent": this pins the
-      // template to the full non-readOnly set, so a column gaining or losing
-      // readOnly shows up here rather than silently changing the template.
+      // template to the full set that is neither readOnly nor a key (the code
+      // a new record does not have yet), so a column changing kind shows up
+      // here rather than silently changing the template.
       const expected: string[] = def.columns
-        .filter((column) => !column.readOnly)
+        .filter((column) => !column.readOnly && !column.key)
         .map((column) => column.header);
 
       for (const group of def.groups ?? []) {
@@ -314,14 +313,14 @@ describe('customer address requirements', () => {
 
 describe('statutory numbers stay importable', () => {
   const NUMBERS: [string, ExcelSheetDefinition<any>, string[]][] = [
-    ['vendor', VENDOR_SHEET, ['GSTN', 'Pan_No', 'MSME_No', 'Trade_License_Number']],
+    ['vendor', VENDOR_SHEET, ['GSTIN', 'PAN Number', 'MSME Number', 'Trade Licence Number']],
     [
       'customer',
       CUSTOMER_SHEET,
       [
-        'GST Number',
+        'GSTIN',
         'PAN Number',
-        'Aadhar Number',
+        'Aadhaar Number',
         'CIN Number',
         'Mandi Licence No',
         'Registration No',
@@ -438,7 +437,7 @@ describe('dropdowns', () => {
     ['farmer', FARMER_SHEET, ['Gender', 'Land Holding', 'Land Status']],
     // Vendor's booleans were all "do we have the document" flags, which are set
     // in the app alongside the upload, so only the two enums remain.
-    ['vendor', VENDOR_SHEET, ['Classification', 'Type Of Acc']],
+    ['vendor', VENDOR_SHEET, ['Classification', 'Account Type']],
     [
       'customer',
       CUSTOMER_SHEET,
@@ -517,9 +516,17 @@ describe('product export imports back unchanged', () => {
     shelfLife: 30,
     storageTemp: 4,
     thresholdStock: 500,
+    allowedValues: [
+      { value: '40mm', sortOrder: 1, attribute: { code: 'size', name: 'Size', sortOrder: 2 } },
+      { value: '10', sortOrder: 2, attribute: { code: 'count', name: 'Count', sortOrder: 1 } },
+      { value: '70mm', sortOrder: 2, attribute: { code: 'size', name: 'Size', sortOrder: 2 } },
+      { value: '20', sortOrder: 1, attribute: { code: 'count', name: 'Count', sortOrder: 1 } },
+      { value: 'Spring', sortOrder: 1, attribute: { code: 'variety', name: 'Variety', sortOrder: 3 } },
+    ],
     variant: [
-      { variantName: 'Small', count: '10', size: '40mm', variety: 'Spring' },
-      { variantName: 'Large', count: '20', size: '70mm', variety: 'Spring' },
+      { variantCode: 'ONI0001-02', sequence: 2, isActive: true },
+      { variantCode: 'ONI0001-01', sequence: 1, isActive: true },
+      { variantCode: 'ONI0001-03', sequence: 3, isActive: false },
     ],
     qualityParameters: [
       { name: 'Firmness', type: 'good' },
@@ -543,15 +550,22 @@ describe('product export imports back unchanged', () => {
     expect(row.cell(column('Threshold Stock'))).toBe(500);
   });
 
-  it('round trips repeating variant and parameter blocks', async () => {
+  it('writes each attribute as one comma list, in natural order', async () => {
     const workbook = await reload(buildDataWorkbook(PRODUCT_SHEET, [product]));
     const [row] = parseWorkbook(workbook, PRODUCT_SHEET).rows;
 
-    const sizeColumn = PRODUCT_VARIANT_GROUP.columns.find((c) => c.header === 'Size')!;
-    const sizes = row.eachGroupBlock(PRODUCT_VARIANT_GROUP, (index) =>
-      row.groupCell<string | null>(PRODUCT_VARIANT_GROUP, index, sizeColumn),
-    );
-    expect(sizes).toEqual(['40mm', '70mm']);
+    expect(row.text('Count')).toBe('10, 20');
+    expect(row.text('Size')).toBe('40mm, 70mm');
+    expect(row.text('Variety')).toBe('Spring');
+    expect(row.text('Origin')).toBeNull();
+    expect(splitValueList(row.raw('Size'))).toEqual(['40mm', '70mm']);
+    // Active variants only, in code order.
+    expect(row.text('Variant Codes')).toBe('ONI0001-01, ONI0001-02');
+  });
+
+  it('round trips the parameter blocks', async () => {
+    const workbook = await reload(buildDataWorkbook(PRODUCT_SHEET, [product]));
+    const [row] = parseWorkbook(workbook, PRODUCT_SHEET).rows;
 
     const typeColumn = PRODUCT_PARAMETER_GROUP.columns.find((c) => c.header === 'Type')!;
     const types = row.eachGroupBlock(PRODUCT_PARAMETER_GROUP, (index) =>
@@ -634,78 +648,24 @@ describe('legacy upload formats', () => {
   });
 });
 
-describe('Excel variants feed the code generators the same input as the form', () => {
-  it('extracts the five variant parts in the shape the generators expect', async () => {
+describe('product attribute lists', () => {
+  it('reads Count / Size / Variety / Origin / Brand as comma lists', () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Products');
-    sheet.addRow([
-      'Product Name',
-      'Product Code Prefix',
-      'Variant1.Count',
-      'Variant1.Size',
-      'Variant1.Variety',
-      'Variant1.Origin',
-      'Variant1.Brand',
-    ]);
-    sheet.addRow(['Onion', 'ONI', '10', '40mm', 'Spring', '', 'PF']);
+    sheet.addRow(['Product Name', 'Product Code Prefix', 'Count', 'Origin', 'Variety', 'Size', 'Brand']);
+    sheet.addRow(['Imported Orange', 'IMO', '64, 72, 80, 88, 100', 'south africa, egypt, australia', '', '', '']);
+    sheet.addRow(['Imported Avocado', 'AVO', 10, '', '', '', '']);
 
-    const [row] = parseWorkbook(workbook, PRODUCT_SHEET).rows;
-    const column = (header: string) =>
-      PRODUCT_VARIANT_GROUP.columns.find((c) => c.header === header)!;
-    const at = (header: string) =>
-      row.groupCell<string | null>(PRODUCT_VARIANT_GROUP, 1, column(header)) ?? '';
+    const parsed = parseWorkbook(workbook, PRODUCT_SHEET);
+    expect(parsed.unknownColumns).toEqual([]);
+    expect(parsed.missingColumns).toEqual([]);
 
-    const parts = {
-      count: at('Count'),
-      size: at('Size'),
-      variety: at('Variety'),
-      origin: at('Origin'),
-      brand: at('Brand'),
-    };
-
-    // A blank cell has to arrive as '' — the generators skip falsy parts, so a
-    // null leaking through as the string "null" would land inside the code.
-    expect(parts).toEqual({
-      count: '10',
-      size: '40mm',
-      variety: 'Spring',
-      origin: '',
-      brand: 'PF',
-    });
-
-    // Same inputs in, so the same variant name the create form produces.
-    await expect(
-      getVariantIdentifier(
-        'Onion',
-        parts.count,
-        parts.size,
-        parts.variety,
-        parts.origin,
-        parts.brand,
-      ),
-    ).resolves.toBe('Onion,Count-10,Size-40mm,Variety-Spring,Brand-PF');
-  });
-
-  it('drops a variant block that is entirely blank', async () => {
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Products');
-    sheet.addRow([
-      'Product Name',
-      'Product Code Prefix',
-      'Variant1.Count',
-      'Variant2.Count',
-      'Variant3.Count',
-    ]);
-    sheet.addRow(['Onion', 'ONI', '10', '', '20']);
-
-    const [row] = parseWorkbook(workbook, PRODUCT_SHEET).rows;
-    const countColumn = PRODUCT_VARIANT_GROUP.columns.find((c) => c.header === 'Count')!;
-
-    // Variant2 is empty but Variant3 still has to be picked up.
-    const counts = row.eachGroupBlock(PRODUCT_VARIANT_GROUP, (index) =>
-      row.groupCell<string | null>(PRODUCT_VARIANT_GROUP, index, countColumn),
-    );
-    expect(counts).toEqual(['10', '20']);
+    const [orange, avocado] = parsed.rows;
+    expect(splitValueList(orange.raw('Count'))).toEqual(['64', '72', '80', '88', '100']);
+    expect(splitValueList(orange.raw('Origin'))).toEqual(['south africa', 'egypt', 'australia']);
+    expect(splitValueList(orange.raw('Brand'))).toEqual([]);
+    // A single number typed into a cell is still one value.
+    expect(splitValueList(avocado.raw('Count'))).toEqual(['10']);
   });
 });
 

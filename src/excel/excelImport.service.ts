@@ -14,7 +14,7 @@ import {
   ExcelSheetDefinition,
   groupHeader,
 } from './excelColumn';
-import { coerceCell, toText } from './excelValue';
+import { coerceCell, plainCellValue, toText } from './excelValue';
 import { downloadFromSpaces } from './excelFile.service';
 
 /**
@@ -133,11 +133,38 @@ export interface ImportIssue {
   reason: string;
 }
 
+/**
+ * A linked name that did not match anything, so the field was left empty.
+ * Listed in the import report so the user can correct the name and import again.
+ */
+export interface DraftIssue {
+  row: number;
+  /** Code of the record that was saved (Vendor Code, Product Code), when it has one. */
+  code: string | null;
+  /** Name of the record that was saved, so the row is recognisable in the report. */
+  name: string | null;
+  /** Header of the column that did not match. */
+  field: string;
+  /** What the sheet said. */
+  typed: string;
+  /** Closest existing name, when one is close enough to be worth suggesting. */
+  suggestion: string | null;
+  /** What happened to the record: "Draft", or "Saved" where there is no draft status. */
+  outcome: string;
+}
+
 export interface ImportSummary {
   totalRows: number;
   created: number;
+  /** Existing records changed by the import (small masters, completed drafts). */
+  updated: number;
+  /** Records saved as draft because a linked name did not match. */
+  drafted: number;
   skipped: ImportIssue[];
   failed: ImportIssue[];
+  draftIssues: DraftIssue[];
+  /** Link to the import report workbook, when there was anything to report. */
+  reportUrl: string | null;
   /** Headers in the file the importer does not recognise - usually typos. */
   unknownColumns: string[];
   /** Required headers the file is missing entirely. */
@@ -148,8 +175,12 @@ export function emptySummary(): ImportSummary {
   return {
     totalRows: 0,
     created: 0,
+    updated: 0,
+    drafted: 0,
     skipped: [],
     failed: [],
+    draftIssues: [],
+    reportUrl: null,
     unknownColumns: [],
     missingColumns: [],
   };
@@ -257,11 +288,9 @@ function flattenExcelJsWorkbook(workbook: ExcelJS.Workbook): RawSheet {
     if (rowNumber === 1) return;
 
     const cells = headers.map((_header, index) => {
-      const cell = row.getCell(index + 1);
-      // `cell.value` is a formula object for computed cells; prefer the result.
-      return cell.value && typeof cell.value === 'object' && 'result' in cell.value
-        ? (cell.value as ExcelJS.CellFormulaValue).result
-        : cell.value;
+      // Formula, hyperlink (a typed email) and rich-text cells come back as objects;
+      // read the value the user sees.
+      return plainCellValue(row.getCell(index + 1).value);
     });
 
     rows.push({ rowNumber, cells });

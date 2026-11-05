@@ -1,3 +1,5 @@
+import { guardEmployeeScope } from '../../workFlow/planAccess';
+import { checkPermission } from '../../middleware/checkPermission';
 import { controller, httpGet, next, request, requestParam, response, } from "inversify-express-utils";
 
 import { inject } from "inversify";
@@ -17,7 +19,7 @@ import { ProcurementTargetService as ProcurementReportService } from "../../proc
 export class ProcurementReportController {
   constructor(@inject(TYPES.ProcurementTargetService) private readonly procurementReportService: ProcurementReportService) { }
 
-  @httpGet('/:employeeId')
+  @httpGet('/:employeeId', guardEmployeeScope, checkPermission('purchase-report', 'view'))
   async getProcurementReport(
     @requestParam('employeeId') employeeId: string,
     @request() req: Request,
@@ -43,7 +45,7 @@ export class ProcurementReportController {
   }
 
   //TODO:Generate procurement Report excel
-  @httpGet("/excel/generate/:employeeId")
+  @httpGet("/excel/generate/:employeeId", guardEmployeeScope, checkPermission('purchase-report', 'export'))
   public async generateExcel(
     @requestParam("employeeId") employeeId: string,
     @request() req: Request,

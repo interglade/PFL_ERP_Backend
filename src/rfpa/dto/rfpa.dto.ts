@@ -4,7 +4,7 @@
 // Shared sub-types
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { Department, Source } from "../../utils/status.enum";
+import { Source } from "../../utils/status.enum";
 import { RFPA } from "../entity/rfpa.entity";
 
 /** Result of creating an RFPA. */
@@ -36,10 +36,6 @@ export interface RfpaProductInputDto {
   /** UOM entity ID */
   uom?: string | { id: string } | null;
   unitPrice: number;
-  count?: string | null;
-  size?: string | null;
-  origin?: string | null;
-  variety?: string | null;
   amount: number;
   purchaseDate?: string | Date | null;
   expectedHarvestDate?: string | Date | null;
@@ -90,7 +86,6 @@ export interface CreateRfpaDto {
 
   /** Injected from res.locals by controller */
   createdBy?: string;
-  requestingDepartment?: Department | null;
 
   companyName?: string | { id: string } | null;
   purchaseLocation?: string | { id: string } | null;
@@ -129,6 +124,8 @@ export interface RfpaListItemDto {
   createdDate: string | null;
   createdTime: string | null;
   rfpaId: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   remark: string | null;
   source: Source | null;
   deliveryReceivingPerson: string | null;
@@ -166,7 +163,6 @@ export interface RfpaViewResponseDto {
   companyName: string | null;
   createdDate: string | null;
   createdTime: string | null;
-  requestingDepartment: Department | null;
   purchaseLocation: string | null;
   purchaseForSalesLocation: string | null;
   otherPurchaseLoc: string | null;
@@ -188,10 +184,11 @@ export interface RfpaViewResponseDto {
 
 export interface RfpaUpdateFormDto {
   rfpaId: string;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   createdDate: string | null;
   createdTime: string | null;
-  requestingDepartment: Department | null;
   purchaseLocation: string | null;
   purchaseForSalesLocation: string | null;
   otherPurchaseLoc: string | null;
@@ -205,6 +202,10 @@ export interface RfpaUpdateFormDto {
   selectedParty: string | null;
   paymentInfo: RfpaPaymentInfoDto | null;
   rfpaProducts: RfpaProductUpdateDto[];
+  /** Document status (read fresh); COMPLETE and REJECT mean the RFPA can no longer be edited. */
+  overAllStatus?: string | null;
+  /** Approval document id (the view route's key). */
+  documentId?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -249,6 +250,7 @@ export interface RfpaFarmerPartyDto {
 }
 
 export interface RfpaDocumentViewProductDto {
+  id: string | null;
   productName: string | null;
   variant: string | null;
   grade: string | null;
@@ -281,9 +283,10 @@ export interface RfpaDocumentViewResponseDto {
 
   // ── RFPA fields ───────────────────────────────────────────────────────────
   rfpaId: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   remark: string | null;
   specialReq: string | null;
-  requestingDepartment: Department | null;
   otherPurchaseLoc: string | null;
   otherPurchaseForSalesLoc: string | null;
   source: Source | null;

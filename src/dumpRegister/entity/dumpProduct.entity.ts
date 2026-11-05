@@ -26,7 +26,23 @@ export class DumpProduct extends Model {
     @Column("decimal", { precision: 12, scale: 2, nullable: true })
     unitPrice: number;
     @Column("decimal", { precision: 12, scale: 2, nullable: true })
-    amount: number; 
+    amount: number;
+
+    // Receiving links: dump lines are matched to the source by product +
+    // variant and counted in net kg. `quantity` stays for legacy rows (a
+    // count) — the inventory engine uses netWeight when it is > 0.
+    @Column("decimal", { precision: 12, scale: 3, nullable: true })
+    grossWeight: number;
+
+    @Column("decimal", { precision: 12, scale: 3, nullable: true })
+    packingMaterialWeight: number;
+
+    @Column("decimal", { precision: 12, scale: 3, nullable: true })
+    netWeight: number;
+
+    /** Batch of the source line (transfer lines carry the batch the Transfer DC took). */
+    @Column({ type: 'varchar', length: 100, nullable: true })
+    batchNo: string | null;
   //   @Column("character varying", { name: "count", nullable: true, length: 100 })
   // count: string;
 

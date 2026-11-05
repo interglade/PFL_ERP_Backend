@@ -40,6 +40,8 @@ export interface FieldFilter {
   exprs: string[];
   /** Allowed values for `enum`. */
   values?: readonly string[];
+  /** `enum` of a status: matched exactly (statuses are Title Case), not in any case. */
+  exact?: boolean;
   /**
    * For `id` filters that historically also carried a name: a value that is not a
    * UUID is matched partially against these expressions instead of rejected.

@@ -14,7 +14,6 @@ export class   DocumentPermissionService {
         const result = await this.documentPermissionRepository.findOne({where:{id:documentId},
             relations:[
                 'documentDefinition',
-                'level'
             ]})
 if (!result) {
     throw new Error('Permission not found');
@@ -38,6 +37,7 @@ const formattedResult={
     canEdit: result.canEdit,
     canDelete: result.canDelete,
     canDownload: result.canDownload,
+    canExport: result.canExport,
 }
 
         return formattedResult;
@@ -45,9 +45,9 @@ const formattedResult={
     }
 
     async getAllDocumentPermissions():Promise<any>{
+        // 'level' was removed from DocumentPermission; asking for it made this endpoint fail
         const result = await this.documentPermissionRepository.find({relations:[
             'documentDefinition',
-            'level'
         ]})
         if (!result) {
             throw new Error('Permissions not found');
@@ -71,6 +71,7 @@ const formattedResult={
                 canEdit: permission.canEdit,
                 canDelete: permission.canDelete,
                 canDownload: permission.canDownload,
+                canExport: permission.canExport,
             }
         })
         return formattedResult;

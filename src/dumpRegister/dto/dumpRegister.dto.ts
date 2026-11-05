@@ -5,6 +5,8 @@
 import { DumpType } from "../entity/dumpRegister.entity";
 
 export interface DumpProductInputDto {
+  /** Batch of the line (transfer / return receipts); set from the source by the server. */
+  batchNo?: string | null;
   /** product id */
   productName?: string | null;
   productId?: string | null;
@@ -17,6 +19,10 @@ export interface DumpProductInputDto {
   quantity?: number | null;
   unitPrice?: number | null;
   amount?: number | null;
+  /** Receiving links: net kg is what is matched against the source. */
+  grossWeight?: number | null;
+  packingMaterialWeight?: number | null;
+  netWeight?: number | null;
 }
 
 // ─── Create ───────────────────────────────────────────────────────────────────
@@ -59,6 +65,8 @@ export interface CreateDumpRegisterDto {
 // ─── Update ───────────────────────────────────────────────────────────────────
 
 export interface UpdateDumpProductInputDto {
+  /** Batch of the line (transfer / return receipts); set from the source by the server. */
+  batchNo?: string | null;
   id?: string | null;
   /** product id — accepted as productName or productId, same as create */
   productName?: string | null;
@@ -72,6 +80,10 @@ export interface UpdateDumpProductInputDto {
   quantity?: number | null;
   unitPrice?: number | null;
   amount?: number | null;
+  /** Receiving links: net kg is what is matched against the source. */
+  grossWeight?: number | null;
+  packingMaterialWeight?: number | null;
+  netWeight?: number | null;
 }
 
 export interface UpdateDumpRegisterDto {
@@ -93,6 +105,8 @@ export interface UpdateDumpRegisterDto {
 // ─── Get by ID (edit form — IDs only) ────────────────────────────────────────
 
 export interface DumpProductForUpdateDto {
+  /** Batch of the line (transfer / return receipts). */
+  batchNo?: string | null;
   id: string;
   productName: string | null;
   variant: string | null;
@@ -100,6 +114,9 @@ export interface DumpProductForUpdateDto {
   quantity: number | null;
   unitPrice: number | null;
   amount: number | null;
+  grossWeight: number | null;
+  packingMaterialWeight: number | null;
+  netWeight: number | null;
 }
 
 export interface DumpRegisterForUpdateDto {
@@ -107,6 +124,8 @@ export interface DumpRegisterForUpdateDto {
   createdDate: string | null;
   createdTime: string | null;
   dumpType: DumpType | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   location: string | null;
   date: Date | null;
@@ -138,6 +157,9 @@ export interface DumpProductDetailDto {
   quantity: number | null;
   amount: number | null;
   unitPrice: number | null;
+  grossWeight: number | null;
+  packingMaterialWeight: number | null;
+  netWeight: number | null;
 }
 
 export interface DumpRegisterByIdDto {
@@ -159,6 +181,8 @@ export interface DumpRegisterByIdDto {
 // ─── View (document approval view — display names) ───────────────────────────
 
 export interface DumpProductViewDto {
+  /** Batch of the line (transfer / return receipts). */
+  batchNo?: string | null;
   id: string;
   productName: string | null;
   variant: string | null;
@@ -166,6 +190,9 @@ export interface DumpProductViewDto {
   quantity: number | null;
   unitPrice: number | null;
   amount: number | null;
+  grossWeight: number | null;
+  packingMaterialWeight: number | null;
+  netWeight: number | null;
 }
 
 export interface DumpRegisterViewDto {
@@ -183,6 +210,8 @@ export interface DumpRegisterViewDto {
     secondFinalized?: { userId: string; name: string; status: string; reason: string | null } | null;
   } | null;
   dumpNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   grn: string | null;
   deliveryChallanNo: string | null;
   rbcNo: string | null;
@@ -211,6 +240,8 @@ export interface DumpRegisterListItemDto {
   createdTime: string | null;
   id: string;
   dumpNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   location: string | null;
   grn: string | null;
@@ -244,6 +275,8 @@ export interface DumpRegisterRecycleItemDto {
   createdTime: string | null;
   id: string;
   dumpNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
   companyName: string | null;
   location: string | null;
   grn: string | null;

@@ -1,8 +1,9 @@
-import { Column, Entity, ManyToOne } from "typeorm";
+import { Column, Entity, JoinColumn, ManyToOne } from "typeorm";
 import Model from "../../global/model.entity";
 import { Aqr} from "./aqr.entity";
+import { AqrProduct } from "./aqrProduct.entity";
 
-enum QualityParameterType {
+export enum QualityParameterType {
      GOOD = "good",
      BAD = "bad",
     AVERAGE="average"
@@ -31,7 +32,11 @@ export class AqrParameter extends Model {
 
    @ManyToOne(() => Aqr, (aqr) => aqr.parameters,{ onDelete: "SET NULL" })
    aqr: Aqr;
-   
+
+   /** The AQR line this parameter was measured on (null on legacy header-level rows). */
+   @ManyToOne(() => AqrProduct, (aqrProduct) => aqrProduct.parameters, { nullable: true, onDelete: "CASCADE" })
+   @JoinColumn({ name: "aqr_product_id" })
+   aqrProduct: AqrProduct;
 
 }
 //@JoinColumn({ name: "aqr_id" })

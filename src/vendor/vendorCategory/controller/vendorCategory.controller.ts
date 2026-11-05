@@ -1,3 +1,5 @@
+import { Role } from '../../../employee/entity/user.entity';
+import { requireRole } from '../../../middleware/requireRole';
 import { Request, Response, NextFunction } from "express";
 import {
   controller,
@@ -33,7 +35,7 @@ export class VendorCategoryController {
     private notificationService: NotificationService
   ) {}
 
-  @httpPost("/", validate(createVendorCategorySchema))
+  @httpPost("/", requireRole(Role.ADMIN), validate(createVendorCategorySchema))
   public async createCategory(
     @request() req: Request<{}, {}, CreateVendorCategoryDto>,
     @response() res: Response,
@@ -155,7 +157,7 @@ export class VendorCategoryController {
     }
   }
 
-  @httpPatch("/:id", validate(updateVendorCategorySchema))
+  @httpPatch("/:id", requireRole(Role.ADMIN), validate(updateVendorCategorySchema))
   public async updateCategory(
     @requestParam("id") id: string,
     @request() req: Request<{ id: string }, {}, UpdateVendorCategoryDto>,
@@ -198,7 +200,7 @@ export class VendorCategoryController {
 }
 
 
-  @httpDelete("/:id",validate(deleteVendorCategorySchema))
+  @httpDelete("/:id", requireRole(Role.SUPER_ADMIN),validate(deleteVendorCategorySchema))
   public async deleteCategory(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -233,7 +235,7 @@ export class VendorCategoryController {
       next(err);
     }
   }
-  @httpDelete("/delete/multiple")
+  @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
   public async softDeleteMultipleVendorCategory(
     @request() req: Request<{}, {}, BulkDeleteVendorCategoryDto>,
     @response() res: Response,

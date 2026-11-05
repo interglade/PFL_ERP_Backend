@@ -1,3 +1,7 @@
+import { assertActivationAllowed, assertEmployeeChangeAllowed, assertEmployeeCreateAllowed } from '../employeeAccessGuard';
+import { EmployeeStatus, Role } from '../../employee/entity/user.entity';
+import { parseStatus, requireStatus } from '../../utils/status.enum';
+import { requireRole } from '../../middleware/requireRole';
 import { Request, Response, NextFunction } from "express";
 import {
   controller,
@@ -22,7 +26,6 @@ import {
   UserPartialResponseDto,
   UpdateUserStatusDto,
   BulkDeleteUsersDto,
-  UserExcelRowDto,
 } from "../dto/user.dto";
 import { deserializeUser, requireUser } from "../../middleware/deserializeUser";
 import { TYPES } from "../../types";
@@ -34,8 +37,6 @@ import AppError from "../../utils/appError";
 import logger from "../../utils/logger";
 import { ControllerLogger } from "../../utils/controllerLogger";
 import { PaginationOptions } from "../../utils/pagination";
-import { uploadSingle } from "../../middleware/uploadsingle.middleware";
-import { parseExcel } from "../../utils/excelParser";
 
 
  @controller("/employee" , deserializeUser, requireUser)
@@ -63,7 +64,7 @@ async resolveLocation(id: string): Promise<{
   throw new AppError(400, 'Invalid Branch/Office ID');
 }
 
-  @httpPost("/")
+  @httpPost("/", requireRole(Role.ADMIN))
   public async createUser(
     @request() req: Request<{}, {}, CreateUserDto>,
     @response() res: Response,
@@ -74,6 +75,8 @@ async resolveLocation(id: string): Promise<{
       logger.info("Creating a new Employee");
       const result: CreateUserDto & Record<string, any> = req.body;
       result.createdBy = res.locals.user?.id;
+      result.permissions = assertEmployeeCreateAllowed(res.locals.user, result) as any;
+      await this.userService.assertContactsUnique(result as any);
      // Handle joining location
 if (result.joiningLocation) {
   try {
@@ -143,7 +146,7 @@ if (result.currentWorkLocation) {
     }
   }
 
-  @httpGet("/")
+  @httpGet("/", requireRole(Role.ADMIN))
   public async getAllUsers(
     @request() req: Request,
     @response() res: Response,
@@ -162,8 +165,14 @@ if (result.currentWorkLocation) {
         sort: sort as string || undefined, // Adjust this line to match your sorting requirements
         search: search as string|| '',
       };
-      const users: UserListResponseDto = await this.userService.getAllUsers(queryOptions, res.locals.user?.id);
-      if (!users || users.data.length === 0) {
+      // ?permissions=notSet: users still waiting for Permission Configuration (after an import)
+      const permissions =
+        req.query.permissions === 'notSet' || req.query.permissions === 'set' ? req.query.permissions : undefined;
+      const users: UserListResponseDto = await this.userService.getAllUsers(queryOptions, res.locals.user?.id, {
+        permissions,
+      });
+      // An empty filtered list is a normal answer (everyone has permissions), not an error
+      if (!users || (users.data.length === 0 && !permissions)) {
         logger.error("Employee Not Found");
         ControllerLogger.logError('Employee list retrieval', new AppError(404, "Employee Not Found"), req, res);
         return next(new AppError(404, "Employee Not Found"));
@@ -195,7 +204,7 @@ if (result.currentWorkLocation) {
     }
   }
 
-  @httpGet("/:id")
+  @httpGet("/:id", requireRole(Role.ADMIN))
   public async getUserById(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -233,7 +242,7 @@ if (result.currentWorkLocation) {
   }
 
 
-  @httpGet("/:id/view")
+  @httpGet("/:id/view", requireRole(Role.ADMIN))
   public async getUserByIdForView(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -260,7 +269,7 @@ if (result.currentWorkLocation) {
     }
   }
 
-  @httpGet("/:id/update")
+  @httpGet("/:id/update", requireRole(Role.ADMIN))
   public async getUserByIdForUpdate(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -286,7 +295,7 @@ if (result.currentWorkLocation) {
       next(err);
     }
   }
-    @httpPut("/:id")
+    @httpPut("/:id", requireRole(Role.ADMIN))
 public async updateUser(
   @requestParam("id") id: string,
   @request() req: Request<{}, {}, UpdateUserDto>,
@@ -301,6 +310,21 @@ public async updateUser(
     }
 
     const updateBy = res.locals.user.id;
+
+    if ((req.body as any).status !== undefined) requireStatus(EmployeeStatus, (req.body as any).status, 'status');
+
+    const guardedPermissions = await assertEmployeeChangeAllowed(res.locals.user, [id], {
+      roles: (req.body as any).roles,
+      status: (req.body as any).status,
+      permissions: (req.body as any).permissions,
+    });
+    if ((req.body as any).permissions !== undefined) (req.body as any).permissions = guardedPermissions;
+    await assertActivationAllowed(id, {
+      status: (req.body as any).status,
+      roles: (req.body as any).roles,
+      permissions: (req.body as any).permissions,
+    });
+    await this.userService.assertContactsUnique(req.body as any, id);
 
     const joiningLocationId = req.body.joiningLocation;
     const currentLocationId = req.body.currentWorkLocation;
@@ -373,7 +397,7 @@ public async updateUser(
   }
 }
 
-  @httpDelete("/:id")
+  @httpDelete("/:id", requireRole(Role.SUPER_ADMIN))
   public async deleteUser(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -386,6 +410,7 @@ public async updateUser(
         ControllerLogger.logError('Employee deletion', new AppError(400, "User ID is required"), req, res);
         return next(new AppError(400, "User ID is required"));
       }
+      await assertEmployeeChangeAllowed(res.locals.user, [id], { deleting: true });
       const result = await this.userService.deleteUser(id);
 
       if (!result) {
@@ -418,10 +443,10 @@ public async updateUser(
 
   /**
    * PATCH /employees/submit/:id
-   * Submits the employee draft (sets status to "INACTIVE" for admin review).
+   * Submits the employee draft (sets status to "Inactive" for admin review).
    * Frontend calls this when user clicks "Submit".
    */
-  @httpPatch('/submit/:id')
+  @httpPatch('/submit/:id', requireRole(Role.ADMIN))
   public async submitEmployee(
     @requestParam('id') id: string,
     @request() req: Request,
@@ -433,6 +458,12 @@ public async updateUser(
 
       // Remove any fields that should not be updated on submit
       const employeeData = { ...body };
+      const guardedPermissions = await assertEmployeeChangeAllowed(res.locals.user, [id], {
+        roles: body.roles,
+        status: EmployeeStatus.ACTIVE,
+        permissions: body.permissions,
+      });
+      if (body.permissions !== undefined) employeeData.permissions = guardedPermissions;
 
       const employee = await this.userService.submitEmployee(id, employeeData);
       ControllerLogger.logSuccess('Employee submitted', id, req, res);
@@ -447,7 +478,7 @@ public async updateUser(
     }
   }
 
-@httpPatch("/status/:id")
+@httpPatch("/status/:id", requireRole(Role.ADMIN))
   public async updateEmployeeStatus  (
     @request() req: Request, 
     @response() res: Response,
@@ -456,13 +487,14 @@ public async updateUser(
     const { id } = req.params;
    
 
-     const status = req.query.status as string;
-     const allowedStatuses = ['ACTIVE', 'INACTIVE', 'SUSPENDED'] as const;
-     if (!allowedStatuses.includes(status as any)) {
+     const status = parseStatus([EmployeeStatus.ACTIVE, EmployeeStatus.INACTIVE, EmployeeStatus.SUSPENDED], req.query.status);
+     if (!status) {
        ControllerLogger.logError('Employee status update', new Error('Invalid status value'), req, res);
        return res.status(400).json({ message: 'Invalid status value' });
      }
-     const updatedUser = await this.userService.updateStatus(id, status as 'ACTIVE' | 'INACTIVE' | 'SUSPENDED');
+     await assertEmployeeChangeAllowed(res.locals.user, [id], { status });
+     await assertActivationAllowed(id, { status });
+     const updatedUser = await this.userService.updateStatus(id, status);
 
     ControllerLogger.logSuccess('Employee status updated', id, req, res);
 
@@ -494,8 +526,7 @@ public async partialAllUser(
     
     // If id is provided, return workflow hierarchy
     if (id) {
-      const { department } = req.query;
-      console.log(department,"this is depart")
+      const { department, maxDepth } = req.query;
       const queryOptions = {
         page: page ? Number(page) : undefined,
         limit: limit ? Number(limit) : undefined,
@@ -504,6 +535,7 @@ public async partialAllUser(
         sort: sort as string || undefined,
         search: search as string || '',
         department: department as string || undefined,
+        maxDepth: maxDepth !== undefined && maxDepth !== '' ? Number(maxDepth) : undefined,
       };
 
       const workflowHierarchy = await this.userService.getWorkflowHierarchy(id as string, queryOptions);
@@ -528,16 +560,29 @@ public async partialAllUser(
 
     // If no id, return all employees (existing behavior)
     const queryOptions: PaginationOptions = {
-      page: page ? Number(page) : undefined,  
+      page: page ? Number(page) : undefined,
       limit: limit ? Number(limit) : undefined,
       searchFields: ['user.firstName'],
       filters: {},
       sort: sort as string || undefined,
       search: search as string|| '',
     };
-    
-    const users: UserPartialResponseDto = await this.userService.filterUser(queryOptions);
-    if(!users || users.data.length === 0){
+
+    // Optional pickers' filters: ?role=approver, ?activeOnly=true, ?ids=a,b (or ids=a&ids=b)
+    const role = Object.values(Role).find((r) => r === req.query.role);
+    const ids = ([] as string[])
+      .concat((req.query.ids as string | string[] | undefined) ?? [])
+      .flatMap((value) => String(value).split(','))
+      .map((value) => value.trim())
+      .filter((value) => /^[0-9a-f-]{36}$/i.test(value));
+
+    const users: UserPartialResponseDto = await this.userService.filterUser(queryOptions, {
+      role,
+      ids: req.query.ids !== undefined ? ids : undefined,
+      activeOnly: req.query.activeOnly === 'true',
+    });
+    // A search that matches nobody is an empty list, not an error
+    if(!users){
       logger.error("Employee Not Found");
       ControllerLogger.logError('Employee partial list retrieval', new AppError(404, "Employee Not Found"), req, res);
       return next(new AppError(404, "Employee Not Found"));
@@ -559,121 +604,15 @@ public async partialAllUser(
   }
 }
 
-@httpPost("/user/upload", uploadSingle.single('file'))
-public async upload(req: Request, res: Response) {
-    try {
-      if (!req.file) {
-        ControllerLogger.logError('Employee upload', new Error("No file uploaded"), req, res);
-        return res.status(400).json({ message: "No file uploaded." });
-      }
-      const rawData:any = parseExcel(req.file.path);
-      
-      const user = [];
-      for (const row of rawData) {
-        // Parse multiple document permissions
-        const parseDocumentPermissions = (permissionsString: string) => {
-          if (!permissionsString) return [];
-          
-          const permissions = [];
-          const permissionGroups = permissionsString.split(';');
-          
-          for (const group of permissionGroups) {
-            const parts = group.trim().split('|');
-            if (parts.length === 7) {
-              permissions.push({
-                documentDefinition: {
-                  name: parts[0].trim(),
-                  documentType: parts[1].trim()
-                },
-                canCreate: parts[2].trim() === "true",
-                canView: parts[3].trim() === "true",
-                canEdit: parts[4].trim() === "true",
-                canDelete: parts[5].trim() === "true",
-                canDownload: parts[6].trim() === "true"
-              });
-            }
-          }
-          
-          return permissions;
-        };
-
-        const mappedRow: UserExcelRowDto = {
-          firstName: row["First Name"],
-          lastName: row["Last Name"],
-          username: row["Username"],
-          primaryMobNo: row["Primary MobiLe Number"],
-          secondaryMobNo: row["Secondary Mobile Number"],
-          primaryEmail: row["Primary Email"],
-          secondaryEmail: row["Secondary Email"],
-          employeeId: row["Employee ID"],
-          designation: row["Designation"],
-          cugNo: row["CUG Number"],
-          workEmail: row["Work Email"],
-          joiningDate: row["Joining Date"],
-          department: row["Department"] ? row["Department"].split(',').map((d: string) => d.trim()) : [],
-          roles: row["Roles"] ? row["Roles"].split(',').map((r: string) => r.trim()) : ['employee'],
-          status: row["Status"] || 'INACTIVE',
-          isAddressSame: row["Is Address Same"] === "true",
-          otherWorkLocationInput: row["Other Work Location Input"],
-          residentialAddress: {
-            address1: row["Residential Address"],
-            location: row["Location"],
-            city: row["City"],
-            state: row["State"],
-            pincode: row["Pincode"]
-          },
-          permanentAddress: {
-            address1: row["Permanent Adress"],
-            location: row["Location.1"],
-            city: row["City.1"],
-            state: row["State.1"],
-            pincode: row["Pincode.1"]
-          },
-          companyName: {
-            name: row["Company Name"],
-            officeAddress: row["Office Address"]
-          },
-          joiningLocation: {
-            name: row["Joining Location"]
-          },
-          joiningOffice: {
-            name: row["Joining Office"]
-          },
-          currentWorkLocation: {
-            name: row["Current Work Location"]
-          },
-          currentOfficeLocation: {
-            name: row["Current Office Location"]
-          },
-          accessLocation: row["Access Location"],
-          // Parse multiple document permissions
-          permissions: parseDocumentPermissions(row["Document Permissions"])
-        };
-        user.push(mappedRow);
-      }
-
-      const users = await this.userService.createUsersWithRelations(user);
-      ControllerLogger.logSuccess('Employee bulk upload', `${users.length} users`, req, res);
-
-      // Send notification for employee bulk upload
-      const userId = res.locals.user?.id;
-      if (userId) {
-        await this.notificationService.createNoti(
-          `Employee bulk upload completed successfully: ${users.length} users`,
-          userId
-        );
-      }
-
-      return res.status(200).json({ message: "Users uploaded successfully", users });
-    } catch (error) {
-      console.error(error);
-      ControllerLogger.logError('Employee upload', error, req, res);
-      return res.status(500).json({ message: "Internal server error" });
-    }
+/** Retired 2026-11-03: Users are imported from the Users list (Template / Check file / Import). */
+@httpPost("/user/upload", requireRole(Role.ADMIN))
+public async upload(@request() req: Request, @response() res: Response, @next() next: NextFunction) {
+    ControllerLogger.logValidationError('Employee upload', 'Retired endpoint', req, res);
+    return next(new AppError(410, 'This upload has been replaced. Use Users → Template / Import.'));
   };
 
    //TODO:Delete Mutilple
-  @httpDelete("/delete/multiple")
+  @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
 public async softDeleteMultipleEmployees(
   @request() req: Request,
   @response() res: Response,
@@ -694,6 +633,7 @@ public async softDeleteMultipleEmployees(
       return next(new AppError(400, "userIds must be a non-empty array"));
     }
 
+    await assertEmployeeChangeAllowed(res.locals.user, userIds, { deleting: true });
     const result = await this.userService.softDeleteEmployees(userIds);
 
     ControllerLogger.logSuccess(

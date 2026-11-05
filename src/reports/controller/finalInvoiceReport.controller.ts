@@ -1,3 +1,4 @@
+import { checkPermission } from '../../middleware/checkPermission';
 import { controller, httpGet, next, request, response } from "inversify-express-utils";
 
 import { inject } from "inversify";
@@ -26,7 +27,7 @@ export class FinalInvoiceReportController {
  
   ) {}
 
-  @httpGet('/download')
+  @httpGet('/download', checkPermission('sales-report', 'export'))
 async exportReport(@request() req: Request,
     @response() res: Response,
     @next() next: NextFunction,) {

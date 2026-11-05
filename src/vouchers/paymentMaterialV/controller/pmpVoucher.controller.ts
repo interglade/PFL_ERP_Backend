@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../../approvalFlow/documentAccess';
+import { checkPermission } from '../../../middleware/checkPermission';
+import { requireRole } from '../../../middleware/requireRole';
+import { Role } from '../../../employee/entity/user.entity';
 import { Request, Response, NextFunction } from "express";
 
 import { inject } from "inversify";
@@ -45,7 +51,7 @@ export class PMPVoucherController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('packaging-material-voucher', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -60,7 +66,7 @@ export class PMPVoucherController {
   }
 
   // Get all vouchers
-  @httpGet("/")
+  @httpGet("/", checkPermission('packaging-material-voucher', 'view'))
   public async getAllVouchers(
     @request() req: Request,
     @response() res: Response,
@@ -107,7 +113,7 @@ export class PMPVoucherController {
       next(err);
     }
   }
-@httpGet("/recyclebin")
+@httpGet("/recyclebin", requireRole(Role.SUPER_ADMIN))
   public async getAllRecycleBinVouchers(
     @request() req: Request,
     @response() res: Response,
@@ -148,7 +154,7 @@ export class PMPVoucherController {
 
 
 
-  @httpGet("/:id/view")
+  @httpGet("/:id/view", checkPermission('packaging-material-voucher', 'view'), guardDocumentView(ApprovalDocType.PACKAGING_MATERIAL_VOUCHER, 'voucher'))
   public async getVoucherByIdForView(
     @request() req: Request,
     @response() res: Response,
@@ -177,7 +183,7 @@ export class PMPVoucherController {
     }
   }
 
-  @httpGet("/:id/update")
+  @httpGet("/:id/update", checkPermission('packaging-material-voucher', 'edit'), guardDocumentEdit(ApprovalDocType.PACKAGING_MATERIAL_VOUCHER, 'voucher'))
   public async getVoucherByIdForUpdate(
     @request() req: Request,
     @response() res: Response,
@@ -207,7 +213,7 @@ export class PMPVoucherController {
   }
 
   // Create a new voucher
-  @httpPost("/", uploadAttachments)
+  @httpPost("/", checkPermission('packaging-material-voucher', 'create'), uploadAttachments)
   public async createVoucher(
     @request() req: Request,
     @response() res: Response,
@@ -278,7 +284,7 @@ export class PMPVoucherController {
   }
 
   // Update a voucher
-  @httpPatch("/:id", uploadAttachments, captureUser)
+  @httpPatch("/:id", checkPermission('packaging-material-voucher', 'edit'), guardDocumentEdit(ApprovalDocType.PACKAGING_MATERIAL_VOUCHER, 'voucher'), uploadAttachments, captureUser, protectBody)
   public async updateVoucher(
     @request() req: Request,
     @response() res: Response,
@@ -347,7 +353,7 @@ export class PMPVoucherController {
   }
 
   // Delete a voucher
-  @httpDelete("/:id")
+  @httpDelete("/:id", checkPermission('packaging-material-voucher', 'delete'), guardDocumentDelete(ApprovalDocType.PACKAGING_MATERIAL_VOUCHER, 'voucher'))
   public async deleteVoucher(
     @request() req: Request,
     @response() res: Response,
@@ -401,7 +407,7 @@ export class PMPVoucherController {
       next(err);
     }
   }
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('packaging-material-voucher', 'delete'), guardDocumentDelete(ApprovalDocType.PACKAGING_MATERIAL_VOUCHER, 'voucher'))
       public async deleteMultiplePMPVoucher(
         @request() req: Request,
         @response() res: Response,

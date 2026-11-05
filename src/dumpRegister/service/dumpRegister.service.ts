@@ -1,3 +1,4 @@
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from "inversify";
 import { CreatedWithApproval, withApproval } from "../../utils/approvalMessage";
 
@@ -30,6 +31,11 @@ import { formatDateTime } from "../../utils/dateUtils";
 import { DumpRegister } from "../entity/dumpRegister.entity";
 import { BulkDeleteResultDto, DeleteResultDto } from "../../global/general.dto";
 import AppError from "../../utils/appError";
+import { ReceivingGuardService } from "../../receiving/service/receivingGuard.service";
+import { attachToReceivingSource, refreshProcessingTransaction } from '../../receiving/receiving.transaction';
+import { priceLineFromSource, round2 } from "../../receiving/receiving.helpers";
+import { ResolvedSource } from "../../receiving/receiving.types";
+import { DumpProduct } from "../entity/dumpProduct.entity";
 
 
 
@@ -56,6 +62,8 @@ export class DumpRegisterService{
     private readonly dataSource: DataSource,
     @inject(TYPES.CacheService)
     private readonly cacheService: CacheService,
+    @inject(TYPES.ReceivingGuardService)
+    private readonly receivingGuardService: ReceivingGuardService,
     ) {}
 
   // ─── Cache Helpers ────────────────────────────────────────────────────────
@@ -80,18 +88,9 @@ export class DumpRegisterService{
     await Promise.all(tasks);
   }
 
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateSerialNo(): Promise<string> {
-    const now = new Date();
-    const yyyy = now.getFullYear().toString();
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const datePrefix = `DPR${yyyy}${mm}${dd}`;
-
-    const count = await this.dumpRegisterRepository.count({
-      where: { dumpNo: ILike(`${datePrefix}%`) },
-    });
-
-    return `${datePrefix}${(count + 1).toString().padStart(5, '0')}`;
+    return nextDocumentNumber(this.dumpRegisterRepository.manager, SERIES.dump, `DPR${compactDate()}`, 5);
   }
 
 
@@ -106,6 +105,41 @@ export class DumpRegisterService{
       if (!approvalFlow) {
         throw new AppError(400, `Approval flow not configured for user. Please configure approval flow for ${documentType} type documents before creating.`);
       }
+    }
+
+    /**
+     * Unit and unit price of every line come from the source line; the amount is
+     * recomputed as quantity (in that unit) × unit price. Returns the total cost.
+     */
+    private priceLinesFromSource(
+      lines: Array<{ productId?: string | null; productName?: string | null; variantId?: string | null; variant?: string | null; uomId?: string | null; uom?: string | null; batchNo?: string | null; quantity?: number | null; unitPrice?: number | null; amount?: number | null }>,
+      resolved: ResolvedSource,
+    ): number {
+      const errors: string[] = [];
+      for (const item of lines) {
+        const { line, error } = priceLineFromSource(
+          resolved.products,
+          {
+            productId: item.productId || item.productName,
+            variantId: item.variantId || item.variant || null,
+            uomId: item.uomId || item.uom,
+            batchNo: item.batchNo ?? null,
+            unitPrice: item.unitPrice,
+            quantity: item.quantity,
+          },
+          resolved.sourceNo,
+        );
+        if (error) errors.push(error);
+        const uomId = line.uomId ?? item.uomId ?? item.uom ?? null;
+        item.uomId = uomId;
+        item.uom = uomId;
+        item.batchNo = line.batchNo ?? null;
+        item.unitPrice = line.unitPrice;
+        item.quantity = line.quantity;
+        item.amount = line.amount;
+      }
+      if (errors.length > 0) throw new AppError(400, errors.join('; '));
+      return round2(lines.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
     }
 
     async createDumpRegister(data: CreateDumpRegisterDto): Promise<CreatedWithApproval<any>> {
@@ -134,11 +168,35 @@ export class DumpRegisterService{
         
         // Create the dump register header
         // Handle both companyId/companyName field names
-        const companyId = data.companyId || data.companyName;
-        const locationId = data.locationId || data.location;
         const grnId = data.grn || data.grnNo;
         const deliveryChallanId = data.deliveryChallanNo || data.deliveryChallan;
         const rbcId = data.rbcNo || data.rbc;
+
+        // Receiving links R1–R6: one COMPLETE source, every product of it once,
+        // net kg within what is still unaccounted for. The source row is locked
+        // inside this transaction so concurrent creates serialise.
+        const sourceRef = ReceivingGuardService.pickSourceRef(
+          { grnId, deliveryChallanId, rbcId },
+          ReceivingGuardService.sourceTypeFromDocKind(data.dumpType),
+        );
+        const resolvedSource = await this.receivingGuardService.resolveAndAssert({
+          docType: 'dump',
+          sourceType: sourceRef?.sourceType,
+          sourceId: sourceRef?.sourceId,
+          lines: data.dumpProducts.map((p) => ({
+            productId: p.productId || p.productName,
+            variantId: p.variantId || p.variant || null,
+            uomId: p.uomId || p.uom || null,
+            batchNo: p.batchNo ?? null,
+            kg: p.netWeight,
+          })),
+          manager: queryRunner.manager,
+        });
+        // Company and batch belong to the source; unit, unit price and amount of every line too.
+        const companyId = resolvedSource.companyId || data.companyId || data.companyName;
+        const locationId = data.locationId || data.location || resolvedSource.locationId;
+        const batchNo = resolvedSource.batchNo ?? data.batchNo ?? null;
+        const totalDumpCost = this.priceLinesFromSource(data.dumpProducts, resolvedSource);
 const serialNo = await this.generateSerialNo();
 
         const dumpRegister = queryRunner.manager.create(
@@ -153,9 +211,9 @@ const serialNo = await this.generateSerialNo();
             requestedBy: data.requestedBy ? { id: data.requestedBy } : undefined,
             date: data.date,
             dumpType: data.dumpType || undefined,
-            batchNo: data.batchNo,
+            batchNo,
             totalQty: data.totalQty,
-            totalDumpCost: data.totalDumpCost,
+            totalDumpCost,
             totalCostInWords: data.totalCostInWords,
             remark: data.remark,
           } as any,
@@ -174,6 +232,14 @@ const serialNo = await this.generateSerialNo();
           remarks: 'Document auto-created with Dump Register',
           lastActionBy: { id: data.requestedBy },
           document_type_id: savedDumpRegister.id,
+        });
+        // The Dump joins its source's transaction (docs/transaction-tracking-plan.md §9.4).
+        savedDumpRegister.txnNo = await attachToReceivingSource(queryRunner.manager, {
+          sourceType: resolvedSource.sourceType,
+          sourceId: resolvedSource.sourceId,
+          docType: 'dump',
+          docId: savedDumpRegister.id,
+          docNo: serialNo,
         });
 
         
@@ -196,8 +262,10 @@ const serialNo = await this.generateSerialNo();
 
           const dumpQty = Number(quantity ?? 0);
           const dumpAmt = Number(amount ?? 0);
+          const netKg = Number(productData.netWeight ?? 0);
 
-          if (dumpQty <= 0) continue;
+          // Rows with nothing to dump (0 kg and 0 count) are not stored.
+          if (dumpQty <= 0 && netKg <= 0) continue;
 
           // Create DumpProduct record
           const dumpProductData: any = {
@@ -206,6 +274,10 @@ const serialNo = await this.generateSerialNo();
             quantity: dumpQty,
             unitPrice: Number(unitPrice ?? 0),
             amount: dumpAmt,
+            grossWeight: productData.grossWeight ?? null,
+            packingMaterialWeight: productData.packingMaterialWeight ?? null,
+            netWeight: productData.netWeight ?? null,
+            batchNo: productData.batchNo ?? null,
           };
 
           if (variantId) {
@@ -237,6 +309,10 @@ const serialNo = await this.generateSerialNo();
         // Rollback transaction - undo all changes
         await queryRunner.rollbackTransaction();
     logger.error('Error creating Dump Register:', error);
+        // User-facing errors (receiving guard) keep their status code and message.
+        if (error instanceof AppError) {
+          throw error;
+        }
         // Re-throw the original error with more context
         if (error instanceof Error) {
           throw new Error(`Failed to create Dump Register: ${error.message}`);
@@ -287,6 +363,7 @@ const serialNo = await this.generateSerialNo();
               createdTime: formatDateTime(doc.createdAt).createdTime,
               id: doc.relatedData.id,
               dumpNo: doc.relatedData.dumpNo,
+              txnNo: doc.relatedData.txnNo ?? null,
               companyName: doc.relatedData?.companyName?.name ?? null,
               location: doc.relatedData?.location?.name ?? null,
               grn: doc.relatedData?.grn?.grnNo ?? null,
@@ -372,11 +449,12 @@ const serialNo = await this.generateSerialNo();
       .leftJoin('dumpProducts.variant', 'variant')
       .leftJoin('dumpProducts.uom', 'uom')
       .select([
-        'dr.id', 'dr.dumpType', 'dr.date', 'dr.batchNo', 'dr.remark',
+        'dr.id', 'dr.dumpType', 'dr.txnNo', 'dr.date', 'dr.batchNo', 'dr.remark',
         'dr.totalDumpCost', 'dr.totalCostInWords', 'dr.totalQty', 'dr.createdAt',
         'location.id', 'grn.id', 'deliveryChallanNo.id', 'rbcNo.id',
         'requestedBy.id', 'companyName.id',
         'dumpProducts.id', 'dumpProducts.quantity', 'dumpProducts.unitPrice', 'dumpProducts.amount',
+        'dumpProducts.grossWeight', 'dumpProducts.packingMaterialWeight', 'dumpProducts.netWeight', 'dumpProducts.batchNo',
         'productName.id', 'variant.id', 'uom.id',
       ])
       .where('dr.id = :id', { id })
@@ -390,6 +468,7 @@ const serialNo = await this.generateSerialNo();
       createdDate,
       createdTime,
       dumpType: dumpRegister.dumpType ?? null,
+      txnNo: dumpRegister.txnNo ?? null,
       location: dumpRegister.location?.id ?? null,
       companyName: dumpRegister.companyName?.id ?? null,
       date: dumpRegister.date,
@@ -410,6 +489,10 @@ const serialNo = await this.generateSerialNo();
         quantity: p.quantity,
         amount: p.amount,
         unitPrice: p.unitPrice,
+        grossWeight: p.grossWeight ?? null,
+        packingMaterialWeight: p.packingMaterialWeight ?? null,
+        netWeight: p.netWeight ?? null,
+        batchNo: p.batchNo ?? null,
       })),
     };
 
@@ -440,12 +523,13 @@ const serialNo = await this.generateSerialNo();
       .leftJoin('dumpProducts.variant', 'variant')
       .leftJoin('dumpProducts.uom', 'uom')
       .select([
-        'dr.id', 'dr.dumpNo', 'dr.dumpType', 'dr.date', 'dr.batchNo',
+        'dr.id', 'dr.dumpNo', 'dr.txnNo', 'dr.dumpType', 'dr.date', 'dr.batchNo',
         'dr.totalDumpCost', 'dr.totalCostInWords', 'dr.totalQty', 'dr.remark', 'dr.createdAt',
         'location.name', 'grn.grnNo', 'deliveryChallanNo.challanNo', 'rbcNo.rbcNo',
         'companyName.name',
         'requestedBy.firstName', 'requestedBy.lastName',
         'dumpProducts.id', 'dumpProducts.quantity', 'dumpProducts.unitPrice', 'dumpProducts.amount',
+        'dumpProducts.grossWeight', 'dumpProducts.packingMaterialWeight', 'dumpProducts.netWeight', 'dumpProducts.batchNo',
         'productName.name', 'variant.variantName', 'uom.unit',
       ])
       .where('dr.id = :id', { id })
@@ -462,6 +546,7 @@ const serialNo = await this.generateSerialNo();
       createdBy: document.createdBy,
       approvalSummary: document.approvalSummary ?? null,
       dumpNo: dumpRegister.dumpNo ?? null,
+      txnNo: dumpRegister.txnNo ?? null,
       grn: dumpRegister.grn?.grnNo ?? null,
       deliveryChallanNo: dumpRegister.deliveryChallanNo?.challanNo ?? null,
       rbcNo: dumpRegister.rbcNo?.rbcNo ?? null,
@@ -487,6 +572,10 @@ const serialNo = await this.generateSerialNo();
         quantity: p.quantity,
         amount: p.amount,
         unitPrice: p.unitPrice,
+        grossWeight: p.grossWeight ?? null,
+        packingMaterialWeight: p.packingMaterialWeight ?? null,
+        netWeight: p.netWeight ?? null,
+        batchNo: p.batchNo ?? null,
       })),
     };
 
@@ -523,7 +612,7 @@ async getAllDumpRegisters(queryOptions: PaginationOptions, userId: string, isAdm
         .leftJoin('dr.deliveryChallanNo', 'deliveryChallanNo')
         .leftJoin('dr.rbcNo', 'rbcNo')
         .select([
-          'dr.id', 'dr.dumpNo', 'dr.date', 'dr.batchNo', 'dr.totalQty',
+          'dr.id', 'dr.dumpNo', 'dr.txnNo', 'dr.date', 'dr.batchNo', 'dr.totalQty',
           'dr.totalDumpCost', 'dr.totalCostInWords', 'dr.remark', 'dr.dumpType',
           'companyName.name', 'location.name',
           'grn.grnNo', 'deliveryChallanNo.challanNo', 'rbcNo.rbcNo',
@@ -551,6 +640,7 @@ async getAllDumpRegisters(queryOptions: PaginationOptions, userId: string, isAdm
           createdTime,
           id: rd.id,
           dumpNo: rd.dumpNo ?? null,
+          txnNo: rd.txnNo ?? null,
           companyName: rd.companyName?.name ?? null,
           location: rd.location?.name ?? null,
           grn: rd.grn?.grnNo ?? null,
@@ -613,53 +703,102 @@ public async updateDumpRegister(
   
   const existingDumpRegister = await this.dumpRegisterRepository.findOne({
     where: { id },
-    relations: ["dumpProducts"],
+    relations: [
+      "dumpProducts", "dumpProducts.productName", "dumpProducts.variant", "dumpProducts.uom",
+      "grn", "deliveryChallanNo", "rbcNo", "companyName", "location",
+    ],
   });
 
   if (!existingDumpRegister) {
     throw new Error("DumpRegister entry not found");
   }
 
-  
   const oldData = { ...existingDumpRegister };
 
- 
   const { dumpProducts, ...updateData } = data;
 
-  
-  Object.assign(existingDumpRegister, updateData);
-
-  
-  if (dumpProducts && Array.isArray(dumpProducts)) {
-    
-    await this.dumpProductRepository.delete({ dumpRegister: { id } });
-
-    // Accept the same field aliases the create path accepts. The edit form
-    // posts back the create payload shape (productId/variantId/uomId); reading
-    // only productName/variant/uom silently dropped the variant, which then
-    // moved stock against a NULL-variant inventory_stock row.
-    const newDumpProducts = dumpProducts.map(product => {
-      const productId = product.productId || product.productName;
-      const variantId = product.variantId || product.variant;
-      const uomId = product.uomId || product.uom;
-
-      return this.dumpProductRepository.create({
-        dumpRegister: existingDumpRegister,
-        productName: productId ? ({ id: productId } as any) : undefined,
-        variant: variantId ? ({ id: variantId } as any) : undefined,
-        uom: uomId ? ({ id: uomId } as any) : undefined,
-        quantity: product.quantity ?? undefined,
-        unitPrice: product.unitPrice ?? undefined,
-        amount: product.amount ?? undefined,
-      });
+  const updatedDumpRegister = await this.dataSource.transaction(async (manager) => {
+    // Receiving links: the edited Dump must still match its source exactly
+    // (lines not sent are validated as they are stored).
+    const sourceRef = ReceivingGuardService.pickSourceRef(
+      {
+        grnId: data.grn !== undefined ? data.grn : existingDumpRegister.grn?.id,
+        deliveryChallanId: data.deliveryChallanNo !== undefined ? data.deliveryChallanNo : existingDumpRegister.deliveryChallanNo?.id,
+        rbcId: data.rbcNo !== undefined ? data.rbcNo : existingDumpRegister.rbcNo?.id,
+      },
+      ReceivingGuardService.sourceTypeFromDocKind(data.dumpType ?? existingDumpRegister.dumpType),
+    );
+    const lines = dumpProducts && Array.isArray(dumpProducts)
+      ? dumpProducts.map((p) => ({ productId: p.productId || p.productName, variantId: p.variantId || p.variant || null, uomId: p.uomId || p.uom || null, batchNo: p.batchNo ?? null, kg: p.netWeight }))
+      : (existingDumpRegister.dumpProducts ?? []).map((p) => ({ productId: p.productName?.id, variantId: p.variant?.id ?? null, uomId: p.uom?.id ?? null, batchNo: p.batchNo ?? null, kg: p.netWeight }));
+    const resolvedSource = await this.receivingGuardService.resolveAndAssert({
+      docType: 'dump',
+      sourceType: sourceRef?.sourceType,
+      sourceId: sourceRef?.sourceId,
+      lines,
+      excludeDocId: id,
+      manager,
     });
+    if (resolvedSource.companyId) {
+      (updateData as Record<string, unknown>).companyName = resolvedSource.companyId;
+    }
+    if (resolvedSource.batchNo) {
+      (updateData as Record<string, unknown>).batchNo = resolvedSource.batchNo;
+    }
+    if (dumpProducts && Array.isArray(dumpProducts)) {
+      (updateData as Record<string, unknown>).totalDumpCost = this.priceLinesFromSource(dumpProducts, resolvedSource);
+    }
+    if (!updateData.location && !existingDumpRegister.location && resolvedSource.locationId) {
+      (updateData as Record<string, unknown>).location = resolvedSource.locationId;
+    }
 
-    await this.dumpProductRepository.save(newDumpProducts as any);
-    existingDumpRegister.dumpProducts = newDumpProducts;
-  }
+    Object.assign(existingDumpRegister, updateData);
 
- 
-  const updatedDumpRegister = await this.dumpRegisterRepository.save(existingDumpRegister);
+    if (dumpProducts && Array.isArray(dumpProducts)) {
+      await manager.delete(DumpProduct, { dumpRegister: { id } });
+
+      // Accept the same field aliases the create path accepts. The edit form
+      // posts back the create payload shape (productId/variantId/uomId); reading
+      // only productName/variant/uom silently dropped the variant, which then
+      // moved stock against a NULL-variant inventory_stock row.
+      // Rows with nothing to dump (0 kg and 0 count) are not stored.
+      const newDumpProducts = dumpProducts
+        .filter((product) => Number(product.quantity ?? 0) > 0 || Number(product.netWeight ?? 0) > 0)
+        .map(product => {
+          const productId = product.productId || product.productName;
+          const variantId = product.variantId || product.variant;
+          const uomId = product.uomId || product.uom;
+
+          return manager.create(DumpProduct, {
+            dumpRegister: existingDumpRegister,
+            productName: productId ? ({ id: productId } as any) : undefined,
+            variant: variantId ? ({ id: variantId } as any) : undefined,
+            uom: uomId ? ({ id: uomId } as any) : undefined,
+            quantity: product.quantity ?? undefined,
+            unitPrice: product.unitPrice ?? undefined,
+            amount: product.amount ?? undefined,
+            grossWeight: product.grossWeight ?? undefined,
+            packingMaterialWeight: product.packingMaterialWeight ?? undefined,
+            netWeight: product.netWeight ?? undefined,
+            batchNo: product.batchNo ?? null,
+          });
+        });
+
+      await manager.save(newDumpProducts as any);
+      existingDumpRegister.dumpProducts = newDumpProducts;
+    }
+
+    const saved = await manager.save(existingDumpRegister);
+    // Re-attach: moves the Dump when its source changed, else refreshes the transaction.
+    saved.txnNo = await attachToReceivingSource(manager, {
+      sourceType: resolvedSource.sourceType,
+      sourceId: resolvedSource.sourceId,
+      docType: 'dump',
+      docId: id,
+      docNo: saved.dumpNo ?? null,
+    });
+    return saved;
+  });
 
 
   await this.auditLogService.logChange(
@@ -700,6 +839,7 @@ async deleteDumpRegister(id: string): Promise<DeleteResultDto | null> {
 
   
   await this.dumpRegisterRepository.save(dumpRegister);
+  await refreshProcessingTransaction(this.dumpRegisterRepository.manager, 'dump', id);
   await this.invalidateDumpCache(id);
 
   //console.log(`Dump Register with ID ${id} marked for deletion in 6 months.`);
@@ -744,6 +884,7 @@ public async deleteMultipleDumpRegisters(ids: string[]): Promise<BulkDeleteResul
 
       await this.dumpRegisterRepository.softDelete(dumpRegister.id);
       await this.dumpRegisterRepository.update(dumpRegister.id, { isDeleted: true } as any);
+      await refreshProcessingTransaction(this.dumpRegisterRepository.manager, 'dump', dumpRegister.id);
       success.push({id,No:dumpRegister.dumpNo});
     } catch (error: any) {
       failed.push({ id, reason: error.message || 'Unknown error' });

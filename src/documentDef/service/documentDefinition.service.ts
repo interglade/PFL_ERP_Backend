@@ -18,6 +18,7 @@ export class  DocumentDefinitionService {
                 uniqueKey: item.uniqueKey,
                 name: item.name,
                 documentType: item.documentType,
+                allowedActions: item.allowedActions ?? [],
                 }
         })
         return formatResponse

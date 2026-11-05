@@ -1,3 +1,7 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView, restartApprovalAfterEditOf } from '../../approvalFlow/documentAccess';
+import { checkPermission } from '../../middleware/checkPermission';
 import { inject } from "inversify";
 import { controller, httpGet, next, response,request, requestParam, httpPost, requestBody, httpPatch, httpDelete } from "inversify-express-utils";
 import { TYPES } from "../../types";
@@ -51,7 +55,7 @@ export class PostReturnByCustomerController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('return-by-customer', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -65,7 +69,7 @@ export class PostReturnByCustomerController {
     });
   }
 
-  @httpGet("/")
+  @httpGet("/", checkPermission('return-by-customer', 'view'))
   public async getAllPostReturns(
     @request() req:Request,
     @response() res: Response,
@@ -113,7 +117,7 @@ export class PostReturnByCustomerController {
     }
   }
 
-  @httpGet("/:id")
+  @httpGet("/:id", checkPermission('return-by-customer', 'view'), guardDocumentView(ApprovalDocType.RETURN_BY_CUSTOMER, 'Return By Customer'))
   public async getPostReturnById(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -147,7 +151,7 @@ export class PostReturnByCustomerController {
     }
   }
 
-  @httpGet("/view/:docid")
+  @httpGet("/view/:docid", checkPermission('return-by-customer', 'view'), guardDocumentView(ApprovalDocType.RETURN_BY_CUSTOMER, 'Return By Customer'))
   public async getPostReturnByIdforview(
     @requestParam("docid") id: string,
     @request() req: Request,
@@ -174,7 +178,7 @@ export class PostReturnByCustomerController {
 
 
 
-  @httpGet("/update/:id")
+  @httpGet("/update/:id", checkPermission('return-by-customer', 'edit'), guardDocumentEdit(ApprovalDocType.RETURN_BY_CUSTOMER, 'Return By Customer'))
   public async getPostReturnByIdforupdate(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -199,7 +203,7 @@ export class PostReturnByCustomerController {
     }
   }
 
-@httpDelete('/delete/multiple')
+@httpDelete('/delete/multiple', checkPermission('return-by-customer', 'delete'), guardDocumentDelete(ApprovalDocType.RETURN_BY_CUSTOMER, 'Return By Customer'))
   public async deleteMultipleRBC(
     @request() req: Request,
     @response() res: Response,
@@ -263,7 +267,11 @@ export class PostReturnByCustomerController {
       const page = req.query.page ? parseInt(req.query.page as string) : undefined;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
       const search = req.query.search as string | undefined;
-      const result = await this.postReturnByCustomerService.getAllRBCNumbers(page, limit, search);
+      // Receiving picker params: receivable=true, missing=aqr|inward|dump, locationId
+      const receivable = req.query.receivable === 'true' ? true : req.query.receivable === 'false' ? false : undefined;
+      const missing = typeof req.query.missing === 'string' && req.query.missing.trim() ? req.query.missing.trim() : undefined;
+      const locationId = typeof req.query.locationId === 'string' && req.query.locationId.trim() ? req.query.locationId.trim() : undefined;
+      const result = await this.postReturnByCustomerService.getAllRBCNumbers(page, limit, search, { receivable, missing, locationId });
       res.status(200).json({
         status: 'success',
         data: result.data,
@@ -276,7 +284,7 @@ export class PostReturnByCustomerController {
     }
   }
 
-  @httpPost("/")
+  @httpPost("/", checkPermission('return-by-customer', 'create'))
   public async createPostReturn(
     @requestBody() postReturnData: any,
     @request() req: Request,
@@ -332,7 +340,7 @@ export class PostReturnByCustomerController {
     }
   }
 
-  @httpPatch("/:id" ,captureUser)
+  @httpPatch("/:id", checkPermission('return-by-customer', 'edit'), guardDocumentEdit(ApprovalDocType.RETURN_BY_CUSTOMER, 'Return By Customer') ,captureUser, protectBody)
     public async update(
       @requestParam("id") id: string,
       @requestBody() data: any,
@@ -349,6 +357,8 @@ export class PostReturnByCustomerController {
           ControllerLogger.logError(`Post Return By Customer update`, new Error("PostReturn not found or update failed"), req, res);
           return next(new AppError(404, "postreturn not found or update failed"));
         }
+        // Edited before the second approval: the approval starts again
+        await restartApprovalAfterEditOf(ApprovalDocType.RETURN_BY_CUSTOMER, id, 'Return By Customer edited: approval restarted');
         
         ControllerLogger.logSuccess('Post Return By Customer updated', id, req, res);
 
@@ -389,7 +399,7 @@ export class PostReturnByCustomerController {
         next(err);
       }
     }
-    @httpPost('/export-report')
+    @httpPost('/export-report', checkPermission('sales-report', 'export'))
   async exportReport(@request() req: Request,
       @response() res: Response,
       @next() next: NextFunction,) {

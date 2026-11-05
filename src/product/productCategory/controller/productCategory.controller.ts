@@ -1,3 +1,5 @@
+import { Role } from '../../../employee/entity/user.entity';
+import { requireRole } from '../../../middleware/requireRole';
 import { inject } from "inversify";
 import {
   controller,
@@ -121,7 +123,7 @@ export class ProductCategoryController {
   }
 
   // Create a new product category
-  @httpPost("/")
+  @httpPost("/", requireRole(Role.ADMIN))
   public async create(
     @requestBody() categoryData: CreateProductCategoryDto,
    @request() req: Request,
@@ -155,7 +157,7 @@ export class ProductCategoryController {
   }
 
   // Update product category by ID
-  @httpPatch("/:id",captureUser)
+  @httpPatch("/:id", requireRole(Role.ADMIN),captureUser)
   public async update(
     @requestParam("id") id: string,
     @requestBody() categoryData: CreateProductCategoryDto,
@@ -197,7 +199,7 @@ export class ProductCategoryController {
   }
 
   // Delete product category by ID
-  @httpDelete("/:id")
+  @httpDelete("/:id", requireRole(Role.SUPER_ADMIN))
   public async delete(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -234,7 +236,7 @@ export class ProductCategoryController {
       next(err);
     }
   }
-   @httpDelete("/delete/multiple")
+   @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
 public async softDeleteMultipleProductCategory(
   @request() req: Request,
   @response() res: Response,

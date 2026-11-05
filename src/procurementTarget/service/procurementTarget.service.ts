@@ -10,7 +10,9 @@ import { ProcurementTargetWeekRepository } from "../repository/procurmentTargetW
 import { WorkflowHierarchyRepository } from "../../workFlow/repository/WorkflowHierarchy.repository";
 import { DepartmentEnum } from "../../workFlow/entity/workflowClosure.entity";
 import * as ExcelJS from 'exceljs';
+import { DocumentStatus } from "../../approvalFlow/entity/docuemnt.entity";
 import { AppDataSource } from "../../utils/data-source";
+import { EntityManager } from "typeorm";
 import { toPlanMonth } from '../../utils/planMonth';
 
 import * as path from 'path';
@@ -24,6 +26,15 @@ import { User } from "../../employee/entity/user.entity";
 import { RfpaRepository } from "../../rfpa/repository/rfpa.repository";
 import { DealSlipRepository } from "../../dealSlip/repository/dealSlip.repository";
 import { GrnRepository } from "../../grn/repository/grn.repository";
+import AppError from "../../utils/appError";
+import {
+    assertCanDecidePlan,
+    directReportIds,
+    planActions,
+    planStatusOnSave,
+    PLAN_STATUS,
+    selfAndTeamIds,
+} from "../../workFlow/planAccess";
 
 
 /** One GRN line, reduced to what the weekly roll-up needs. */
@@ -92,101 +103,157 @@ export class ProcurementTargetService {
         private grnRepository: GrnRepository
     ) {}
 
-    async create(payload: any) {
+    /** Products and week totals from the form's procurementTargetPlan. */
+    private buildProducts(payload: any): { products: ProcurementTargetProduct[]; weekTotals: Record<number, number> } {
+        const weekTotals: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
 
-   // console.log("status",payload.status);
-    const targetRepo = AppDataSource.getRepository(ProcurementTarget);
-
-   
-   
-
-    // Week-wise totals (ALL PRODUCTS)
-    const weekTotals: Record<number, number> = {
-      1: 0,
-      2: 0,
-      3: 0,
-      4: 0,
-      5: 0,
-      6:0
-    };
-
-    // Handle both field names for backward compatibility
-    const planData = payload.procurementTargetPlan || payload.procurementTargetPlane;
-
-    if (!planData || !Array.isArray(planData)) {
-      throw new Error('procurementTargetPlan is required and must be an array');
-    }
-
-    const products: ProcurementTargetProduct[] = planData.map(
-      (p: any) => {
-        // ✅ Validate weekly total per product
-        const calculatedTotal = p.weeklyTargets.reduce(
-          (sum: number, w: any) => sum + Number(w.qty),
-          0,
-        );
-
-        if (calculatedTotal !== Number(p.weeklyTargetsTotalQty)) {
-          throw new Error(
-            `Weekly total mismatch for product ${p.product}`,
-          );
+        // Handle both field names for backward compatibility
+        const planData = payload.procurementTargetPlan || payload.procurementTargetPlane;
+        if (!planData || !Array.isArray(planData) || planData.length === 0) {
+            throw new AppError(400, 'Add at least one product to the plan');
         }
 
-        const productEntity = new ProcurementTargetProduct();
-        productEntity.product = { id: p.product } as Product;
-        productEntity.weeklyTotalQtyPerProduct = p.weeklyTargetsTotalQty;
-        productEntity.remark = p.remark;
+        const products: ProcurementTargetProduct[] = planData.map((p: any) => {
+            // Validate weekly total per product
+            const calculatedTotal = p.weeklyTargets.reduce(
+                (sum: number, w: any) => sum + Number(w.qty),
+                0,
+            );
+            if (calculatedTotal !== Number(p.weeklyTargetsTotalQty)) {
+                throw new AppError(400, `Weekly total mismatch for product ${p.product}`);
+            }
 
-        productEntity.weeklyProcurement = p.weeklyTargets.map((w: any) => {
-          weekTotals[w.weekNo] += Number(w.qty);
-
-          const weekEntity = new ProcurementTargetWeek();
-          weekEntity.weekNo = w.weekNo;
-          weekEntity.qty = w.qty;
-          weekEntity.weekStartDate = w.startDate;
-          weekEntity.weekEndDate = w.endDate;
-
-          return weekEntity;
+            const productEntity = new ProcurementTargetProduct();
+            productEntity.product = { id: p.product } as Product;
+            productEntity.weeklyTotalQtyPerProduct = p.weeklyTargetsTotalQty;
+            productEntity.remark = p.remark;
+            productEntity.weeklyProcurement = p.weeklyTargets.map((w: any) => {
+                weekTotals[w.weekNo] += Number(w.qty);
+                const weekEntity = new ProcurementTargetWeek();
+                weekEntity.weekNo = w.weekNo;
+                weekEntity.qty = w.qty;
+                weekEntity.weekStartDate = w.startDate;
+                weekEntity.weekEndDate = w.endDate;
+                return weekEntity;
+            });
+            return productEntity;
         });
-
-        return productEntity;
-      },
-    );
-
-    let status: ProcurementStatus;
-    if(payload.createdBy == payload.employee)
-    {
-        // Employee ने स्वतःसाठी create केला → PENDING (वरचा manager approve करेल)
-        status = ProcurementStatus.PENDING;
-    }
-    else {
-        // Manager ने subordinate साठी create केला → directly APPROVED
-        // (manager च creator आहे, त्याची implicit approval आहे)
-        status = ProcurementStatus.APPROVED;
+        return { products, weekTotals };
     }
 
-    // ✅ Create target entity
-    const target = targetRepo.create({
-      employee: { id: payload.employee } as User,
-      month: payload.month,
-      year: payload.year,
-      monthlyTotalQty: payload.procurementMonthlyTotalTargetQty,
-      week1TotalQty: weekTotals[1],
-      week2TotalQty: weekTotals[2],
-      week3TotalQty: weekTotals[3],
-      week4TotalQty: weekTotals[4],
-      week5TotalQty: weekTotals[5],
-      creatdeBy: { id: payload.createdBy } as User,
-      status: status,
-      products,
-    });
+    private async assertNoOtherPlan(manager: EntityManager, employeeId: string, month: number, year: number, exceptId?: string) {
+        const qb = manager.getRepository(ProcurementTarget)
+            .createQueryBuilder('t')
+            .where('t.employee_id = :employeeId AND t.month = :month AND t.year = :year', { employeeId, month, year });
+        if (exceptId) qb.andWhere('t.id <> :exceptId', { exceptId });
+        if (await qb.getCount()) {
+            throw new AppError(409, 'This employee already has a procurement plan for that month. Edit the existing plan instead.');
+        }
+    }
 
-    return targetRepo.save(target);
-  }
- 
+    /** Approval fields for a plan just saved with `decision` (see planStatusOnSave). */
+    private decisionFields(decision: { status: string; approvedById: string | null }) {
+        const approved = decision.status === PLAN_STATUS.APPROVED;
+        return {
+            status: decision.status as ProcurementStatus,
+            approvedBy: approved ? ({ id: decision.approvedById } as User) : null,
+            approvedAt: approved ? new Date() : null,
+            approvalRemark: approved ? 'Approved automatically' : null,
+        };
+    }
+
+    /**
+     * Status from the reporting tree (planStatusOnSave): Pending for the employee's own plan,
+     * Approved when their direct manager creates it or they have nobody above them.
+     */
+    async create(payload: any) {
+        const { products, weekTotals } = this.buildProducts(payload);
+        return AppDataSource.transaction(async (manager) => {
+            const decision = await planStatusOnSave(payload.createdBy, payload.employee, DepartmentEnum.PURCHASE, manager);
+            await this.assertNoOtherPlan(manager, payload.employee, payload.month, payload.year);
+            const target = manager.getRepository(ProcurementTarget).create({
+                employee: { id: payload.employee } as User,
+                month: payload.month,
+                year: payload.year,
+                monthlyTotalQty: payload.procurementMonthlyTotalTargetQty,
+                week1TotalQty: weekTotals[1],
+                week2TotalQty: weekTotals[2],
+                week3TotalQty: weekTotals[3],
+                week4TotalQty: weekTotals[4],
+                week5TotalQty: weekTotals[5],
+                creatdeBy: { id: payload.createdBy } as User,
+                ...this.decisionFields(decision),
+                products,
+            });
+            return manager.save(target);
+        });
+    }
+
+    /**
+     * The employee or their direct manager edits the plan. The lines are replaced and the
+     * status is worked out again as on create, so an edit by the employee goes back to Pending.
+     */
+    async update(targetId: string, payload: any, actorId: string) {
+        const { products, weekTotals } = this.buildProducts(payload);
+        return AppDataSource.transaction(async (manager) => {
+            const repo = manager.getRepository(ProcurementTarget);
+            const target = await repo.findOne({ where: { id: targetId }, relations: ['employee'] });
+            if (!target) throw new AppError(404, 'Procurement plan not found');
+            const employeeId = target.employee?.id;
+            if (payload.employee && payload.employee !== employeeId) {
+                throw new AppError(400, 'The employee of a plan cannot be changed');
+            }
+            const decision = await planStatusOnSave(actorId, employeeId, DepartmentEnum.PURCHASE, manager);
+            const month = payload.month ?? target.month;
+            const year = payload.year ?? target.year;
+            await this.assertNoOtherPlan(manager, employeeId, month, year, targetId);
+
+            await manager.createQueryBuilder()
+                .delete()
+                .from(ProcurementTargetProduct)
+                .where('target_id = :targetId', { targetId })
+                .execute();
+
+            Object.assign(target, {
+                month,
+                year,
+                monthlyTotalQty: payload.procurementMonthlyTotalTargetQty,
+                week1TotalQty: weekTotals[1],
+                week2TotalQty: weekTotals[2],
+                week3TotalQty: weekTotals[3],
+                week4TotalQty: weekTotals[4],
+                week5TotalQty: weekTotals[5],
+                ...this.decisionFields(decision),
+            });
+            await repo.save(target);
+            for (const product of products) {
+                product.target = { id: targetId } as ProcurementTarget;
+            }
+            await manager.save(products);
+            return target;
+        });
+    }
+
+    /** Status, decision and what the viewer may do: the approval block of the plan screens. */
+    private async approvalInfo(target: ProcurementTarget, viewerId?: string) {
+        const actions = viewerId
+            ? await planActions(viewerId, { employeeId: target.employee?.id ?? null, status: target.status }, DepartmentEnum.PURCHASE)
+            : { canEdit: false, canApprove: false };
+        const by = target.approvedBy;
+        return {
+            employeeId: target.employee?.id ?? null,
+            status: target.status,
+            approvedBy: by ? `${by.firstName ?? ''} ${by.lastName ?? ''}`.trim() : null,
+            approvedAt: target.approvedAt ?? null,
+            approvalRemark: target.approvalRemark ?? null,
+            ...actions,
+        };
+    }
 
     // Get all targets with pagination
     async getalltargets(
         employeeId: string,
+        isAdmin: boolean,
         page?: number,
         limit?: number,
         filters: {
@@ -203,35 +270,34 @@ export class ProcurementTargetService {
             const isPaginated = page !== undefined && limit !== undefined;
             const skip = isPaginated ? (page! - 1) * limit! : 0;
 
-            // Get all subordinates including self (depth >= 0)
-            const subordinates = await this.workflowHierarchyRepo
-                .createQueryBuilder('wh')
-                .select('wh.descendant_id')
-                .where('wh.ancestor_id = :employeeId', { employeeId })
-                .andWhere('wh.depth >= 0')
-                .getRawMany();
-
-            let employeeIds = subordinates.map(s => s.descendant_id);
+            // Admins see every plan; others their own and their procurement team's
+            let employeeIds: string[] | null = isAdmin
+                ? null
+                : await selfAndTeamIds(employeeId, DepartmentEnum.PURCHASE);
 
             // Filter by specific employeeId if provided
             if (filters.employeeId) {
-                employeeIds = employeeIds.filter(id => id === filters.employeeId);
+                employeeIds = employeeIds ? employeeIds.filter(id => id === filters.employeeId) : [filters.employeeId];
             }
 
-            if (employeeIds.length === 0) {
+            if (employeeIds && employeeIds.length === 0) {
                 return {
                     targets: [],
                     totalItems: 0,
                     totalPages: 0,
-                    currentPage: page ?? 1  
+                    currentPage: page ?? 1
                 };
             }
 
             const qb = this.procurementTargetRepository
                 .createQueryBuilder('target')
                 .leftJoinAndSelect('target.employee', 'employee')
-                .where('target.employee.id IN (:...employeeIds)', { employeeIds })
+                .leftJoinAndSelect('target.approvedBy', 'approvedBy')
                 .orderBy('target.createdAt', 'DESC');
+            if (employeeIds) {
+                qb.where('target.employee.id IN (:...employeeIds)', { employeeIds });
+            }
+            const team = new Set(await directReportIds(employeeId, DepartmentEnum.PURCHASE));
 
             // Legacy single month/year filter
             if (filters.month !== undefined) {
@@ -309,7 +375,15 @@ export class ProcurementTargetService {
                     week4Total: target.week4TotalQty || 0,
                     week5Total: target.week5TotalQty || 0,
                     totalTarget: target.monthlyTotalQty || 0,
-                    status: target.status
+                    status: target.status,
+                    employeeId: target.employee?.id ?? null,
+                    approvedBy: target.approvedBy
+                        ? `${target.approvedBy.firstName ?? ''} ${target.approvedBy.lastName ?? ''}`.trim()
+                        : null,
+                    approvedAt: target.approvedAt ?? null,
+                    approvalRemark: target.approvalRemark ?? null,
+                    canEdit: target.employee?.id === employeeId || team.has(target.employee?.id),
+                    canApprove: team.has(target.employee?.id) && target.status === ProcurementStatus.PENDING,
                 };
             });
 
@@ -375,11 +449,12 @@ export class ProcurementTargetService {
     }
 
     // Get monthly plan view structured
-    async getMonthlyPlanViewStructured(targetId: string) {
+    async getMonthlyPlanViewStructured(targetId: string, viewerId?: string) {
         try {
             const target = await this.procurementTargetRepository
                 .createQueryBuilder('target')
                 .leftJoinAndSelect('target.employee', 'employee')
+                .leftJoinAndSelect('target.approvedBy', 'approvedBy')
                 .leftJoinAndSelect('target.products', 'products')
                 .leftJoinAndSelect('products.product', 'product')
                 .leftJoinAndSelect('products.weeklyProcurement', 'weeklyProcurement')
@@ -448,7 +523,8 @@ export class ProcurementTargetService {
                 summary: {
                     weeklyTotals: weeklyTotals,
                     monthlyTotal: Number(monthlyTotal.toFixed(2))
-                }
+                },
+                approval: await this.approvalInfo(target, viewerId),
             };
         } catch (error) {
             throw error;
@@ -456,7 +532,8 @@ export class ProcurementTargetService {
     }
 
 async getMonthlyPlanUpdateStructured(
-  targetId: string
+  targetId: string,
+  viewerId?: string,
 ): Promise<{
   employee: string | null;
   month: number;
@@ -470,12 +547,14 @@ async getMonthlyPlanUpdateStructured(
     }>;
     monthlyTotal: number | null;
   };
+  approval?: unknown;
 }> {
   //console.log("getMonthlyPlanUpdateStructured params:", { targetId });
 
   const target = await this.procurementTargetRepository
     .createQueryBuilder("target")
     .leftJoinAndSelect("target.employee", "employee")
+    .leftJoinAndSelect("target.approvedBy", "approvedBy")
     .where("target.id = :targetId", { targetId })
     .getOne();
 
@@ -571,7 +650,8 @@ async getMonthlyPlanUpdateStructured(
     summary: {
       weeklyTotals: weeklyTotals,
       monthlyTotal: Number(monthlyTotal.toFixed(2))
-    }
+    },
+    approval: await this.approvalInfo(target, viewerId),
   };
 }
 
@@ -721,7 +801,7 @@ async getMonthlyPlanUpdateStructured(
                AND grn."isDeleted" = false
                AND gp."isDeleted" = false
             `,
-            ['grn', 'COMPLETE', employeeId, from, to],
+            ['grn', DocumentStatus.COMPLETE, employeeId, from, to],
         );
 
         return rows.map((row: any) => ({
@@ -1286,63 +1366,31 @@ async getMonthlyPlanUpdateStructured(
 
     /**
      * PATCH /procurement-target/:id/approve
-     * Body: { action: 'approved' | 'rejected', remark?: string }
-     *
-     * Rules:
-     *  - Target employee स्वतः create केला (PENDING) → workflow hierarchy नुसार
-     *    direct manager (depth=1 ancestor, department=procurement) approve करेल
-     *  - Manager ने employee साठी create केला → directly APPROVED होतो (approval ची गरज नाही)
+     * Body: { action: 'Approved' | 'Rejected', remark?: string }; a remark is required to reject.
+     * Only the employee's direct manager in the procurement tree decides, only while Pending.
      */
     async approveTarget(
         targetId: string,
         managerId: string,
-        action: 'approved' | 'rejected',
+        action: 'Approved' | 'Rejected',
         remark?: string,
     ): Promise<ProcurementTarget> {
         const target = await this.procurementTargetRepository.findOne({
             where: { id: targetId },
-            relations: ['employee', 'creatdeBy'],
+            relations: ['employee'],
         });
+        if (!target) throw new AppError(404, 'Procurement plan not found');
 
-        if (!target) {
-            throw new Error(`Procurement target with ID ${targetId} not found`);
+        const reason = typeof remark === 'string' ? remark.trim() : '';
+        if (action === 'Rejected' && !reason) {
+            throw new AppError(400, 'Give a reason for rejecting the plan');
         }
+        await assertCanDecidePlan(managerId, target.employee?.id, DepartmentEnum.PURCHASE, target.status);
 
-        // Terminal state guard
-        if (target.status === ProcurementStatus.APPROVED) {
-            throw new Error('Target is already approved');
-        }
-        if (target.status === ProcurementStatus.REJECTED) {
-            throw new Error('Target is already rejected');
-        }
-
-        const employeeId = target.employee?.id;
-        const createdById = target.creatdeBy?.id;
-
-        if (target.status === ProcurementStatus.PENDING) {
-            // Employee ने स्वतःसाठी create केला →
-            // workflow_hierarchy मध्ये managerId चा depth=1 ancestor approve करेल
-            const rows: { ancestor_id: string }[] = await this.workflowHierarchyRepo.query(
-                `SELECT ancestor_id
-                 FROM workflow_hierarchy
-                 WHERE descendant_id = $1
-                   AND ancestor_id   = $2
-                   AND department    = $3
-                   AND depth         = 1`,
-                [employeeId, managerId, DepartmentEnum.PURCHASE],
-            );
-
-            if (rows.length === 0) {
-                throw new Error('You are not the direct manager of this employee in the procurement workflow');
-            }
-        } else {
-            throw new Error(`Target cannot be approved in its current status: ${target.status}`);
-        }
-
-        target.status = action === 'approved'
-            ? ProcurementStatus.APPROVED
-            : ProcurementStatus.REJECTED;
-
+        target.status = action === 'Approved' ? ProcurementStatus.APPROVED : ProcurementStatus.REJECTED;
+        target.approvedBy = { id: managerId } as User;
+        target.approvedAt = new Date();
+        target.approvalRemark = reason || null;
         return this.procurementTargetRepository.save(target);
     }
 
@@ -1377,7 +1425,6 @@ async getMonthlyPlanUpdateStructured(
                 .leftJoinAndSelect('pt.employee', 'employee')
                 .leftJoinAndSelect('pt.creatdeBy', 'creatdeBy')
                 .where('pt.employee_id IN (:...subordinateIds)', { subordinateIds })
-                .andWhere('pt.createdby_id = pt.employee_id') // self-created
                 .andWhere('pt.status = :pendingStatus', { pendingStatus: ProcurementStatus.PENDING })
                 .orderBy('pt.createdAt', 'DESC')
                 .getMany();

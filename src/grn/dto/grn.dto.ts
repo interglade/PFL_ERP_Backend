@@ -1,5 +1,5 @@
-import { ammountStatus, Department, Source } from "../../utils/status.enum";
-import { GrnType, LocationType, PurchaseType } from "../entity/grn.entity";
+import { GrnPaymentStatus, Source } from "../../utils/status.enum";
+import { GrnDeliveryMode, GrnType, LocationType, PurchaseType } from "../entity/grn.entity";
 
 
 export interface GrnProductDto {
@@ -9,13 +9,15 @@ export interface GrnProductDto {
   productName?: string | null;
   variant?: string | null;
   uom?: string | null;
+  /** Free text, pre-filled from the Deal Slip line. */
+  grade?: string | null;
+  /** Packaging material id (create / update / edit form) or name (view). */
+  packagingMaterial?: string | null;
   amount?: number;
   rtv?: boolean;
   netWeight?: number;
   grossWeight?: number;
   packingMaterialWeight?: number;
-  revisedRate?: number;
-  revisedQuantity?: number;
   purchaseDate?: string | Date | null;
   dispatchDate?: string | Date | null;
   deliveryDate?: string | Date | null;
@@ -36,12 +38,14 @@ export interface PaymentInfoDto {
 export interface CreateGrnDto {
   companyName?: string;
   purchaseInstructionsBy?: string;
-  requestingDepartment?: Department;
+  /** Optional, alphanumeric, unique among live GRNs. */
+  batchNo?: string | null;
   locationType?: LocationType;
   grnType?: GrnType;
+  /** Where the goods go: `cc` or `dc` (received at that centre) or `direct-to-customer`. */
+  deliveryMode?: GrnDeliveryMode;
   purchaseType?: PurchaseType;
   dealSlipId?: string;
-  rfpaId?: string;
   securityPerson?: string;
   specialReq?: string;
   purchaseLocation?: string;
@@ -61,14 +65,10 @@ export interface CreateGrnDto {
   amtWords?: string;
   purchasedBy?: string;
   approvalNote?: string;
-  receivedThrough?: string;
-  vehicleNo?: string;
   timeIn?: string | null;
   cratesIn?: number;
-  deliveryReceivingPerson?: string;
-  baseLocation?: string;
+  receivingPerson?: string;
   remark?: string;
-  purchaseBy?: string;
   paymentInfo?: PaymentInfoDto;
   grnProducts?: GrnProductDto[];
   variants?: string[] | string;
@@ -86,7 +86,6 @@ export interface GetAllGrnsQueryDto {
   limit?: number;
   search?: string;
   sort?: string;
-  rfpaId?: string;
   companyName?: string;
   source?: Source;
   grnType?: GrnType;
@@ -102,6 +101,7 @@ export interface GrnListItemDto {
   createdTime: string | null;
   companyName: string | null;
   grnType: GrnType | null;
+  deliveryMode: GrnDeliveryMode | null;
   purchaseType: PurchaseType | null;
   locationType: LocationType | null;
   source: Source | null;
@@ -113,21 +113,32 @@ export interface GrnListItemDto {
   amtWords: string | null;
   cratesIn: number | null;
   purchasedBy: string | null;
-  receivedThrough: string | null;
-  vehicleNo: string | null;
   timeIn: string | null;
   remark: string | null;
   securityPerson: string | null;
-  deliveryReceivingPerson: string | null;
+  receivingPerson: string | null;
   rmn: string | null;
   purchaseLocation: string | null;
   purchaseForSalesLocation: string | null;
   grnNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo: string | null;
+  batchNo: string | null;
+  totalGrossWeight: number | null;
+  totalNetWeight: number | null;
   paymentInfo: PaymentInfoDto | null;
+  createdById?: string | null;
+  ammountStatus?: GrnPaymentStatus | null;
+  paidAmt?: number;
+  balanceAmt?: number;
 }
 
 export interface GrnDetailDto {
   id: string;
+  /** Approval document id (edit form: the key it was loaded by) */
+  documentId?: string | null;
+  /** Only the creator may edit the GRN. */
+  createdById?: string | null;
   overAllStatus?: string | null;
   approvalSummary?: {
     createdBy?: { userId: string; name: string } | null;
@@ -138,7 +149,11 @@ export interface GrnDetailDto {
     firstFinalized?: { userId: string; name: string; status: string; reason: string | null } | null;
     secondFinalized?: { userId: string; name: string; status: string; reason: string | null } | null;
   } | null;
-  ammountStatus:ammountStatus;
+  ammountStatus: GrnPaymentStatus;
+  /** Sum of the live recorded payments (advance not included). */
+  paidAmt?: number;
+  /** total − advance − paid. */
+  balanceAmt?: number;
   companyName: string | null;
   purchaseInstructionsBy?: string | { id?: string; firstName?: string; lastName?: string } | null;
   dealSlipId: string | { id: string | null; dealSlipNo: string | null } | null;
@@ -146,16 +161,23 @@ export interface GrnDetailDto {
   otherPurchaseForSalesLoc?: string | null;
   otherPurchaseLoc?: string | null;
   grnNo?: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5). */
+  txnNo?: string | null;
+  batchNo?: string | null;
+  totalGrossWeight?: number | null;
+  totalNetWeight?: number | null;
   locationType?: LocationType | null;
   grnType?: GrnType | null;
+  deliveryMode?: GrnDeliveryMode | null;
   rmn?: string | null;
   createdDate?: string | null;
   createdTime?: string | null;
   createdBy?: string | null;
-  requestingDepartment?: Department | null;
   purchaseLocation?: string | null;
   purchaseForSalesLocation?: string | null;
   selectedParty?: string | null;
+  /** Vendor / farmer id behind `selectedParty` (which holds the display name in the view). */
+  selectedPartyId?: string | null;
   source?: Source | null;
   billNo?: string | null;
   billImage?: string | null;
@@ -165,20 +187,13 @@ export interface GrnDetailDto {
   totalAmt?: number | null;
   amtWords?: string | null;
   purchasedBy?: string | null;
-  receivedThrough?: string | null;
-  vehicleNo?: string | null;
   timeIn?: string | null;
   cratesIn?: number | null;
-  deliveryReceivingPerson?: string | null;
-  baseLocation?: string | null;
+  receivingPerson?: string | null;
   specialReq?: string | null;
   securityPerson?: string | null;
   approvalNote?: string | null;
   remark?: string | null;
-  purchaseBy?: {
-    firstName: string;
-    lastName: string;
-  } | null;
   paymentInfo?: PaymentInfoDto | null;
   grnProducts: GrnProductDto[];
 }

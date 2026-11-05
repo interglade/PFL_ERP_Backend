@@ -247,7 +247,7 @@ function importRequest(spec: ModuleSpec) {
         '',
         '### Columns the system fills in',
         'The record code, `Status` and `Created By` are **not** read from the sheet — the',
-        'template leaves them out entirely. Status is always `pending` on import, and',
+        'template leaves them out entirely. Status is always `Pending` on import, and',
         '`Created By` is the **logged-in user who uploaded the file**.',
         '',
         '**Response 200**',

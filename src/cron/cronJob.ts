@@ -41,3 +41,21 @@ cron.schedule('30 1 * * *', async () => {
     logger.error('Error purging old Excel exports:', error);
   }
 });
+
+// D-9: every morning, remind the people of each source whose goods are ready
+// to receive but whose receiving has not started or is still open.
+cron.schedule('0 9 * * *', async () => {
+  try {
+    if (!AppDataSource.isInitialized) await AppDataSource.initialize();
+    // Loaded lazily: the container imports most of the app.
+    const { container } = await import('../inversify.config');
+    const { TYPES } = await import('../types');
+    const { remindOpenReceiving } = await import('../notification/flowNotifications');
+    const receiving = container.get<{ listArrivals: (f: any) => Promise<any> }>(TYPES.ReceivingStatusService);
+    const notifier = container.get<{ createBatchNoti: (m: string, ids: string[]) => Promise<void> }>(TYPES.NotificationService);
+    const sent = await remindOpenReceiving(AppDataSource, notifier, (f) => receiving.listArrivals(f));
+    logger.info(`Open receiving reminders sent: ${sent}`);
+  } catch (error) {
+    logger.error('Open receiving reminder failed:', error);
+  }
+});

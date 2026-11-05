@@ -73,7 +73,7 @@ export class AccSalesService {
                          WHERE i.delivery_challan_id = dc.id AND i."isDeleted" = false
                            AND NOT EXISTS (SELECT 1 FROM documents rd
                                             WHERE rd.document_type_id = i.id::text AND rd.type = 'final-invoice'
-                                              AND rd.status::text IN ('REJECT', 'disapproved'))) AS invoiced
+                                              AND rd.status::text = 'Rejected')) AS invoiced
            FROM delivery_challan_purchase dc
            LEFT JOIN LATERAL (
              SELECT COALESCE(SUM(${kg.dispatched}), 0) AS dispatched,

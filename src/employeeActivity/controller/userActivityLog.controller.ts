@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { Request, Response, NextFunction } from 'express';
 import { inject } from 'inversify';
 import {
@@ -30,7 +32,7 @@ export class UserActivityLogController {
    * Get activity logs for a specific user
    * GET /user-activity-logs/user/:userId
    */
-  @httpGet('/user/:userId')
+  @httpGet('/user/:userId', requireRole(Role.ADMIN))
   public async getUserActivityLogs(
     @requestParam('userId') userId: string,
     @request() req: Request,
@@ -84,7 +86,7 @@ export class UserActivityLogController {
    * Get all activity logs (Admin only)
    * GET /user-activity-logs
    */
-  @httpGet('/')
+  @httpGet('/', requireRole(Role.ADMIN))
   public async getAllActivityLogs(
     @request() req: Request,
     @response() res: Response,
@@ -143,7 +145,7 @@ export class UserActivityLogController {
    * Get activity logs for a specific entity
    * GET /user-activity-logs/entity/:entityName/:entityId
    */
-  @httpGet('/entity/:entityName/:entityId')
+  @httpGet('/entity/:entityName/:entityId', requireRole(Role.ADMIN))
   public async getEntityActivityLogs(
     @requestParam('entityName') entityName: string,
     @requestParam('entityId') entityId: string,
@@ -181,7 +183,7 @@ export class UserActivityLogController {
    * Get user activity summary
    * GET /user-activity-logs/user/:userId/summary
    */
-  @httpGet('/user/:userId/summary')
+  @httpGet('/user/:userId/summary', requireRole(Role.ADMIN))
   public async getUserActivitySummary(
     @requestParam('userId') userId: string,
     @request() req: Request,
@@ -210,7 +212,7 @@ export class UserActivityLogController {
    * Get recent activities
    * GET /user-activity-logs/recent
    */
-  @httpGet('/recent')
+  @httpGet('/recent', requireRole(Role.ADMIN))
   public async getRecentActivities(
     @request() req: Request,
     @response() res: Response,
@@ -238,7 +240,7 @@ export class UserActivityLogController {
    * Get user login history
    * GET /user-activity-logs/user/:userId/login-history
    */
-  @httpGet('/user/:userId/login-history')
+  @httpGet('/user/:userId/login-history', requireRole(Role.ADMIN))
   public async getUserLoginHistory(
     @requestParam('userId') userId: string,
     @request() req: Request,
@@ -274,7 +276,7 @@ export class UserActivityLogController {
    * Get user error logs
    * GET /user-activity-logs/user/:userId/errors
    */
-  @httpGet('/user/:userId/errors')
+  @httpGet('/user/:userId/errors', requireRole(Role.ADMIN))
   public async getUserErrorLogs(
     @requestParam('userId') userId: string,
     @request() req: Request,
@@ -365,7 +367,7 @@ export class UserActivityLogController {
    * Get activity feed for dashboard (recent activities across modules)
    * GET /user-activity-logs/activity-feed
    */
-  @httpGet('/activity-feed')
+  @httpGet('/activity-feed', requireRole(Role.ADMIN))
   public async getActivityFeed(
     @request() req: Request,
     @response() res: Response,
@@ -404,7 +406,7 @@ export class UserActivityLogController {
    * Get activity statistics for dashboard
    * GET /user-activity-logs/stats
    */
-  @httpGet('/stats')
+  @httpGet('/stats', requireRole(Role.ADMIN))
   public async getActivityStats(
     @request() req: Request,
     @response() res: Response,
@@ -436,19 +438,14 @@ export class UserActivityLogController {
    * Delete old logs (Admin only)
    * DELETE /user-activity-logs/cleanup
    */
-  @httpDelete('/cleanup')
+  @httpDelete('/cleanup', requireRole(Role.ADMIN))
   public async deleteOldLogs(
     @request() req: Request,
     @response() res: Response,
     @next() next: NextFunction,
   ): Promise<void> {
     try {
-      // Check if user is admin
-      const userRole = res.locals.user.role;
-      if (userRole !== 'SuperAdmin') {
-        return next(new AppError(403, 'Access denied. SuperAdmin only.'));
-      }
-
+      // Admin only: enforced by requireRole on the route
       const { daysToKeep = 180 } = req.query;
 
       const deletedCount = await this.activityLogService.deleteOldLogs(

@@ -1,3 +1,9 @@
+import { DocumentTypeEnum as ApprovalDocType } from '../../../approvalFlow/entity/docuemnt.entity';
+import { protectBody } from '../../../middleware/protectBody';
+import { guardDocumentDelete, guardDocumentEdit, guardDocumentView } from '../../../approvalFlow/documentAccess';
+import { checkPermission } from '../../../middleware/checkPermission';
+import { requireRole } from '../../../middleware/requireRole';
+import { Role } from '../../../employee/entity/user.entity';
 import { inject } from "inversify";
 import { controller, httpDelete, httpGet, httpPatch, httpPost, next, request, requestParam, response } from "inversify-express-utils";
 import { TYPES } from "../../../types";
@@ -40,7 +46,7 @@ export class  MultiCashVoucherController {
       
     ) {}
 
-    @httpPost("/", uploadAttachments)
+    @httpPost("/", checkPermission('multi-cash-voucher', 'create'), uploadAttachments)
   public async createVoucher(
     @request() req: Request<{}, {}, CreateMultiCashVoucherDto>,
     @response() res: Response,
@@ -107,7 +113,7 @@ export class  MultiCashVoucherController {
     }
   }
 
-@httpGet("/recyclebin")
+@httpGet("/recyclebin", requireRole(Role.SUPER_ADMIN))
   public async getAllRecycleBinVouchers(
     @request() req: Request,
     @response() res: Response,
@@ -148,7 +154,7 @@ export class  MultiCashVoucherController {
    * Accepts exactly the same filter parameters as the Get All list (startDate, endDate,
    * status, search, module filters, ...); page and limit are ignored.
    */
-  @httpGet('/export/excel')
+  @httpGet('/export/excel', checkPermission('multi-cash-voucher', 'export'))
   public async exportToExcel(
     @request() req: Request,
     @response() res: Response,
@@ -163,7 +169,7 @@ export class  MultiCashVoucherController {
   }
 
   // Get all vouchers
-  @httpGet("/")
+  @httpGet("/", checkPermission('multi-cash-voucher', 'view'))
   public async getAllVouchers(
     @request() req: Request,
     @response() res: Response,
@@ -215,7 +221,7 @@ export class  MultiCashVoucherController {
 
 
 
-  @httpGet("/:id/view")
+  @httpGet("/:id/view", checkPermission('multi-cash-voucher', 'view'), guardDocumentView(ApprovalDocType.MULTI_CASH_VOUCHER, 'voucher'))
   public async getVoucherByIdForView(
     @request() req: Request<{ id: string }>,
     @response() res: Response,
@@ -243,7 +249,7 @@ export class  MultiCashVoucherController {
       next(err);
     }
   }
-   @httpGet("/:id/update")
+   @httpGet("/:id/update", checkPermission('multi-cash-voucher', 'edit'), guardDocumentEdit(ApprovalDocType.MULTI_CASH_VOUCHER, 'voucher'))
   public async getVoucherByIdForUpdate(
     @request() req: Request<{ id: string }>,
     @response() res: Response,
@@ -273,7 +279,7 @@ export class  MultiCashVoucherController {
   }
 
   // Update a Labour Payment Voucher
-  @httpPatch("/:id", uploadAttachments, captureUser)
+  @httpPatch("/:id", checkPermission('multi-cash-voucher', 'edit'), guardDocumentEdit(ApprovalDocType.MULTI_CASH_VOUCHER, 'voucher'), uploadAttachments, captureUser, protectBody)
   public async updateVoucher(
     @request() req: Request<{ id: string }, {}, UpdateMultiCashVoucherDto>,
     @response() res: Response,
@@ -340,7 +346,7 @@ export class  MultiCashVoucherController {
       next(err);
     }
   }
-  @httpDelete("/:id")
+  @httpDelete("/:id", checkPermission('multi-cash-voucher', 'delete'), guardDocumentDelete(ApprovalDocType.MULTI_CASH_VOUCHER, 'voucher'))
   public async deleteVoucher(
     @requestParam("id") id: string,
     @request() req: Request,
@@ -394,7 +400,7 @@ export class  MultiCashVoucherController {
     }
   }
 
-  @httpDelete('/delete/multiple')
+  @httpDelete('/delete/multiple', checkPermission('multi-cash-voucher', 'delete'), guardDocumentDelete(ApprovalDocType.MULTI_CASH_VOUCHER, 'voucher'))
         public async deleteMultipleMultiCashVoucher(
           @request() req: Request,
           @response() res: Response,

@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { controller, httpDelete, httpGet, httpPatch, httpPost, next, request, requestParam, response } from "inversify-express-utils";
 
 import { inject } from "inversify";
@@ -21,7 +23,7 @@ export class  LevelsController {
         private notificationService: NotificationService
       ) {}
     
-      @httpPost("/")
+      @httpPost("/", requireRole(Role.ADMIN))
       public async createLevel(
         @request() req: Request<{}, {}, any>, 
         @response() res: Response, 
@@ -60,7 +62,7 @@ export class  LevelsController {
         }
       }
     
-      @httpPatch("/:id")
+      @httpPatch("/:id", requireRole(Role.ADMIN))
       public async updateLevel(
         @requestParam("id") id: string,
         @request() req: Request<{}, {}, any>, 
@@ -101,7 +103,7 @@ export class  LevelsController {
         }
       }
     
-      @httpDelete("/:id")
+      @httpDelete("/:id", requireRole(Role.ADMIN))
       public async deleteLevel(
         @requestParam("id") id: string,
         @request() req: Request,

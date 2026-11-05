@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from 'inversify';
 
 import {
@@ -15,7 +17,7 @@ import { AdminDashboardService } from '../service/adminDashboardService.service'
 import logger from '../../utils/logger';
 
 
-@controller('/admin/dashboard', deserializeUser, requireUser)
+@controller('/admin/dashboard', deserializeUser, requireUser, requireRole(Role.ADMIN))
 export class AdminDashboardController {
   constructor(
     @inject(TYPES.AdminDashboardService)

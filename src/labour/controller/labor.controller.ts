@@ -1,3 +1,5 @@
+import { requireRole } from '../../middleware/requireRole';
+import { Role } from '../../employee/entity/user.entity';
 import { inject } from "inversify";
 import {
   controller,
@@ -20,7 +22,7 @@ import { LaborService } from "../service/labor.service";
 import { NotificationService } from "../../notification/service/notification.service";
 
 
-@controller("/labors",deserializeUser,requireUser)
+@controller("/labors",deserializeUser,requireUser, requireRole(Role.ADMIN))
 export class LaborController {
   constructor(
     @inject(TYPES.LaborService) private readonly laborService: LaborService,

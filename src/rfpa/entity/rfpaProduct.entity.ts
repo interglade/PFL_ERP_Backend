@@ -30,15 +30,6 @@ export class RFPAProduct extends Model {
 
   @Column('numeric', { name: 'unit_price', precision: 10, scale: 2 })
   unitPrice: number;
-  @Column('character varying', { name: 'count', nullable: true, length: 100 })
-  count: string;
-
-  @Column('character varying', { name: 'size', nullable: true, length: 100 })
-  size: string;
-  @Column('character varying', { name: 'origin', nullable: true, length: 100 })
-  origin: string;
-  @Column('character varying', { name: 'variety', nullable: true, length: 100 })
-  variety: string;
 
   // @Column({ name: 'description', nullable: true })
   // description: string;

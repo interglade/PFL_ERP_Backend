@@ -44,8 +44,8 @@ export const SECOND_SALE_EXPORT: ExportDefinition = {
         const qb = ctx.manager.getRepository(SecondSale).createQueryBuilder('sale');
         joinSelect(qb, 'sale.companyName', 'company', COMPANY_COLUMNS);
         joinSelect(qb, 'sale.location', 'location', BRANCH_COLUMNS);
-        joinSelect(qb, 'sale.deliveryChallanNo', 'challan', ['id', 'challanNo']);
-        joinSelect(qb, 'sale.customerAddress', 'customerAddress', ADDRESS_COLUMNS);
+        joinSelect(qb, 'sale.billingAddress', 'billingAddress', ADDRESS_COLUMNS);
+        joinSelect(qb, 'sale.shippingAddress', 'shippingAddress', ADDRESS_COLUMNS);
         return qb.where('sale.id IN (:...ids)', { ids: ctx.ids }).getMany();
       },
       columns: [
@@ -53,11 +53,20 @@ export const SECOND_SALE_EXPORT: ExportDefinition = {
         { header: 'Sale Date', maps: 'second_sale_document.saleDate', type: 'date', get: (r) => r.record.saleDate },
         ...companyColumns<Row>((r) => r.record.companyName),
         branchColumn<Row>('Location', (r) => r.record.location, 'second_sale_document.location'),
-        { header: 'Source Delivery Challan No', maps: 'second_sale_document.deliveryChallanNo -> delivery_challan_purchase.challanNo', get: (r) => r.record.deliveryChallanNo?.challanNo },
         { header: 'Customer Name', maps: 'second_sale_document.customerName', get: (r) => r.record.customerName },
+        { header: 'Customer Type', maps: 'second_sale_document.customer_type', get: (r) => r.record.customerType },
         { header: 'Customer Contact No', maps: 'second_sale_document.customerContactNo', get: (r) => r.record.customerContactNo },
+        { header: 'Alternate Contact No', maps: 'second_sale_document.customer_alt_contact_no', get: (r) => r.record.customerAltContactNo },
         { header: 'Customer Email', maps: 'second_sale_document.customerEmail', get: (r) => r.record.customerEmail },
-        addressColumn<Row>('Customer Address', (r) => r.record.customerAddress, 'second_sale_document.customerAddress'),
+        { header: 'PAN No', maps: 'second_sale_document.customer_pan_no', get: (r) => r.record.customerPanNo },
+        addressColumn<Row>('Billing Address', (r) => r.record.billingAddress, 'second_sale_document.billing_address_id'),
+        // The address the goods went to: the billing address when "same as billing".
+        addressColumn<Row>(
+          'Shipping Address',
+          (r) => (r.record.shipToSameAsBilling === false ? r.record.shippingAddress : r.record.billingAddress),
+          'second_sale_document.shipping_address_id',
+        ),
+        { header: 'Place of Supply', maps: 'second_sale_document.place_of_supply', get: (r) => r.record.placeOfSupply },
         { header: 'Reason For Sale', maps: 'second_sale_document.reasonForSale', get: (r) => r.record.reasonForSale },
         { header: 'Total Net Weight', maps: 'second_sale_document.totalNetWeight', type: 'quantity', get: (r) => r.record.totalNetWeight },
         { header: 'Total Gross Weight', maps: 'second_sale_document.totalGrossWeight', type: 'quantity', get: (r) => r.record.totalGrossWeight },

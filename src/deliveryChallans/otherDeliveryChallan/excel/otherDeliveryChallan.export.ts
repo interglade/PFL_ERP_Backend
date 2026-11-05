@@ -27,16 +27,27 @@ export const OTHER_DELIVERY_CHALLAN_EXPORT: ExportDefinition = {
         const qb = ctx.manager.getRepository(OtherDeliveryChallan).createQueryBuilder('challan');
         joinChallanBase(qb, 'challan');
         joinSelect(qb, 'challan.fromLocation', 'fromLocation', BRANCH_COLUMNS);
-        joinSelect(qb, 'challan.customerAddress', 'customerAddress', ADDRESS_COLUMNS);
+        joinSelect(qb, 'challan.billingAddress', 'billingAddress', ADDRESS_COLUMNS);
+        joinSelect(qb, 'challan.shippingAddress', 'shippingAddress', ADDRESS_COLUMNS);
         return qb.where('challan.id IN (:...ids)', { ids: ctx.ids }).getMany();
       },
       columns: [
         { header: 'Challan No', maps: 'delivery_challan_purchase.challanNo', get: (r) => r.record.challanNo },
         branchColumn<Row>('From Location', (r) => r.record.fromLocation, 'delivery_challan_purchase.other_from_location_id_for_other'),
         { header: 'Party Name', maps: 'delivery_challan_purchase.other_customer_name', get: (r) => r.record.customer },
+        { header: 'Customer Type', maps: 'delivery_challan_purchase.other_customer_type', get: (r) => r.record.customerType },
         { header: 'Party Contact No', maps: 'delivery_challan_purchase.other_customer_contact_no', get: (r) => r.record.customerContactNo },
+        { header: 'Alternate Contact No', maps: 'delivery_challan_purchase.other_customer_alt_contact_no', get: (r) => r.record.customerAltContactNo },
         { header: 'Party Email', maps: 'delivery_challan_purchase.other_customer_email', get: (r) => r.record.customerEmail },
-        addressColumn<Row>('Party Address', (r) => r.record.customerAddress, 'delivery_challan_purchase.customer_address_for_other'),
+        { header: 'PAN No', maps: 'delivery_challan_purchase.other_customer_pan_no', get: (r) => r.record.customerPanNo },
+        addressColumn<Row>('Billing Address', (r) => r.record.billingAddress, 'delivery_challan_purchase.other_billing_address_id'),
+        // The address the goods went to: the billing address when "same as billing".
+        addressColumn<Row>(
+          'Shipping Address',
+          (r) => (r.record.shipToSameAsBilling === false ? r.record.shippingAddress : r.record.billingAddress),
+          'delivery_challan_purchase.other_shipping_address_id',
+        ),
+        { header: 'Place of Supply', maps: 'delivery_challan_purchase.other_place_of_supply', get: (r) => r.record.placeOfSupply },
         ...challanBaseColumns<OtherDeliveryChallan>(),
         ...documentColumns<OtherDeliveryChallan>(),
       ],

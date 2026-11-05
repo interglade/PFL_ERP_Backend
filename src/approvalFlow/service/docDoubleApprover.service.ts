@@ -1,6 +1,13 @@
+import AppError from '../../utils/appError';
+import { assertEngineAccepts, assertNotCreator } from '../approvalGuards';
+import { PAYMENT_DOCUMENT_TYPES } from '../documentAccess';
+import { Role } from '../../employee/entity/user.entity';
 //TODO: This service is replica of documentb.service.ts. 'documentb.service.ts' will be used for multiple level approval like grns and voucher.
 //TODO: This service will be used for single level approval like deal slips, rfpa, etc.
 
+import { applyRejectedAdjustmentOrRepack } from '../../inventoryStock/adjustment/stockAdjustment.apply';
+import { isDcType, releaseDcStock, releaseSecondSaleStock } from '../../inventoryStock/batch/batchDocuments';
+import { dcIdsOfSalesDocuments, syncCustomerDcSalesLinks } from '../../deliveryChallans/customerDeliveryChllan/service/dcSalesLinks';
 import { inject, injectable } from "inversify";
 
 import { TYPES } from "../../types";
@@ -19,6 +26,7 @@ import { applyDocumentFilters, safeSqlSort } from "../../global/filters/document
 import { NotificationService } from "../../notification/service/notification.service";
 import { DocumentbRepository } from "../repository/documentb.repository";
 import { InventoryMovementService } from "../../inventoryStock/service/inventoryMovement.service";
+import { refreshTransactionOf } from "../../transactions/transaction.core";
 
 @injectable()
 export class DocDoubleApproverService {
@@ -37,6 +45,30 @@ export class DocDoubleApproverService {
 
   // Invalidate all caches that depend on a document's status.
   // Accepts the document so it can bust the correct module's cache keys.
+  /**
+   * A Final Invoice / RBC that is approved or rejected changes its Customer
+   * DC: the invoice / return flags and the returned quantities are recomputed
+   * from the live documents (rejected ones release the DC).
+   */
+  private async syncCustomerDcOf(document: { type?: DocumentTypeEnum; document_type_id?: string | null }): Promise<void> {
+    if (!document.document_type_id) return;
+    if (document.type !== DocumentTypeEnum.FINAL_INVOICE && document.type !== DocumentTypeEnum.RETURN_BY_CUSTOMER) return;
+    const manager = this.documentbRepository.manager;
+    const dcIds = await dcIdsOfSalesDocuments(manager, document.type, [document.document_type_id]);
+    if (!dcIds.length) return;
+    await syncCustomerDcSalesLinks(manager, dcIds);
+    await Promise.all([
+      this.cacheService.invalidatePattern('cdc:list:*'),
+      this.cacheService.invalidatePattern('cdc:view:*'),
+      ...dcIds.flatMap((id) => [
+        this.cacheService.del(`cdc:update:${id}`),
+        this.cacheService.del(`cdc:id:${id}`),
+        this.cacheService.del(`cdc:net:${id}`),
+        this.cacheService.del(`cdc:returnStatus:${id}`),
+      ]),
+    ]);
+  }
+
   private async invalidateDocumentCache(documentId: string, document?: any): Promise<void> {
     const typeId = document?.document_type_id;
     const type: DocumentTypeEnum | undefined = document?.type;
@@ -150,6 +182,12 @@ export class DocDoubleApproverService {
     throw new Error('Document or its approval flow not found');
   }
 
+  if (document.status === DocumentStatus.DRAFT) {
+    throw new Error('This document is still a draft and has not been sent for approval');
+  }
+  assertEngineAccepts('double', document.type);
+  assertNotCreator(document, userId);
+
   const now = new Date();
   const user = await this.userRepository.findOne({ where: { id: userId } });
   const userName = user ? `${user.firstName} ${user.lastName}` : 'Unknown';
@@ -184,6 +222,11 @@ export class DocDoubleApproverService {
     throw new Error('Document is already rejected');
   }
 
+  // Approvers act in order (L1 → L2), the same for every document type
+  if (!isFirstApprover && info.firstApproved?.status !== ApproverStatus.APPROVED) {
+    throw new AppError(409, 'Approver Level 1 must approve before Approver Level 2 can act');
+  }
+
   // REJECTED handling (immediate)
   if (action === ApproverStatus.REJECTED) {
     const stage = await this.approvalStageInfoRepository.save({
@@ -208,6 +251,31 @@ export class DocDoubleApproverService {
     await this.documentApprovalFlowRepository.save(info);
     await this.documentbRepository.save(document);
     await this.invalidateDocumentCache(documentId, document);
+    // A rejected Stock Transfer / Customer DC rejects its pending vehicle dispatch.
+    if (document.document_type_id) {
+      const rejectedNo = await this.documentBService.resolveDocumentTypeNo(document).catch(() => null);
+      await this.documentBService.rejectDispatchesForSource(
+        document.type,
+        [document.document_type_id],
+        'rejected',
+        `${getReadableDocumentType(document.type)}${rejectedNo ? ` ${rejectedNo}` : ''}`,
+      );
+    }
+    // A rejected Final Invoice / RBC releases its Customer DC.
+    await this.syncCustomerDcOf(document);
+    // A rejected DC gives back the batch stock it held.
+    if (document.document_type_id && isDcType(document.type)) {
+      await releaseDcStock(this.documentbRepository.manager, document.type, document.document_type_id);
+    }
+    if (document.document_type_id && document.type === DocumentTypeEnum.SECOND_SALE) {
+      await releaseSecondSaleStock(this.documentbRepository.manager, document.document_type_id);
+    }
+    // A rejected Stock Adjustment / Repack gives back what it held.
+    if (document.document_type_id && (document.type === DocumentTypeEnum.STOCK_ADJUSTMENT || document.type === DocumentTypeEnum.STOCK_REPACK)) {
+      await applyRejectedAdjustmentOrRepack(this.documentbRepository.manager, document.type, document.document_type_id, userId, reason ?? null);
+    }
+    // Transaction step / status (never throws).
+    await refreshTransactionOf(this.documentbRepository.manager, document.type, document.document_type_id);
 
     const docNo = await this.documentBService.resolveDocumentTypeNo(document);
     const readableType = getReadableDocumentType(document.type);
@@ -295,6 +363,10 @@ export class DocDoubleApproverService {
       // single transaction, guarded by documents.inventoryProcessed so a
       // repeated or concurrent approval cannot move stock twice.
       await this.inventoryMovementService.completeDocumentWithInventory(document);
+      // An approved RBC applies its returned quantities to the Customer DC.
+      await this.syncCustomerDcOf(document);
+      // Transaction step / status (never throws).
+      await refreshTransactionOf(this.documentbRepository.manager, document.type, document.document_type_id);
       await this.invalidateDocumentCache(documentId, document);
 
       // 🔔 Actor
@@ -315,6 +387,13 @@ export class DocDoubleApproverService {
         await this.notificationService.createBatchNoti(
           `${docLabel2} has been fully approved by ${userName}. Document is now Complete`,
           approveCompleteUserIds
+        );
+      }
+      // 🔔 Payment Managers — a completed Final Invoice is theirs to record payments on, in its flow or not
+      if (PAYMENT_DOCUMENT_TYPES.includes(document.type)) {
+        await this.notificationService.createNotiForRole(
+          `${docLabel2} is fully approved and ready for payment`,
+          Role.PAYMENT_MANAGER,
         );
       }
     } else {

@@ -4,7 +4,6 @@
 // Shared sub-types
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { Department } from "../../../utils/status.enum";
 import { StockTransferType } from "../entity/stockTransferdeliveryChallan.entity";
 
 /** Product line — used in create/update requests. */
@@ -45,11 +44,6 @@ export interface CreateSTDeliveryChallanDto {
   toLocation?: string | null;
 
   transitInsuranceNo?: string | null;
-  driverName?: string | null;
-  contactNo?: string | null;
-  altContactNo?: string | null;
-  vehicleNo?: string | null;
-  licenseNo?: string | null;
   receiverName?: string | null;
   rmn?: string | null;
 
@@ -59,7 +53,6 @@ export interface CreateSTDeliveryChallanDto {
   totalPackagingMaterialAmount?: number | null;
   totalAmtInWords?: string | null;
 
-  requestingDepartment?: Department | null;
   remark?: string | null;
   anyAttachment?: string[] | null;
 
@@ -106,17 +99,14 @@ export interface STChallanProductUpdateDto {
 export interface STDeliveryChallanUpdateFormDto {
   id: string;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   stockTransferType: StockTransferType | null;
   companyName: string | null;
   office: string | null;
   grnNo: string | null;
   fromLocation: string | null;
   toLocation: string | null;
-  driverName: string | null;
-  contactNo: string | null;
-  altContactNo: string | null;
-  vehicleNo: string | null;
-  licenseNo: string | null;
   receiverName: string | null;
   totalProductAmount: number | null;
   netProductWeight: number | null;
@@ -125,7 +115,6 @@ export interface STDeliveryChallanUpdateFormDto {
   totalAmtInWords: string | null;
   transitInsuranceNo: string | null;
   rmn: string | null;
-  requestingDepartment: Department | null;
   approvalStatus: string | null;
   remark: string | null;
   anyAttachment: string[] | null;
@@ -162,6 +151,8 @@ export interface STDeliveryChallanViewDto {
   id: string;
   documentId: string | null;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   stockTransferType: StockTransferType | null;
   /** Company name string */
   companyName: string | null;
@@ -173,18 +164,12 @@ export interface STDeliveryChallanViewDto {
   fromLocation: string | null;
   /** Branch name string */
   toLocation: string | null;
-  driverName: string | null;
-  contactNo: string | null;
-  altContactNo: string | null;
-  vehicleNo: string | null;
-  licenseNo: string | null;
   receiverName: string | null;
   totalProductAmount: number | null;
   netProductWeight: number | null;
   netPackagingMaterialWeight: number | null;
   totalPackagingMaterialAmount: number | null;
   totalAmtInWords: string | null;
-  requestingDepartment: Department | null;
   remark: string | null;
   anyAttachment: string[] | null;
   createdDate: string | null;
@@ -216,22 +201,18 @@ export interface STDeliveryChallanListItemDto {
   createdDate: string | null;
   createdTime: string | null;
   challanNo: string | null;
+  /** Transaction number (docs/transaction-tracking-plan.md §9.5), null before go-live. */
+  txnNo: string | null;
   transitInsuranceNo: string | null;
   totalProductAmount: number | null;
   netProductWeight: number | null;
   netPackagingMaterialWeight: number | null;
   totalPackagingMaterialAmount: number | null;
   totalAmtInWords: string | null;
-  driverName: string | null;
-  contactNo: string | null;
-  altContactNo: string | null;
-  vehicleNo: string | null;
-  licenseNo: string | null;
   rmn: string | null;
   receiverName: string | null;
   anyAttachment: string[] | null;
   remark: string | null;
-  requestingDepartment: Department | null;
   approvalStatus: string | null;
   stockTransferType: StockTransferType | null;
   /** Company name string */

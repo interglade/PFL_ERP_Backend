@@ -16,16 +16,16 @@ import { DocumentApprovalFlow } from './documentApproveBy.entity';
 import { User } from '../../employee/entity/user.entity';
 
 export enum DocumentStatus {
-  HOLD = 'hold',
-  QUERY = 'query',
-  APPROVED = 'approved',
-  DISAPPROVED = 'disapproved',
-  FINALIZING = "FINALIZING",
-  FINALIZED = "FINALIZED",
-  COMPLETE = "COMPLETE",
-  REJECT = "REJECT",
-  VERIFIED = "VERIFIED",
+  /** Created but not yet sent to approvers (e.g. an auto-created Deal Slip awaiting lot no / loading location). */
+  DRAFT = 'Draft',
+  HOLD = 'Hold',
+  VERIFIED = 'Verified',
+  APPROVED = 'Approved',
+  FINALIZING = 'Finalizing',
+  COMPLETE = 'Complete',
+  REJECT = 'Rejected',
 }
+
 
 export enum DocumentTypeEnum {
   GRN = 'grn',
@@ -47,7 +47,10 @@ export enum DocumentTypeEnum {
   PACKAGING_MATERIAL_VOUCHER = 'packaging-material-voucher',
   DC_TYPE_CUSTOMER = "DC_TYPE_CUSTOMER",
   DC_TYPE_STOCK_TRANSFER = "DC_TYPE_STOCK_TRANSFER",
-  DC_TYPE_OTHER="DC_TYPE_OTHER"
+  DC_TYPE_OTHER="DC_TYPE_OTHER",
+  // Batch stock (Phase C9 / C10): approved through the Operation flow, like the Dump Register.
+  STOCK_ADJUSTMENT = 'stock-adjustment',
+  STOCK_REPACK = 'stock-repack',
 }
 
 @Entity('documents')

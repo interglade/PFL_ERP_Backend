@@ -1,6 +1,6 @@
 import { inject, injectable } from 'inversify';
 import * as XLSX from 'xlsx';
-import { Farmer } from '../entity/farmer.entity';
+import { Farmer, LandHoldingStatus, LandStatus } from '../entity/farmer.entity';
 import { FarmerRepository } from '../repository/farmer.repository';
 import { TYPES } from '../../types';
 import { DeleteObjectCommand } from '@aws-sdk/client-s3';
@@ -18,7 +18,9 @@ import { AppDataSource } from '../../utils/data-source';
 import { parseExcelDate } from '../../utils/excelParser';
 import { UserRepository } from '../../employee/repository/user.repository';
 
-import { Status } from '../../utils/status.enum';
+import { parseStatus, Status } from '../../utils/status.enum';
+import { applyMasterFilters } from '../../global/filters/masterDataFilter';
+import { FARMER_FILTERS } from '../filters/farmer.filters';
 import { NotificationService } from '../../notification/service/notification.service';
 import { formatDateTime } from '../../utils/dateUtils';
 import { CreateFarmerDto, FarmerListResponseDto, FarmerListItemDto, AddressDto, CropDto, LandHoldingStatusType, LandStatusType, UpdateFarmerDto, FarmerResponseDto } from '../dto/farmer.dto';
@@ -32,6 +34,7 @@ import { Address } from '../../address/entity/address.entity';
 import { Product } from '../../product/createproduct/entity/product.entity';
 import { Repository } from 'typeorm';
 import {
+  attachImportReport,
   buildDataWorkbook,
   buildTemplateWorkbook,
   deleteFromSpaces,
@@ -45,6 +48,16 @@ import {
   readUploadedSheet,
 } from '../../excel/excelImport.service';
 import { FARMER_CROP_GROUP, FARMER_SHEET } from '../excel/farmer.columns';
+import { LookupIndex } from '../../excel/lookupIndex';
+import { DraftLinks, EMPTY_LINK } from '../../excel/draftLinks';
+import { ContactPool, mergeFilled, RegistrationRowReader } from '../../excel/registrationRow';
+import { FORMAT_RULES } from '../../excel/formatRules';
+import { assertImportPrerequisites } from '../../excel/importPrerequisites';
+import { countMasterRecords } from '../../excel/importPrerequisiteCounts';
+
+/** "First Last" for the import report. */
+const farmerName = (farmer: Farmer): string | null =>
+  [farmer.farmerfName, farmer.farmerlName].filter(Boolean).join(' ') || null;
 
 const CACHE_PREFIX = 'farmer';
 const CACHE_TTL = 180;
@@ -137,6 +150,8 @@ export class FarmerService {
       { draft: Status.DRAFT, userId },
     );
   }
+
+  applyMasterFilters(queryBuilder, FARMER_FILTERS, options.masterFilters);
 
   const farmers = await buildQuery(queryBuilder, options, 'farmer');
 
@@ -676,7 +691,7 @@ export class FarmerService {
   async approveFarmer(farmerId: string, approverId: string, status: Status) {
     // Validate status — only approved or rejected are valid outcomes
     if (status !== Status.APPROVED && status !== Status.REJECTED) {
-      throw new AppError(400, `Invalid status '${status}'. Only 'approved' or 'rejected' are allowed.`);
+      throw new AppError(400, `Invalid status '${status}'. Only 'Approved' or 'Rejected' are allowed.`);
     }
 
     const approver = await this.userRepository.findOne({
@@ -684,9 +699,9 @@ export class FarmerService {
     });
     if (!approver) throw new AppError(404, 'Approver not found');
 
-    // Only VERIFIER role can approve/reject farmers
-    if (!approver.roles || !approver.roles.includes(Role.VERIFIER)) {
-      throw new AppError(403, 'Only a Verifier can approve or reject farmers');
+    // Only ADMIN or VERIFIER role can approve/reject farmers
+    if (!approver.roles || !(approver.roles.includes(Role.ADMIN) || approver.roles.includes(Role.VERIFIER))) {
+      throw new AppError(403, 'Only an Admin or Verifier can approve or reject farmers');
     }
 
     const farmer = await this.farmerRepository.findOne({
@@ -696,7 +711,7 @@ export class FarmerService {
 
     // Farmer must be in 'pending' status — draft means not yet submitted
     if (farmer.status !== Status.PENDING) {
-      throw new AppError(400, `Farmer cannot be approved because its current status is '${farmer.status}'. Only farmers with status 'pending' can be approved or rejected.`);
+      throw new AppError(400, `Farmer cannot be approved because its current status is '${farmer.status}'. Only farmers with status 'Pending' can be approved or rejected.`);
     }
 
     farmer.status = status;
@@ -717,7 +732,7 @@ export class FarmerService {
       // Fetch approver name
       const approver = await this.userRepository.findOneBy({ id: approverId });
       const verifierName = `${approver?.firstName || ''} ${approver?.lastName || ''}`.trim()
-        || (approver as any)?.username || 'Verifier';
+        || (approver as any)?.username || (approver?.roles?.includes(Role.ADMIN) ? 'Admin' : 'Verifier');
 
       const farmerFullName = [farmer.farmerfName, farmer.farmermName, farmer.farmerlName]
         .filter(Boolean).join(' ');
@@ -894,9 +909,9 @@ export class FarmerService {
           `Your farmer "${farmerFullName}" has been sent for approval`,
           creatorId,
         );
-        await this.notificationService.createNotiForRole(
+        await this.notificationService.createNotiForRoles(
           `Farmer "${farmerFullName}" is awaiting your approval, created by ${creatorName}`,
-          Role.VERIFIER,
+          [Role.VERIFIER, Role.ADMIN],
         );
       }
     } catch (err) {
@@ -1060,14 +1075,80 @@ export class FarmerService {
       queryBuilder.andWhere('farmer.status != :draft', { draft: Status.DRAFT });
     }
 
+    applyMasterFilters(queryBuilder, FARMER_FILTERS, options.masterFilters);
+
     const { data } = await buildQuery(
       queryBuilder,
       { ...options, page: undefined, limit: undefined },
       'farmer',
     );
 
-    const workbook = buildDataWorkbook(FARMER_SHEET, data as Farmer[]);
+    const workbook = buildDataWorkbook(FARMER_SHEET, data as Farmer[], {
+      product: (await this.loadCropIndex()).displayNames(),
+    });
     return uploadWorkbookToSpaces(workbook, 'Farmers', data.length);
+  }
+
+  /** Products a crop can name, loaded once per file and matched in memory. */
+  private async loadCropIndex(): Promise<LookupIndex<Product>> {
+    const products = await AppDataSource.getRepository(Product).find({
+      select: { id: true, name: true, isDeleted: true },
+    });
+    return LookupIndex.fromRecords(
+      products.filter((product) => !product.isDeleted),
+      { names: (product) => [product.name] },
+    );
+  }
+
+  /**
+   * Reads the crop blocks of a row onto the farmer. A crop whose product does
+   * not match is not added and is noted in `draft`; a product the farmer already
+   * grows is not added twice, so the same code completes a draft farmer.
+   */
+  private applyCrops(
+    farmer: Farmer,
+    row: ExcelRow,
+    products: LookupIndex<Product>,
+    draft: DraftLinks,
+  ): void {
+    const cropColumn = (header: string) =>
+      FARMER_CROP_GROUP.columns.find((c) => c.header === header)!;
+    const at = <T>(index: number, header: string) =>
+      row.groupCell<T | null>(FARMER_CROP_GROUP, index, cropColumn(header));
+
+    const blocks = row.eachGroupBlock(FARMER_CROP_GROUP, (index) => ({
+      index,
+      name: at<string>(index, 'Crop'),
+    }));
+
+    farmer.crops = farmer.crops ?? [];
+    const grown = new Set(farmer.crops.map((crop) => crop.crop?.id).filter(Boolean));
+
+    for (const block of blocks) {
+      const field = `Crop${block.index}`;
+      if (!block.name) {
+        draft.note(field, EMPTY_LINK, 'the crop block has other values but no crop name');
+        continue;
+      }
+
+      const product = draft.one(products, field, block.name);
+      if (!product || grown.has(product.id)) continue;
+      grown.add(product.id);
+
+      const crop = new Crop();
+      crop.crop = product;
+      crop.variety = at<string>(block.index, 'Variety') as string;
+      crop.noOfPlants = at<number>(block.index, 'No Of Plants') as number;
+      crop.expectedQuantityInTonnes = at<number>(block.index, 'Expected Quantity (Tonnes)') as number;
+
+      const pruningDate = at<string>(block.index, 'Pruning Date');
+      if (pruningDate) crop.pruningDate = new Date(pruningDate);
+
+      const harvestDate = at<string>(block.index, 'Expected Harvest Date');
+      if (harvestDate) crop.expectedHarvestDate = new Date(harvestDate);
+
+      farmer.crops.push(crop);
+    }
   }
 
   /**
@@ -1075,32 +1156,44 @@ export class FarmerService {
    * from the same column map as the export.
    */
   async buildExcelTemplate(): Promise<UploadedExport> {
-    const workbook = buildTemplateWorkbook(FARMER_SHEET);
+    const workbook = buildTemplateWorkbook(FARMER_SHEET, {
+      product: (await this.loadCropIndex()).displayNames(),
+    });
     return uploadWorkbookToSpaces(workbook, 'Farmer_Template', 0);
   }
 
   /**
-   * Imports farmers from a spreadsheet uploaded to Spaces.
+   * Imports farmers from a spreadsheet uploaded to Spaces
+   * (docs/registration-import-plan.md, decisions agreed 2026-11-04).
    *
-   * A farmer whose primary mobile number is already on record is skipped and
-   * reported rather than updated, and the uploaded file is removed from Spaces
-   * once read - success or failure.
+   * Row by row (D1). Every farmer the import saves is a **draft** (D2): the
+   * admin checks it and submits it from the form. A cell the form would refuse,
+   * a mobile / email another farmer already has, a required cell left blank and
+   * a crop that does not match a product are left empty and listed in the report
+   * (D4, D5). A new row whose primary mobile is already a farmer's is skipped.
    *
-   * Owner and approval status are not read from the sheet: every imported farmer
-   * belongs to `createdById` and starts as pending, exactly as if it had been
-   * entered through the form.
+   * A row with the Farmer Code of a draft farmer updates it: filled cells replace
+   * what is saved, empty cells keep it, and crops not grown yet are added (D3).
+   * Farmers past draft are not changed by an import (D6). `checkOnly` runs every
+   * check and saves nothing.
+   *
+   * The uploaded file is removed from Spaces once read, success or failure.
    */
   async createFarmerwithExcel(
     fileUrl: string,
     createdById: string,
+    options: { checkOnly?: boolean } = {},
   ): Promise<ImportSummary> {
     if (!fileUrl) {
       throw new AppError(400, 'No file URL provided');
     }
 
+    const checkOnly = !!options.checkOnly;
     const summary = emptySummary();
 
     try {
+      await assertImportPrerequisites('farmer', countMasterRecords);
+
       const sheet = await readUploadedSheet(fileUrl, FARMER_SHEET);
       summary.unknownColumns = sheet.unknownColumns;
       summary.missingColumns = sheet.missingColumns;
@@ -1114,169 +1207,121 @@ export class FarmerService {
       }
 
       const farmerRepository = AppDataSource.getRepository(Farmer);
-      const productRepository = AppDataSource.getRepository(Product);
 
       const creator = await this.userRepository.findOneBy({ id: createdById });
       if (!creator) {
         throw new AppError(401, 'The logged-in user could not be found');
       }
 
-      const byHeader = new Map(FARMER_SHEET.columns.map((c) => [c.header, c]));
-      const column = (header: string) => {
-        const found = byHeader.get(header);
-        if (!found) throw new Error(`Unknown farmer column: ${header}`);
-        return found;
-      };
-      const text = (row: ExcelRow, header: string) =>
-        row.cell<string | null>(column(header));
+      const cropIndex = await this.loadCropIndex();
+
+      // Existing farmers by code, and every mobile / email in use, loaded once;
+      // rows of this file are added as they go.
+      const existingFarmers = await farmerRepository.find({
+        select: {
+          id: true, farmerCode: true, status: true, farmerfName: true, farmerlName: true,
+          primaryMobileNo: true, secondaryMobileNo: true, email: true,
+        },
+      });
+      const byCode = new Map<string, Farmer>();
+      const contacts = new ContactPool();
+      for (const existing of existingFarmers) {
+        const owner = { key: existing.id, label: farmerLabel(existing) };
+        if (existing.farmerCode) byCode.set(existing.farmerCode.toUpperCase(), existing);
+        contacts.add('phone', existing.primaryMobileNo, owner);
+        contacts.add('phone', existing.secondaryMobileNo, owner);
+        contacts.add('email', existing.email, owner);
+      }
+
+      const codeColumn = FARMER_SHEET.columns.find((c) => c.header === 'Farmer Code')!;
 
       for (const row of sheet.rows) {
         try {
-          const firstName = text(row, 'First Name');
-          const primaryMobileNo = text(row, 'Primary Mobile No');
+          const draft = new DraftLinks();
+          const farmerCode = row.cell<string | null>(codeColumn);
 
-          if (!firstName || !primaryMobileNo) {
+          // ── A draft farmer named by its code: update it ────────────────
+          if (farmerCode) {
+            const known = byCode.get(farmerCode.toUpperCase());
+            if (!known) {
+              summary.skipped.push({
+                row: row.rowNumber,
+                reason: `Farmer Code ${farmerCode} was not found - clear it to add the row as a new farmer`,
+              });
+              continue;
+            }
+            if (known.status !== Status.DRAFT) {
+              summary.skipped.push({
+                row: row.rowNumber,
+                reason: `Farmer ${farmerCode} is ${known.status} - an import only changes draft farmers; edit it in the form`,
+              });
+              continue;
+            }
+
+            const target = await farmerRepository.findOne({
+              where: { id: known.id },
+              relations: ['crops', 'crops.crop', 'residensialAddress', 'farmAddress'],
+            });
+            if (!target) throw new Error(`Farmer ${farmerCode} could not be loaded`);
+
+            const reader = new RegistrationRowReader(FARMER_SHEET, row, draft, {
+              contacts,
+              ownerKey: target.id,
+            });
+            mergeFilled(target, this.farmerFromRow(reader));
+            this.applyCrops(target, row, cropIndex, draft);
+            target.status = Status.DRAFT;
+            if (!checkOnly) await farmerRepository.save(target);
+
+            summary.updated++;
+            if (draft.isDraft) summary.drafted++;
+            summary.draftIssues.push(...draft.toReport(row.rowNumber, target.farmerCode, farmerName(target)));
+            reader.registerContacts({ key: target.id, label: farmerLabel(target) });
+            continue;
+          }
+
+          // ── A new farmer ───────────────────────────────────────────────
+          const ownerKey = `row-${row.rowNumber}`;
+          const reader = new RegistrationRowReader(FARMER_SHEET, row, draft, { contacts, ownerKey });
+
+          if (!reader.typed('First Name')) {
+            summary.skipped.push({ row: row.rowNumber, reason: 'First Name is empty' });
+            continue;
+          }
+
+          // The primary mobile is how a farmer is told apart: one already on record skips the row.
+          const typedMobile = reader.typed('Primary Mobile No');
+          const mobile = typedMobile ? FORMAT_RULES.mobile.clean(typedMobile) : null;
+          const holder = mobile ? contacts.holder('phone', mobile, ownerKey) : null;
+          if (holder) {
             summary.skipped.push({
               row: row.rowNumber,
-              reason: 'First Name and Primary Mobile No are both required',
+              reason: `Farmer with mobile ${typedMobile} already exists (${holder})`,
             });
             continue;
           }
 
-          const existing = await farmerRepository.findOne({
-            where: { primaryMobileNo },
-          });
-
-          if (existing) {
-            summary.skipped.push({
-              row: row.rowNumber,
-              reason: `Farmer with mobile ${primaryMobileNo} already exists (${existing.farmerCode ?? existing.id})`,
-            });
-            continue;
-          }
-
-          const farmer = new Farmer();
-          farmer.farmerfName = firstName;
-          farmer.farmermName = text(row, 'Middle Name') as string;
-          farmer.farmerlName = text(row, 'Last Name') as string;
-          farmer.primaryMobileNo = primaryMobileNo;
-          farmer.secondaryMobileNo = text(row, 'Secondary Mobile No') as string;
-          farmer.email = text(row, 'Email') as string;
-          farmer.gender = text(row, 'Gender') as string;
-          farmer.landHoldingStatus = text(row, 'Land Holding') as string;
-          farmer.landStatus = text(row, 'Land Status') as string;
-          farmer.totalLandArea = row.cell<number | null>(
-            column('Total Land Area'),
-          ) as number;
-          farmer.cultivationArea = row.cell<number | null>(
-            column('Cultivation Area'),
-          ) as number;
-          farmer.farmerGrading = text(row, 'Farmer Grading') as string;
-          farmer.howDoYouSell = text(row, 'How Do You Sell') as string;
-          farmer.sevenTwelveNo = text(row, '7/12 Number') as string;
-          farmer.idProofNo = text(row, 'ID Proof Number') as string;
-          farmer.status = Status.PENDING;
+          const farmer = this.farmerFromRow(reader);
+          reader.noteMissingRequired();
+          farmer.crops = [];
+          this.applyCrops(farmer, row, cropIndex, draft);
+          farmer.status = Status.DRAFT;
           farmer.createdBy = creator;
 
-          const dob = row.cell<string | null>(column('Date Of Birth'));
-          if (dob) farmer.dob = new Date(dob);
-
-          const dateOfVisit = row.cell<string | null>(column('Date Of Visit'));
-          if (dateOfVisit) farmer.dateOfVisit = new Date(dateOfVisit);
-
-          farmer.farmerCode = await this.generateBulkFarmerCode(farmerRepository);
-
-          const residential = new Address();
-          residential.address1 = text(row, 'Residential Address1') as string;
-          residential.address2 = text(row, 'Residential Address2') as string;
-          residential.location = text(row, 'Residential Location') as string;
-          residential.city = text(row, 'Residential City') as string;
-          residential.state = text(row, 'Residential State') as string;
-          residential.pincode = text(row, 'Residential Pincode') as string;
-          farmer.residensialAddress = residential;
-
-          const farm = new Address();
-          farm.address1 = text(row, 'Farm Address1') as string;
-          farm.address2 = text(row, 'Farm Address2') as string;
-          farm.location = text(row, 'Farm Location') as string;
-          farm.city = text(row, 'Farm City') as string;
-          farm.state = text(row, 'Farm State') as string;
-          farm.pincode = text(row, 'Farm Pincode') as string;
-          farmer.farmAddress = farm;
-
-          const cropColumn = (header: string) =>
-            FARMER_CROP_GROUP.columns.find((c) => c.header === header)!;
-
-          const cropBlocks = row.eachGroupBlock(FARMER_CROP_GROUP, (index) => ({
-            index,
-            name: row.groupCell<string | null>(
-              FARMER_CROP_GROUP,
-              index,
-              cropColumn('Crop'),
-            ),
-          }));
-
-          farmer.crops = [];
-
-          for (const block of cropBlocks) {
-            if (!block.name) {
-              summary.failed.push({
-                row: row.rowNumber,
-                reason: `Crop${block.index} has no crop name and was not imported`,
-              });
-              continue;
-            }
-
-            const product = await productRepository
-              .createQueryBuilder('product')
-              .where('LOWER(product.name) = LOWER(:name)', { name: block.name })
-              .getOne();
-
-            if (!product) {
-              summary.failed.push({
-                row: row.rowNumber,
-                reason: `Crop "${block.name}" did not match any product and was not imported`,
-              });
-              continue;
-            }
-
-            const crop = new Crop();
-            crop.crop = product;
-            crop.variety = row.groupCell<string | null>(
-              FARMER_CROP_GROUP,
-              block.index,
-              cropColumn('Variety'),
-            ) as string;
-            crop.noOfPlants = row.groupCell<number | null>(
-              FARMER_CROP_GROUP,
-              block.index,
-              cropColumn('No_Of_Plants'),
-            ) as number;
-            crop.expectedQuantityInTonnes = row.groupCell<number | null>(
-              FARMER_CROP_GROUP,
-              block.index,
-              cropColumn('Expected Quantity (Tonnes)'),
-            ) as number;
-
-            const pruningDate = row.groupCell<string | null>(
-              FARMER_CROP_GROUP,
-              block.index,
-              cropColumn('Pruning Date'),
-            );
-            if (pruningDate) crop.pruningDate = new Date(pruningDate);
-
-            const harvestDate = row.groupCell<string | null>(
-              FARMER_CROP_GROUP,
-              block.index,
-              cropColumn('Expected Harvest Date'),
-            );
-            if (harvestDate) crop.expectedHarvestDate = new Date(harvestDate);
-
-            farmer.crops.push(crop);
+          let saved: Farmer = farmer;
+          if (!checkOnly) {
+            farmer.farmerCode = await this.generateBulkFarmerCode(farmerRepository);
+            saved = await farmerRepository.save(farmer);
           }
 
-          await farmerRepository.save(farmer);
           summary.created++;
+          if (draft.isDraft) summary.drafted++;
+          summary.draftIssues.push(...draft.toReport(row.rowNumber, saved.farmerCode ?? null, farmerName(saved)));
+          reader.registerContacts({
+            key: saved.id ?? ownerKey,
+            label: saved.farmerCode ? farmerLabel(saved) : `row ${row.rowNumber}`,
+          });
+          if (saved.farmerCode) byCode.set(saved.farmerCode.toUpperCase(), saved);
         } catch (rowError: any) {
           summary.failed.push({
             row: row.rowNumber,
@@ -1285,14 +1330,68 @@ export class FarmerService {
         }
       }
 
-      if (summary.created > 0) {
+      if (!checkOnly && (summary.created > 0 || summary.updated > 0)) {
         await this.invalidateFarmerCache();
       }
 
+      await attachImportReport(summary, 'Farmer');
       return summary;
     } finally {
       await deleteFromSpaces(fileUrl);
     }
+  }
+
+  /**
+   * A Farmer built from one row - every cell through the column rules - without
+   * crops. Used as the new farmer, or merged onto a draft (only what is filled).
+   */
+  private farmerFromRow(reader: RegistrationRowReader): Farmer {
+    const text = (header: string) => reader.text(header) as string;
+    const farmer = new Farmer();
+    farmer.farmerfName = text('First Name');
+    farmer.farmermName = text('Middle Name');
+    farmer.farmerlName = text('Last Name');
+    farmer.primaryMobileNo = text('Primary Mobile No');
+    farmer.secondaryMobileNo = text('Secondary Mobile No');
+    farmer.email = text('Email');
+    farmer.gender = text('Gender');
+
+    // Land Holding / Land Status: the form's lists; anything else is left empty and reported
+    const landHoldingText = text('Land Holding');
+    const landHolding = landHoldingText ? parseStatus(LandHoldingStatus, landHoldingText) : null;
+    if (landHolding) farmer.landHoldingStatus = landHolding;
+    else if (landHoldingText) {
+      reader.draft.note('Land Holding', landHoldingText, `Left empty: must be one of ${Object.values(LandHoldingStatus).join(', ')}`);
+    }
+    const landStatusText = text('Land Status');
+    const landStatus = landStatusText ? parseStatus(LandStatus, landStatusText) : null;
+    if (landStatus) farmer.landStatus = landStatus;
+    else if (landStatusText) {
+      reader.draft.note('Land Status', landStatusText, `Left empty: must be one of ${Object.values(LandStatus).join(', ')}`);
+    }
+
+    farmer.totalLandArea = reader.number('Total Land Area') as number;
+    farmer.cultivationArea = reader.number('Cultivation Area') as number;
+    farmer.farmerGrading = text('Farmer Grading');
+    farmer.howDoYouSell = text('How Do You Sell');
+    farmer.sevenTwelveNo = text('7/12 Number');
+    farmer.idProofNo = text('ID Proof Number');
+    farmer.dob = reader.date('Date Of Birth') as Date;
+    farmer.dateOfVisit = reader.date('Date Of Visit') as Date;
+
+    const address = (prefix: string) => {
+      const value = new Address();
+      value.address1 = text(`${prefix} Address1`);
+      value.address2 = text(`${prefix} Address2`);
+      value.location = text(`${prefix} Location`);
+      value.city = text(`${prefix} City`);
+      value.state = text(`${prefix} State`);
+      value.pincode = text(`${prefix} Pincode`);
+      return value;
+    };
+    farmer.residensialAddress = address('Residential');
+    farmer.farmAddress = address('Farm');
+    return farmer;
   }
 
   /**
@@ -1756,3 +1855,6 @@ export class FarmerService {
   //   return result;
   // }
 
+/** How the import names a farmer: "FARM20260004 Ramesh Jadhav". */
+const farmerLabel = (farmer: Pick<Farmer, 'farmerCode' | 'farmerfName' | 'farmerlName'>): string =>
+  [farmer.farmerCode, farmer.farmerfName, farmer.farmerlName].filter(Boolean).join(' ');

@@ -13,7 +13,7 @@ import { Company } from '../../../company/entity/company.entity';
 import { OfficesData } from '../../../office/entity/offices.entity';
 import { GRN } from '../../../grn/entity/grn.entity';
 import { Item } from './dItem.entity';
-import { Department, Status } from '../../../utils/status.enum';
+import { Status } from '../../../utils/status.enum';
 import { Invoice } from '../../../invoice/entity/invoice.entity';
 import { PostReturnByCustomer } from '../../../returnByCustomer/entity/postReturnByCustomer.entity';
 import { User } from '../../../employee/entity/user.entity';
@@ -31,6 +31,12 @@ export enum DeliveryChallanType {
 @Index(['createdAt'])
 @Index(['companyName'])
 export class DeliveryChallanPurchase extends Model {
+  /** Transaction number of the deal this document belongs to (docs/transaction-tracking-plan.md §9). */
+  @Index('IDX_delivery_challan_purchase_txn_no')
+  // Written only by src/transactions (raw SQL); never from a request body through an entity save.
+  @Column({ name: 'txn_no', type: 'varchar', length: 13, nullable: true, insert: false, update: false })
+  txnNo: string | null;
+
   @ManyToOne(() => Company, {
     cascade: true,
     nullable: true,
@@ -75,21 +81,6 @@ export class DeliveryChallanPurchase extends Model {
   @Column({ name: 'amount in words', nullable: true })
   totalAmtInWords: string;
 
-  @Column({ nullable: true })
-  driverName: string;
-
-  @Column({ nullable: true })
-  contactNo: string;
-
-  @Column({ nullable: true })
-  altContactNo: string;
-
-  @Column({ nullable: true })
-  vehicleNo: string;
-
-  @Column({ nullable: true })
-  licenseNo: string;
-
   @Column({ name: 'rmn', nullable: true })
   rmn: string;
 
@@ -107,13 +98,6 @@ export class DeliveryChallanPurchase extends Model {
     nullable: true,
   })
   approvalStatus: Status;
-
-  @Column({
-    type: 'enum',
-    enum: Department,
-    nullable: true,
-  })
-  requestingDepartment: Department;
 
   @Column({ type: 'text', nullable: true })
   remark: string;

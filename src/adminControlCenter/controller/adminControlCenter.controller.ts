@@ -1,3 +1,4 @@
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from 'inversify';
 import { controller, httpGet, next, request, response } from 'inversify-express-utils';
 import { NextFunction, Request, Response } from 'express';
@@ -18,7 +19,7 @@ import { isRefresh, parseFilters } from '../service/accShared.util';
  * options. Admin only. Every tab object carries generatedAt; the cached tabs
  * take ?refresh=true to recompute.
  */
-@controller('/admin/dashboard/control-center', deserializeUser, requireUser)
+@controller('/admin/dashboard/control-center', deserializeUser, requireUser, requireRole(Role.ADMIN))
 export class AdminControlCenterController {
   constructor(
     @inject(TYPES.AccFiltersService) private readonly filtersService: AccFiltersService,

@@ -1,3 +1,6 @@
+import { assertDeliveryConfirmed, assertDeliveryNotConfirmed } from '../../deliveryChallans/customerDeliveryChllan/service/dcDelivery';
+import { requireStatus } from '../../utils/status.enum';
+import { compactDate, nextDocumentNumber, SERIES } from '../../global/numbering/documentNumber';
 import { inject, injectable } from 'inversify';
 import { CreatedWithApproval, withApproval } from '../../utils/approvalMessage';
 import { TYPES } from '../../types';
@@ -11,6 +14,9 @@ import { DocumentTypeEnum, Documentb } from '../../approvalFlow/entity/docuemnt.
 import { UserLogger } from '../../utils/logger';
 import { DocumentStatus } from '../../approvalFlow/entity/docuemnt.entity';
 import { DocumentTypeEnum as DocDefEnum } from "../../documentDef/entity/documentdef.entity";
+import { dcIdsOfSalesDocuments, syncCustomerDcSalesLinks } from '../../deliveryChallans/customerDeliveryChllan/service/dcSalesLinks';
+import { attachToDcTransaction } from '../../deliveryChallans/customerDeliveryChllan/service/dcTransaction';
+import { refreshTransactionOf } from '../../transactions/transaction.core';
 import { ApprovalFlowService } from "../../approvalFlow/service/approvalFlow.service";
 import { CustomerDeliveryChallanService } from "../../deliveryChallans/customerDeliveryChllan/service/customerDeliveryChallan.service";
 import AppError from "../../utils/appError";
@@ -40,6 +46,20 @@ import { DocDoubleApproverService } from '../../approvalFlow/service/docDoubleAp
 import { DocumentbRepository } from '../../approvalFlow/repository/documentb.repository';
 import { CacheService } from '../../global/cache.service';
 import { PostReturnByCustomer } from '../entity/postReturnByCustomer.entity';
+import { ReceivingGuardService } from '../../receiving/service/receivingGuard.service';
+import { refId } from '../../receiving/receiving.helpers';
+import { assertCustomerDcReady } from '../../vehicleDispatch/service/dispatchRules';
+import { completeDocumentExistsSql, countingDocumentExistsSql, isProcessingDocType, noCountingDocumentSql } from '../../receiving/receiving.sql';
+
+/** Receiving picker filters for `getAllRBCNumbers`. */
+export interface RbcReceivingFilter {
+  /** Only COMPLETE, not deleted RBCs. */
+  receivable?: boolean;
+  /** Only RBCs with no counting document of this type (aqr | inward | dump). */
+  missing?: string;
+  /** Receiving location (branch) id. */
+  locationId?: string;
+}
 export interface ReturnByCustomerReportFilter {
   startDate?: string;
   endDate?: string;
@@ -103,9 +123,19 @@ export class PostReturnByCustomerService {
     private readonly approvalFlowService: ApprovalFlowService,
     @inject(TYPES.CustomerDeliveryChallanService)
     private readonly customerDeliveryChallanService: CustomerDeliveryChallanService,
+    @inject(TYPES.ReceivingGuardService)
+    private readonly receivingGuardService: ReceivingGuardService,
   ) {}
 
   private readonly CACHE_PREFIX = 'rbc';
+
+  /** Receiving links D6: an RBC lists each product + variant once. */
+  private assertNoDuplicateProducts(products: unknown): void {
+    if (!Array.isArray(products)) return;
+    this.receivingGuardService.assertNoDuplicateLines(
+      products.map((p: any) => ({ productId: refId(p?.productName), variantId: refId(p?.variant), uomId: refId(p?.saleUoM) })),
+    );
+  }
   private readonly CACHE_TTL = 180;
 
   private async invalidateCache(id?: string): Promise<void> {
@@ -147,18 +177,9 @@ export class PostReturnByCustomerService {
    * - Cascade save for returnedProducts (no manual save needed)
    * - Efficient SQL aggregation for quantity updates
    */
+  /** Next number of the day; issued by the shared sequence (no COUNT / MAX race, never reused). */
   private async generateSerialNo(): Promise<string> {
-    const now = new Date();
-    const yyyy = now.getFullYear().toString();
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const datePrefix = `RBC${yyyy}${mm}${dd}`;
-
-    const count = await this.postReturnByCustomerRepository.count({
-      where: { rbcNo: ILike(`${datePrefix}%`) },
-    });
-
-    return `${datePrefix}${(count + 1).toString().padStart(5, '0')}`;
+    return nextDocumentNumber(this.postReturnByCustomerRepository.manager, SERIES.rbc, `RBC${compactDate()}`, 5);
   }
 
 
@@ -190,13 +211,14 @@ export class PostReturnByCustomerService {
       if (!returnData.deliveryChallanNo) {
         throw new Error('Delivery Challan number is required');
       }
+      this.assertNoDuplicateProducts(returnData.returnedProducts);
 
       // 2️⃣ Fetch and validate delivery challan with products
       const deliveryChallan = await queryRunner.manager.findOne(
         this.deliveryChallanRepository.target, 
         { 
           where: { id: returnData.deliveryChallanNo },
-          relations: ['deliveryChallanProducts', 'deliveryChallanProducts.productName', 'deliveryChallanProducts.variant']
+          relations: ['deliveryChallanProducts', 'deliveryChallanProducts.productName', 'deliveryChallanProducts.variant', 'deliveryChallanProducts.saleUoM', 'deliveryChallanProducts.uom']
         }
       );
 
@@ -208,6 +230,11 @@ export class PostReturnByCustomerService {
       if ((deliveryChallan as any).isReturnByCustomerCreated) {
         throw new Error('Return By Customer has already been created for this Delivery Challan');
       }
+
+      // DC and its vehicle dispatch must be approved (docs/dispatch-enforcement-plan.md D6).
+      await assertCustomerDcReady(queryRunner.manager, returnData.deliveryChallanNo);
+      // Returns are recorded at delivery, before the delivery is confirmed (D-1 / D-3).
+      await assertDeliveryNotConfirmed(queryRunner.manager, returnData.deliveryChallanNo, 'raised');
 
       // 4️⃣ Validate that returned products match delivery challan products
       if (returnData.returnedProducts && returnData.returnedProducts.length > 0) {
@@ -242,6 +269,21 @@ export class PostReturnByCustomerService {
             throw new Error(
               `Total returned (${returnedQty}) and rejected (${rejectedQty}) quantity cannot exceed original quantity (${originalQty}) for product ${productId}`
             );
+          }
+
+          // D-2: quantities are in the DC line's unit; returned goods are received
+          // in kg, so a returned quantity needs its net kg, within the DC line's kg.
+          const dcUnit = (matchingProduct as { saleUoM?: { id?: string } | null; uom?: { id?: string } | null }).saleUoM?.id
+            ?? (matchingProduct as { uom?: { id?: string } | null }).uom?.id ?? null;
+          if (dcUnit) (returnProduct as Record<string, unknown>).saleUoM = dcUnit;
+          const returnedKg = Number(returnProduct.returnedNetWt || 0);
+          const dcKg = Number(matchingProduct.netWeight || 0);
+          const label = matchingProduct.productName?.name ?? productId;
+          if (returnedQty > 0 && returnedKg <= 0) {
+            throw new AppError(400, `${label}: enter the returned net weight (kg) — returned goods are received by weight`);
+          }
+          if (dcKg > 0 && returnedKg + Number(returnProduct.rejectedNetWt || 0) > dcKg) {
+            throw new AppError(400, `${label}: returned and rejected net weight cannot exceed the ${dcKg} kg delivered`);
           }
         }
       }
@@ -287,19 +329,16 @@ export class PostReturnByCustomerService {
         } as any
       );
 
-      // 6️⃣ Mark challan as returned and set isReturnByCustomerCreated flag
-      deliveryChallan.isReturned = true;
-      (deliveryChallan as any).isReturnByCustomerCreated = true;
-      
-      const [, savedReturn] = await Promise.all([
-        queryRunner.manager.save(deliveryChallan),
-        queryRunner.manager.save(newReturn)
-      ]);
-
+      const savedReturn = await queryRunner.manager.save(newReturn);
       const savedReturnEntity = Array.isArray(savedReturn) ? savedReturn[0] : savedReturn;
 
-      // 7️⃣ Update delivery challan items with aggregated return quantities
-      await this.updateDeliveryChallanItemsWithReturns(returnData.deliveryChallanNo, queryRunner);
+      // 6️⃣ DC flags follow the live documents: this pending RBC sets
+      // isReturnByCustomerCreated; the DC line quantities change only when the
+      // RBC is approved (see syncCustomerDcSalesLinks).
+      await syncCustomerDcSalesLinks(queryRunner.manager, [returnData.deliveryChallanNo]);
+
+      // 7️⃣ Transaction number: the RBC joins its Customer DC's Sale (docs/transaction-tracking-plan.md §9.4).
+      savedReturnEntity.txnNo = await attachToDcTransaction(queryRunner.manager, 'return-by-customer', savedReturnEntity.id);
 
       // 8️⃣ Create document and start approval flow
       const document = await this.documentbService.createDocument({
@@ -334,86 +373,6 @@ export class PostReturnByCustomerService {
       await queryRunner.release();
     }
   }
-
-  /**
-   * Updates delivery challan items with aggregated return quantities
-   * 
-   * LOGIC FLOW:
-   * 1. Aggregates all returned/rejected quantities per product+variant using SQL GROUP BY
-   * 2. Bulk updates all delivery challan items with calculated quantities
-   * 3. Calculates acceptedQty = originalQty - returnedQty - rejectedQty
-   * 
-   * OPTIMIZATIONS:
-   * - Single SQL query for aggregation (vs N queries)
-   * - Handles NULL variants correctly
-   * - Uses parameterized queries to prevent SQL injection
-   * - Efficient DECIMAL casting for accurate calculations
-   * 
-   * @param deliveryChallanId - The delivery challan ID to update items for
-   * @param queryRunner - Optional query runner for transaction support
-   */
-  private async updateDeliveryChallanItemsWithReturns(
-    deliveryChallanId: string,
-    queryRunner?: any
-  ): Promise<void> {
-    // Define aggregation result type
-    interface AggregatedReturn {
-      productId: string;
-      variantId: string | null;
-      totalReturnedQty: string;
-      totalRejectedQty: string;
-    }
-
-    const manager = queryRunner ? queryRunner.manager : this.dataSource;
-
-    // 1️⃣ Aggregate return quantities using raw SQL for performance
-    const aggregatedReturns = await (queryRunner ? queryRunner.query : this.dataSource.query).call(
-      queryRunner || this.dataSource,
-      `
-      SELECT 
-        rp."product_id" as "productId",
-        rp."varient_id" as "variantId",
-        SUM(CAST(COALESCE(rp."returnedQty", 0) AS DECIMAL)) as "totalReturnedQty",
-        SUM(CAST(COALESCE(rp."rejectedQty", 0) AS DECIMAL)) as "totalRejectedQty"
-      FROM "returned_products_by_customer" rp
-      INNER JOIN "return_by_customer" prc ON rp."postReturnId" = prc."id"
-      WHERE prc."delivery_challan_id" = $1
-      GROUP BY rp."product_id", rp."varient_id"
-    `, [deliveryChallanId]);
-
-    if (!aggregatedReturns || aggregatedReturns.length === 0) {
-      return; // No returns to process
-    }
-
-    // 2️⃣ Execute bulk update for each product/variant combination
-    for (const agg of aggregatedReturns) {
-      const returnedQty = Number(agg.totalReturnedQty || 0);
-      const rejectedQty = Number(agg.totalRejectedQty || 0);
-
-      const queryBuilder = queryRunner 
-        ? queryRunner.manager.createQueryBuilder()
-        : this.dataSource.createQueryBuilder();
-
-      await queryBuilder
-        .update('item')
-        .set({
-          returnedQty,
-          rejectedQty,
-          acceptedQty: () => `GREATEST(CAST(COALESCE(quantity, 0) AS DECIMAL) - ${returnedQty} - ${rejectedQty}, 0)`,
-        })
-        .where('product_id = :productId', { productId: agg.productId })
-        .andWhere(
-          agg.variantId 
-            ? 'varient_id = :variantId' 
-            : 'varient_id IS NULL',
-          agg.variantId ? { variantId: agg.variantId } : {}
-        )
-        .andWhere('deliveryChallanId = :challanId', { challanId: deliveryChallanId })
-        .execute();
-    }
-  }
-
-
 
   async getAllPostReturnByCustomer(
     queryOptions: PaginationOptions,
@@ -452,7 +411,7 @@ export class PostReturnByCustomerService {
           .leftJoin('returnedProducts.productName', 'productName')
           .leftJoin('returnedProducts.saleUoM', 'saleUoM')
           .select([
-            'rbc.id', 'rbc.rbcNo', 'rbc.date', 'rbc.remark',
+            'rbc.id', 'rbc.rbcNo', 'rbc.txnNo', 'rbc.date', 'rbc.remark',
             'companyName.name',
             'deliveryChallanNo.challanNo',
             'returnedProducts.id', 'returnedProducts.unitPrice',
@@ -479,6 +438,7 @@ export class PostReturnByCustomerService {
           createdTime,
           id: rd.id,
           rbcNo: rd.rbcNo ?? null,
+          txnNo: rd.txnNo ?? null,
           date: formatDateTime(rd.date).createdDate,
           remark: rd.remark ?? null,
           companyName: rd.companyName?.name ?? null,
@@ -533,7 +493,7 @@ export class PostReturnByCustomerService {
       .leftJoin('returnedProduct.saleUoM', 'saleUoM')
       .leftJoin('postReturn.customerName', 'customerName')
       .select([
-        'postReturn.id', 'postReturn.date', 'postReturn.remark', 'postReturn.createdAt',
+        'postReturn.id', 'postReturn.txnNo', 'postReturn.date', 'postReturn.remark', 'postReturn.createdAt',
         'company.name', 'location.name',
         'deliveryChallanNo.challanNo',
         'customerName.organisationName',
@@ -565,6 +525,7 @@ export class PostReturnByCustomerService {
       location: result.location?.name ?? null,
       date: formatDateTime(result.date).createdDate,
       deliveryChallanNo: result.deliveryChallanNo?.challanNo ?? null,
+      txnNo: result.txnNo ?? null,
       remark: result.remark ?? null,
       returnedProducts: (result.returnedProducts ?? []).map((p) => ({
         productName: p.productName?.name ?? null,
@@ -620,7 +581,7 @@ export class PostReturnByCustomerService {
       .leftJoin('returnedProduct.saleUoM', 'saleUoM')
       .leftJoin('postReturn.customerName', 'customerName')
       .select([
-        'postReturn.id', 'postReturn.date', 'postReturn.remark', 'postReturn.createdAt',
+        'postReturn.id', 'postReturn.txnNo', 'postReturn.date', 'postReturn.remark', 'postReturn.createdAt',
         'company.id', 'location.id', 'deliveryChallanNo.id', 'customerName.id',
         'returnedProduct.id', 'returnedProduct.unitPrice',
         'returnedProduct.returnedQty', 'returnedProduct.returnedQtyAmt',
@@ -650,6 +611,7 @@ export class PostReturnByCustomerService {
       date: formatDateTime(result.date).createdDate,
       location: result.location?.id ?? null,
       deliveryChallanNo: result.deliveryChallanNo?.id ?? null,
+      txnNo: result.txnNo ?? null,
       remark: result.remark ?? null,
       returnedProducts: (result.returnedProducts ?? []).map((p) => ({
         productName: p.productName?.id ?? null,
@@ -729,6 +691,7 @@ export class PostReturnByCustomerService {
       createdTime,
 
       deliveryChallanNo: result.deliveryChallanNo?.challanNo,
+      txnNo: result.txnNo ?? null,
       // ? {
       //   id: result.deliveryChallanNo.id,
       //   deliveryChallanNo: result.deliveryChallanNo.challanNo
@@ -756,7 +719,10 @@ export class PostReturnByCustomerService {
     await this.cacheService.set(cacheKey, idResult, this.CACHE_TTL);
     return idResult;
   }
-  async getAllRBCNumbers(page?: number, limit?: number, search?: string): Promise<RBCNumbersResponseDto> {
+  async getAllRBCNumbers(page?: number, limit?: number, search?: string, receiving?: RbcReceivingFilter): Promise<RBCNumbersResponseDto> {
+    if (receiving && (receiving.receivable || receiving.missing || receiving.locationId)) {
+      return this.getReceivableRBCNumbers(page, limit, search, receiving);
+    }
     const cacheKey = `${this.CACHE_PREFIX}:numbers:${page ?? 'all'}:${limit ?? 'all'}:${search ?? ''}`;
     const cached = await this.cacheService.get<any>(cacheKey);
     if (cached) return cached;
@@ -808,6 +774,66 @@ export class PostReturnByCustomerService {
     return result;
   }
 
+  /**
+   * Receiving picker for RBCs, applied in SQL:
+   * - `receivable=true` -> the RBC is COMPLETE (via `documents`) and not deleted;
+   * - `missing=<type>`  -> no counting document of that type (aqr | inward | dump) references the RBC
+   *                        (counting = not deleted and `documents.status` <> REJECT);
+   * - `locationId`      -> receiving location (branch).
+   * `search` matches `rbcNo` (ILIKE) or the exact id. Without `page` / `limit` every match is
+   * returned (capped at 500). Not cached: the list changes the moment a document is created.
+   */
+  private async getReceivableRBCNumbers(
+    page: number | undefined,
+    limit: number | undefined,
+    search: string | undefined,
+    receiving: RbcReceivingFilter,
+  ): Promise<RBCNumbersResponseDto> {
+    if (receiving.missing && !isProcessingDocType(receiving.missing)) {
+      throw new AppError(400, 'missing must be one of aqr, inward, dump, rtv');
+    }
+    const paginated = Boolean(page && limit);
+    const currentPage = paginated ? Math.max(1, Number(page)) : 1;
+    const currentLimit = paginated ? Math.min(200, Math.max(1, Number(limit))) : 500;
+
+    if (receiving.missing === 'rtv') {
+      // An RTV can only be raised against a GRN, so no RBC is ever "missing" one.
+      return { data: [], total: 0, page: currentPage, totalPages: 0 };
+    }
+
+    const qb = this.postReturnByCustomerRepository
+      .createQueryBuilder('rbc')
+      .select(['rbc.id', 'rbc.rbcNo', 'rbc.createdAt'])
+      .where('rbc.isDeleted = false');
+
+    if (receiving.receivable) qb.andWhere(completeDocumentExistsSql('rbc.id', 'rbc'));
+    if (receiving.missing && isProcessingDocType(receiving.missing)) {
+      // R14: Inward / Dump only after the AQR.
+      if (receiving.missing !== 'aqr') qb.andWhere(countingDocumentExistsSql('rbc.id', 'rbc', 'aqr')!);
+      qb.andWhere(noCountingDocumentSql('rbc.id', 'rbc', receiving.missing));
+    }
+    if (receiving.locationId) {
+      qb.leftJoin('rbc.location', 'receivingLocation').andWhere('receivingLocation.id = :locationId', { locationId: String(receiving.locationId) });
+    }
+    if (search && search.trim()) {
+      const term = search.trim();
+      qb.andWhere('(rbc.rbcNo ILIKE :search OR rbc.id::text = :exact)', { search: `%${term}%`, exact: term });
+    }
+
+    const [rows, total] = await qb
+      .orderBy('rbc.createdAt', 'DESC')
+      .skip((currentPage - 1) * currentLimit)
+      .take(currentLimit)
+      .getManyAndCount();
+
+    return {
+      data: rows.map((r) => ({ id: r.id, rbcNo: r.rbcNo ?? null })),
+      total,
+      page: currentPage,
+      totalPages: paginated ? Math.ceil(total / currentLimit) : 1,
+    };
+  }
+
    //TODO:Delte Multiple
 public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
   const success: {id: string; No: string}[]= []
@@ -821,6 +847,11 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
         failed.push({ id, reason: 'RBC not found' });
         continue;
       }
+      // Receiving links R10 — a 409 here lands in `failed` with its message.
+      await this.receivingGuardService.assertSourceEditable('rbc', id);
+      // Not once the DC's delivery is confirmed (the invoice relies on it).
+      const [rbcDc] = await dcIdsOfSalesDocuments(this.dataSource.manager, DocumentTypeEnum.RETURN_BY_CUSTOMER, [rbc.id]);
+      await assertDeliveryNotConfirmed(this.dataSource.manager, rbcDc, 'deleted');
       const relatedDocument = await this.documentbRepository.findOne({
         where: { document_type_id: rbc.id }
       });
@@ -836,6 +867,12 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
 
       await this.postReturnByCustomerRepository.softDelete(rbc.id);
       await this.postReturnByCustomerRepository.update(rbc.id, { isDeleted: true } as any);
+      // The DC can take a new RBC again and loses this one's quantities.
+      const dcIds = await dcIdsOfSalesDocuments(this.dataSource.manager, DocumentTypeEnum.RETURN_BY_CUSTOMER, [rbc.id]);
+      await syncCustomerDcSalesLinks(this.dataSource.manager, dcIds);
+      // The Sale's return step goes away.
+      await refreshTransactionOf(this.dataSource.manager, 'return-by-customer', rbc.id);
+      await Promise.all([this.invalidateCache(rbc.id), ...dcIds.map((dcId) => this.customerDeliveryChallanService.invalidateCDCCache(dcId))]);
       success.push({id,No:rbc.rbcNo});
     } catch (error: any) {
       failed.push({ id, reason: error.message || 'Unknown error' });
@@ -850,6 +887,13 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
     updatedBy: string,
     clientIp?: string,
   ): Promise<any> {
+    // Receiving links R9 / D6: not while an AQR / Inward / Dump counts against it; no repeated product + variant.
+    await this.receivingGuardService.assertSourceEditable('rbc', id);
+    {
+      const [rbcDc] = await dcIdsOfSalesDocuments(this.dataSource.manager, DocumentTypeEnum.RETURN_BY_CUSTOMER, [id]);
+      await assertDeliveryNotConfirmed(this.dataSource.manager, rbcDc, 'changed');
+    }
+    this.assertNoDuplicateProducts(returnData?.returnedProducts);
     const postReturn = await this.postReturnByCustomerRepository.findOne({
       where: { id },
       relations: [
@@ -878,6 +922,7 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
     }
 
     // Update main entity fields
+    if (returnData) delete returnData.txnNo; // the transaction number is server-owned
     Object.assign(postReturn, returnData);
 
     // Save updated entity
@@ -885,11 +930,13 @@ public async deleteMultipleRBC(ids: string[]): Promise<BulkDeleteResultDto> {
       postReturn,
     );
 
-    // Update delivery challan items with new return/reject quantities
+    // The DC line figures follow the approved returns (an edit of an approved RBC changes them).
     if (postReturn.deliveryChallanNo?.id) {
-      await this.updateDeliveryChallanItemsWithReturns(
-        postReturn.deliveryChallanNo.id
-      );
+      await syncCustomerDcSalesLinks(this.dataSource.manager, [postReturn.deliveryChallanNo.id]);
+    }
+    // Transaction number follows the DC on the saved row (moves to the new DC's Sale when it was switched).
+    if (!(await attachToDcTransaction(this.dataSource.manager, 'return-by-customer', id))) {
+      await refreshTransactionOf(this.dataSource.manager, 'return-by-customer', id);
     }
 
     // Same staleness as createReturn: this edit changed both this return and the
@@ -1070,8 +1117,7 @@ if (filter.approvedBy) {
 }
 
 if (filter.status) {
-  const statuses = toArray(filter.status);
-
+  const statuses = toArray(filter.status).map((s) => requireStatus(DocumentStatus, s, 'status'));
   qb.andWhere('doc.status IN (:...statuses)', { statuses });
 }
 
@@ -1454,13 +1500,14 @@ if (filter.status) {
   */
 
   const STATUS_MAP: Record<string, { label: string; color: string }> = {
-      hold: { label: 'Hold', color: 'FFFF5700' },
-      VERIFIED: { label: 'Verified', color: 'FF6A00FF' },
-      approved: { label: 'Approved', color: 'FF40BF40' },
-      FINALIZING: { label: 'Finalized', color: 'FF0063B1' },
-      COMPLETE: { label: 'Complete', color: 'FF006600' },
-      REJECT: { label: 'Reject', color: 'FFAF0606' },
-    };
+    [DocumentStatus.DRAFT]: { label: DocumentStatus.DRAFT, color: 'FF757575' },
+    [DocumentStatus.HOLD]: { label: DocumentStatus.HOLD, color: 'FFFF5700' },
+    [DocumentStatus.VERIFIED]: { label: DocumentStatus.VERIFIED, color: 'FF6A00FF' },
+    [DocumentStatus.APPROVED]: { label: DocumentStatus.APPROVED, color: 'FF40BF40' },
+    [DocumentStatus.FINALIZING]: { label: DocumentStatus.FINALIZING, color: 'FF0063B1' },
+    [DocumentStatus.COMPLETE]: { label: DocumentStatus.COMPLETE, color: 'FF006600' },
+    [DocumentStatus.REJECT]: { label: DocumentStatus.REJECT, color: 'FFAF0606' },
+  };
 
 
     const safe = (val: any) => (val === null || val === undefined ? '' : val);

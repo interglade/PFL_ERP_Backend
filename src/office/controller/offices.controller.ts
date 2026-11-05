@@ -1,3 +1,5 @@
+import { Role } from '../../employee/entity/user.entity';
+import { requireRole } from '../../middleware/requireRole';
 import { inject } from 'inversify';
 import {
   controller,
@@ -46,7 +48,7 @@ export class OfficesController {
     @inject(TYPES.NotificationService)
     private notificationService: NotificationService,
   ) {}
-  @httpPost('/:officeType')
+  @httpPost('/:officeType', requireRole(Role.ADMIN))
   public async createOffice(
     @requestParam('officeType') officeType: OFFICE_TYPE,
     @request() req: Request<{}, {}, CreateOfficeDto>,
@@ -237,7 +239,7 @@ export class OfficesController {
       next(err);
     }
   }
-  @httpPatch('/:officeType/:id', captureUser)
+  @httpPatch('/:officeType/:id', requireRole(Role.ADMIN), captureUser)
   public async updateOffice(
     @requestParam('officeType') officeType: OFFICE_TYPE,
     @requestParam('id') id: string,
@@ -284,7 +286,7 @@ export class OfficesController {
   }
 
   
-   @httpDelete("/delete/multiple")
+   @httpDelete("/delete/multiple", requireRole(Role.SUPER_ADMIN))
 public async softDeleteMultipleOffices(
   @request() req: Request,
   @response() res: Response,
